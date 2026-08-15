@@ -1,11 +1,12 @@
 @use 'colors.scss' as *;
 
 #color-panel {
-    top: 50%;
-    transform: translate(0, -50%);
-    right: 102px;
-    width: 320px;
+    // Pane content, not a floating card: the old top/transform/right/width
+    // positioned this against the viewport edge, which inside a pane body
+    // shifted it half its own height out of view.
     flex-direction: column;
+    // scroll rather than truncate if the pane is narrower than a row needs
+    overflow: auto;
 
     &:not(.pcui-hidden) {
         display: flex;
@@ -17,8 +18,12 @@
         padding: 2px;
         height: 22px;
 
+        // Never let the label be squeezed into an ellipsis: it keeps its
+        // natural width down to a floor that fits the longest string, and
+        // the panel scrolls instead. Also aligns the controls in a column.
         & > .color-panel-row-label {
-            flex-grow: 1;
+            flex: 0 0 auto;
+            min-width: 92px;
         }
 
         & > .color-panel-row-picker {

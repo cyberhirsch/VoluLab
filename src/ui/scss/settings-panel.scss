@@ -1,11 +1,12 @@
 @use 'colors.scss' as *;
 
 #settings-panel {
-    top: 50%;
-    transform: translate(0, -50%);
-    right: 102px;
-    width: 320px;
+    // Pane content, not a floating card: the old top/transform/right/width
+    // positioned this against the viewport edge, which inside a pane body
+    // shifted it half its own height out of view.
     flex-direction: column;
+    // scroll rather than truncate if the pane is narrower than a row needs
+    overflow: auto;
 
     &:not(.pcui-hidden) {
         display: flex;
@@ -17,8 +18,12 @@
         padding: 2px;
         height: 22px;
 
+        // see color-panel.scss - keep the label readable, scroll instead.
+        // 122px clears the longest string ("Outline Selection", 120px) with a
+        // hair to spare; going wider squeezes the colour swatches next to it.
         & > .settings-panel-row-label {
-            flex-grow: 1;
+            flex: 0 0 auto;
+            min-width: 122px;
         }
 
         & > .settings-panel-row-toggle {

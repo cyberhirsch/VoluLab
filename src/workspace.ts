@@ -58,20 +58,63 @@ export const pane = (kind: PaneKind): PaneNode => {
     return { type: 'pane', id: paneId(), kind };
 };
 
+/**
+ * Three columns:
+ *
+ *   outliner    | viewport | color
+ *   splat data  |          |
+ *   transform   | timeline | settings
+ */
 export const defaultLayout = (): LayoutNode => {
-    return {
+    const left: LayoutNode = {
         type: 'split',
         id: paneId(),
-        dir: 'row',
-        ratio: 0.22,
+        dir: 'col',
+        ratio: 0.62,
         a: pane('outliner'),
         b: {
             type: 'split',
             id: paneId(),
             dir: 'col',
-            ratio: 0.75,
-            a: pane('viewport'),
-            b: pane('timeline')
+            ratio: 0.66,
+            a: pane('data'),
+            b: pane('transform')
+        }
+    };
+
+    const centre: LayoutNode = {
+        type: 'split',
+        id: paneId(),
+        dir: 'col',
+        ratio: 0.88,
+        a: pane('viewport'),
+        b: pane('timeline')
+    };
+
+    const right: LayoutNode = {
+        type: 'split',
+        id: paneId(),
+        dir: 'col',
+        ratio: 0.5,
+        a: pane('color'),
+        b: pane('settings')
+    };
+
+    return {
+        type: 'split',
+        id: paneId(),
+        dir: 'row',
+        ratio: 0.13,
+        a: left,
+        b: {
+            type: 'split',
+            id: paneId(),
+            dir: 'row',
+            // the right column has to clear the settings label column plus a
+            // control, so it gets a wider share than it looks like it needs
+            ratio: 0.80,
+            a: centre,
+            b: right
         }
     };
 };

@@ -38,22 +38,6 @@ class ColorPanel extends Container {
 
         // header
 
-        const header = new Container({
-            class: 'panel-header'
-        });
-
-        const icon = new Label({
-            class: 'panel-header-icon',
-            text: '\uE146'
-        });
-
-        const label = new Label({
-            class: 'panel-header-label'
-        });
-        i18n.bindText(label, 'panel.colors');
-
-        header.append(icon);
-        header.append(label);
 
         // tint
 
@@ -221,7 +205,6 @@ class ColorPanel extends Container {
         controlRow.append(reset);
         controlRow.append(new Label({ class: 'panel-header-spacer' }));
 
-        this.append(header);
         this.append(tintRow);
         this.append(temperatureRow);
         this.append(saturationRow);

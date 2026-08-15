@@ -25,22 +25,6 @@ class SettingsPanel extends Container {
 
         // header
 
-        const header = new Container({
-            class: 'panel-header'
-        });
-
-        const icon = new Label({
-            text: '\uE403',
-            class: 'panel-header-icon'
-        });
-
-        const label = new Label({
-            class: 'panel-header-label'
-        });
-        i18n.bindText(label, 'panel.settings');
-
-        header.append(icon);
-        header.append(label);
 
         // language
 
@@ -451,7 +435,6 @@ class SettingsPanel extends Container {
 
         resetRow.append(resetButton);
 
-        this.append(header);
         this.append(languageRow);
         this.append(clrRow);
         this.append(tonemappingRow);
