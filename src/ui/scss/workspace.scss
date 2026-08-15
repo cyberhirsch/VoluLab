@@ -137,6 +137,47 @@
     }
 }
 
+// ─── floating windows ───────────────────────────────────────────────────────
+
+.ws-float {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    min-width: 220px;
+    min-height: 120px;
+    overflow: hidden;
+    background-color: $ink-1;
+    border: $border-width solid $ink-3;
+    // the one hard-edged offset shadow in the app, so a window reads as
+    // lifted off the layout rather than painted into it
+    box-shadow: $shadow-dialog;
+    z-index: 3;
+}
+
+.ws-float-header {
+    cursor: move;
+}
+
+// resize grip, bottom-right
+.ws-float-resize {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 14px;
+    height: 14px;
+    cursor: nwse-resize;
+    // two hairlines suggesting a corner, rather than an icon
+    background:
+        linear-gradient(135deg, transparent 0 50%, $ink-4 50% calc(50% + 1px), transparent calc(50% + 1px)),
+        linear-gradient(135deg, transparent 0 70%, $ink-4 70% calc(70% + 1px), transparent calc(70% + 1px));
+
+    &:hover {
+        background:
+            linear-gradient(135deg, transparent 0 50%, $ink-6 50% calc(50% + 1px), transparent calc(50% + 1px)),
+            linear-gradient(135deg, transparent 0 70%, $ink-6 70% calc(70% + 1px), transparent calc(70% + 1px));
+    }
+}
+
 .ws-pane-body {
     position: relative;
     flex: 1 1 auto;
