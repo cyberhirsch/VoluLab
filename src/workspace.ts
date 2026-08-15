@@ -6,9 +6,14 @@
  * Ported from Aerialist2's workspace model. The logic is framework-agnostic;
  * see ui/workspace-view.ts for the DOM/PCUI rendering of this tree.
  *
- * VoluLab constraint: exactly one pane may be the 3D viewport, because there
- * is a single WebGL canvas. `setPaneKind` enforces that by swapping kinds with
- * whichever pane currently holds the viewport.
+ * A pane can also be pulled out into a browser window of its own, which holds
+ * a tree of the same shape - so panes out there split and switch kind exactly
+ * as docked ones do.
+ *
+ * VoluLab constraint: every kind is backed by a single long-lived element, so
+ * a kind lives in exactly one pane at a time and `assignKind` swaps rather than
+ * duplicates. The viewport is stricter still - its WebGL canvas never leaves
+ * the main window.
  */
 
 export type PaneKind =
@@ -52,7 +57,8 @@ export interface PaneNode {
 export type LayoutNode = SplitNode | PaneNode;
 
 /**
- * A pane that has been pulled out into its own browser window.
+ * A detached browser window. It holds a layout tree of its own rather than a
+ * single pane, so a detached panel can be split like any docked one.
  *
  * x/y are screen coordinates and width/height the window's inner size, so the
  * window can be reopened where the user left it. The viewport is never
@@ -62,7 +68,7 @@ export type LayoutNode = SplitNode | PaneNode;
 export interface FloatNode {
     type: 'float';
     id: string;
-    kind: PaneKind;
+    root: LayoutNode;
     x: number;
     y: number;
     width: number;
@@ -152,22 +158,17 @@ export const findPane = (node: LayoutNode, id: string): PaneNode | null => {
     return listPanes(node).find(p => p.id === id) ?? null;
 };
 
-/** First pane of a kind, in visual (tree) order. */
-export const firstPaneOfKind = (node: LayoutNode, kind: PaneKind): PaneNode | null => {
-    return listPanes(node).find(p => p.kind === kind) ?? null;
-};
-
-/** Is a kind on screen at all - docked or floating? */
-export const kindIsPresent = (state: WorkspaceState, kind: PaneKind): boolean => {
-    return !!firstPaneOfKind(state.root, kind) || state.floats.some(f => f.kind === kind);
-};
-
-/** Every visible surface, docked or floating, as id/kind pairs. */
-export const listSurfaces = (state: WorkspaceState): { id: string; kind: PaneKind }[] => {
+/** Every pane on screen, docked first, then each detached window's tree. */
+export const listSurfaces = (state: WorkspaceState): PaneNode[] => {
     return [
-        ...listPanes(state.root).map(p => ({ id: p.id, kind: p.kind })),
-        ...state.floats.map(f => ({ id: f.id, kind: f.kind }))
+        ...listPanes(state.root),
+        ...state.floats.flatMap(f => listPanes(f.root))
     ];
+};
+
+/** Is a kind on screen at all - docked or detached? */
+export const kindIsPresent = (state: WorkspaceState, kind: PaneKind): boolean => {
+    return listSurfaces(state).some(p => p.kind === kind);
 };
 
 const mapPane = (node: LayoutNode, fn: (p: PaneNode) => PaneNode): LayoutNode => {
@@ -176,27 +177,35 @@ const mapPane = (node: LayoutNode, fn: (p: PaneNode) => PaneNode): LayoutNode =>
 };
 
 /**
- * Assign a kind to a pane. A singleton kind (the viewport) can only live in
- * one pane, so the pane that previously held it inherits the target's old
- * kind rather than being left duplicated.
+ * Assign a kind to a pane, anywhere on screen.
+ *
+ * Every kind is backed by exactly one long-lived element, so a kind can only
+ * be in one place: whichever pane currently holds it takes over the kind being
+ * displaced, rather than both panes asking for the same element and one of
+ * them coming up blank. The swap crosses windows - the holder may be detached.
  */
-export const setPaneKind = (node: LayoutNode, id: string, kind: PaneKind): LayoutNode => {
-    const target = findPane(node, id);
-    if (!target || target.kind === kind) return node;
+export const assignKind = (state: WorkspaceState, id: string, kind: PaneKind): WorkspaceState => {
+    const isDocked = (paneId: string) => !!findPane(state.root, paneId);
 
-    if (SINGLETON_KINDS.includes(kind)) {
-        const holder = firstPaneOfKind(node, kind);
-        if (holder && holder.id !== id) {
-            const swapped = target.kind;
-            return mapPane(node, (p) => {
-                if (p.id === id) return { ...p, kind };
-                if (p.id === holder.id) return { ...p, kind: swapped };
-                return p;
-            });
-        }
-    }
+    const target = listSurfaces(state).find(p => p.id === id);
+    if (!target || target.kind === kind) return state;
 
-    return mapPane(node, p => (p.id === id ? { ...p, kind } : p));
+    // the viewport's canvas never leaves the main window, in either direction
+    if (SINGLETON_KINDS.includes(kind) && !isDocked(id)) return state;
+
+    const holder = listSurfaces(state).find(p => p.kind === kind) ?? null;
+    if (holder && SINGLETON_KINDS.includes(target.kind) && !isDocked(holder.id)) return state;
+
+    const swap = (p: PaneNode): PaneNode => {
+        if (p.id === id) return { ...p, kind };
+        if (holder && p.id === holder.id) return { ...p, kind: target.kind };
+        return p;
+    };
+
+    return {
+        root: mapPane(state.root, swap),
+        floats: state.floats.map(f => ({ ...f, root: mapPane(f.root, swap) }))
+    };
 };
 
 export const setRatio = (node: LayoutNode, id: string, ratio: number): LayoutNode => {
@@ -207,12 +216,25 @@ export const setRatio = (node: LayoutNode, id: string, ratio: number): LayoutNod
     return { ...node, a: setRatio(node.a, id, ratio), b: setRatio(node.b, id, ratio) };
 };
 
-/** Split a pane in two; the new sibling inherits the pane's kind. */
-export const splitPane = (node: LayoutNode, id: string, dir: 'row' | 'col'): LayoutNode => {
+/**
+ * Split a pane in two.
+ *
+ * `sibling` is the kind for the new half. Only one element exists per kind, so
+ * letting the sibling inherit the pane's own kind leaves one of the two halves
+ * empty - callers pass a kind that is not on screen yet (see `freeKind` in the
+ * view). Falls back to inheriting when nothing is free.
+ */
+export const splitPane = (
+    node: LayoutNode,
+    id: string,
+    dir: 'row' | 'col',
+    sibling?: PaneKind
+): LayoutNode => {
     if (node.type === 'pane') {
         if (node.id !== id) return node;
         // a singleton can't be duplicated - the new sibling falls back
-        const siblingKind: PaneKind = SINGLETON_KINDS.includes(node.kind) ? 'outliner' : node.kind;
+        const inherited: PaneKind = SINGLETON_KINDS.includes(node.kind) ? 'outliner' : node.kind;
+        const siblingKind = (sibling && !SINGLETON_KINDS.includes(sibling)) ? sibling : inherited;
         return {
             type: 'split',
             id: paneId(),
@@ -222,7 +244,17 @@ export const splitPane = (node: LayoutNode, id: string, dir: 'row' | 'col'): Lay
             b: pane(siblingKind)
         };
     }
-    return { ...node, a: splitPane(node.a, id, dir), b: splitPane(node.b, id, dir) };
+    return {
+        ...node,
+        a: splitPane(node.a, id, dir, sibling),
+        b: splitPane(node.b, id, dir, sibling)
+    };
+};
+
+/** Swap a pane for an arbitrary subtree - how a detached tree is grafted back. */
+const replacePane = (root: LayoutNode, id: string, node: LayoutNode): LayoutNode => {
+    if (root.type === 'pane') return root.id === id ? node : root;
+    return { ...root, a: replacePane(root.a, id, node), b: replacePane(root.b, id, node) };
 };
 
 /**
@@ -289,7 +321,7 @@ export const undockPane = (
         floats: [...state.floats, {
             type: 'float',
             id: paneId(),
-            kind: target.kind,
+            root: pane(target.kind),
             x: Math.round(rect.x),
             y: Math.round(rect.y),
             width: Math.max(FLOAT_MIN_W, Math.round(rect.width)),
@@ -306,8 +338,9 @@ const largestPane = (root: LayoutNode, areaOf: (id: string) => number): PaneNode
 };
 
 /**
- * Put a floating window back in the tree by splitting the largest docked pane,
+ * Put a detached window back in the tree by splitting the largest docked pane,
  * which is the least disruptive place to land and is predictable to the user.
+ * The window's whole tree comes home, not just its first pane.
  */
 export const dockFloat = (
     state: WorkspaceState,
@@ -320,12 +353,11 @@ export const dockFloat = (
     const host = largestPane(state.root, areaOf);
     if (!host) return state;
 
-    // split the host along its longer axis so neither half becomes a sliver
-    const dir = 'col';
-    let root = splitPane(state.root, host.id, dir);
-    // splitPane gives the new sibling the host's kind; set it to the float's
+    let root = splitPane(state.root, host.id, 'col');
+    // graft the detached tree over the placeholder splitPane just made. Its
+    // pane ids left the main tree when it was undocked, so they can't collide.
     const added = listPanes(root).find(p => !listPanes(state.root).some(o => o.id === p.id));
-    if (added) root = setPaneKind(root, added.id, float.kind);
+    if (added) root = replacePane(root, added.id, float.root);
 
     return { root, floats: state.floats.filter(f => f.id !== id) };
 };
@@ -347,16 +379,15 @@ export const setFloatRect = (
     };
 };
 
-/**
- * Assign a kind to a detached window. No singleton juggling is needed here:
- * the viewport is never offered in a detached window's selector, because it
- * cannot leave the main window in the first place.
- */
-export const setFloatKind = (state: WorkspaceState, id: string, kind: PaneKind): WorkspaceState => {
-    if (SINGLETON_KINDS.includes(kind)) return state;
+/** Apply a tree edit inside one detached window, leaving the rest alone. */
+export const mapFloatRoot = (
+    state: WorkspaceState,
+    id: string,
+    fn: (root: LayoutNode) => LayoutNode
+): WorkspaceState => {
     return {
         ...state,
-        floats: state.floats.map(f => (f.id === id ? { ...f, kind } : f))
+        floats: state.floats.map(f => (f.id === id ? { ...f, root: fn(f.root) } : f))
     };
 };
 
@@ -401,8 +432,16 @@ const isValidFloat = (n: unknown): n is FloatNode => {
     const f = n as Record<string, unknown>;
     return f.type === 'float' &&
         typeof f.id === 'string' &&
-        PANE_KINDS.some(k => k.kind === f.kind) &&
+        isValidNode(f.root) &&
         ['x', 'y', 'width', 'height'].every(k => typeof f[k] === 'number' && isFinite(f[k] as number));
+};
+
+/** Floats used to hold a single kind. Give an old one the tree it now needs. */
+const migrateFloat = (n: unknown): unknown => {
+    if (typeof n !== 'object' || n === null) return n;
+    const f = n as Record<string, unknown>;
+    if (f.root || typeof f.kind !== 'string') return n;
+    return { ...f, root: pane(f.kind as PaneKind) };
 };
 
 export const loadLayout = (): WorkspaceState | null => {
@@ -412,7 +451,8 @@ export const loadLayout = (): WorkspaceState | null => {
         const parsed = JSON.parse(raw) as WorkspaceState;
         if (!parsed || !isValidNode(parsed.root)) return null;
 
-        const floats = Array.isArray(parsed.floats) ? parsed.floats.filter(isValidFloat) : [];
+        const floats = Array.isArray(parsed.floats) ?
+            parsed.floats.map(migrateFloat).filter(isValidFloat) : [];
         const state = { root: parsed.root, floats };
 
         // a stored layout that lost its viewport entirely would strand the
