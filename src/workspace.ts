@@ -52,8 +52,12 @@ export interface PaneNode {
 export type LayoutNode = SplitNode | PaneNode;
 
 /**
- * A pane that has been pulled out of the tree into a free-floating window.
- * Position and size are in CSS pixels relative to the workspace.
+ * A pane that has been pulled out into its own browser window.
+ *
+ * x/y are screen coordinates and width/height the window's inner size, so the
+ * window can be reopened where the user left it. The viewport is never
+ * detached: its WebGL context would have to survive being adopted into another
+ * document, which is not worth betting on - see SINGLETON_KINDS.
  */
 export interface FloatNode {
     type: 'float';
@@ -271,7 +275,11 @@ export const undockPane = (
     const target = findPane(state.root, id);
     if (!target) return state;
 
-    // the last docked pane has to stay: floating everything would leave the
+    // the viewport stays in the main window - moving a live WebGL canvas into
+    // another document is not something to rely on
+    if (SINGLETON_KINDS.includes(target.kind)) return state;
+
+    // the last docked pane has to stay: detaching everything would leave the
     // tree with nothing to render and no way to drop a window back in
     if (listPanes(state.root).length < 2) return state;
 
@@ -322,14 +330,6 @@ export const dockFloat = (
     return { root, floats: state.floats.filter(f => f.id !== id) };
 };
 
-export const closeFloat = (state: WorkspaceState, id: string): WorkspaceState => {
-    const float = state.floats.find(f => f.id === id);
-    if (!float) return state;
-    // a floating singleton cannot simply be discarded - dock it instead
-    if (SINGLETON_KINDS.includes(float.kind)) return state;
-    return { ...state, floats: state.floats.filter(f => f.id !== id) };
-};
-
 export const setFloatRect = (
     state: WorkspaceState,
     id: string,
@@ -347,35 +347,12 @@ export const setFloatRect = (
     };
 };
 
-/** Move a float to the end of the list, which is the top of the stack. */
-export const raiseFloat = (state: WorkspaceState, id: string): WorkspaceState => {
-    const float = state.floats.find(f => f.id === id);
-    if (!float || state.floats[state.floats.length - 1]?.id === id) return state;
-    return { ...state, floats: [...state.floats.filter(f => f.id !== id), float] };
-};
-
-/** Assign a kind to a floating window, honouring the singleton rule. */
-export const setFloatKind = (state: WorkspaceState, id: string, kind: PaneKind): WorkspaceState => {
-    const float = state.floats.find(f => f.id === id);
-    if (!float || float.kind === kind) return state;
-
-    let root = state.root;
-    let floats = state.floats.map(f => (f.id === id ? { ...f, kind } : f));
-
-    if (SINGLETON_KINDS.includes(kind)) {
-        const swapped = float.kind;
-        const dockedHolder = firstPaneOfKind(state.root, kind);
-        if (dockedHolder) {
-            root = setPaneKind(state.root, dockedHolder.id, swapped);
-        } else {
-            const floatHolder = state.floats.find(f => f.kind === kind && f.id !== id);
-            if (floatHolder) {
-                floats = floats.map(f => (f.id === floatHolder.id ? { ...f, kind: swapped } : f));
-            }
-        }
-    }
-
-    return { root, floats };
+/** Dock every detached window back into the tree. */
+export const dockAllFloats = (
+    state: WorkspaceState,
+    areaOf: (paneId: string) => number
+): WorkspaceState => {
+    return state.floats.reduce((acc, f) => dockFloat(acc, f.id, areaOf), state);
 };
 
 /* ── persistence ─────────────────────────────────────────────── */

@@ -9,16 +9,13 @@ import {
     SINGLETON_KINDS,
     SplitNode,
     WorkspaceState,
-    closeFloat,
     closePane,
     defaultLayout,
+    dockAllFloats,
     dockFloat,
     listPanes,
-    listSurfaces,
     loadLayout,
-    raiseFloat,
     saveLayout,
-    setFloatKind,
     setFloatRect,
     setPaneKind,
     setRatio,
@@ -73,6 +70,9 @@ class WorkspaceView extends Container {
     private parked: HTMLElement;
     private onChange?: () => void;
 
+    /** Open detached windows, keyed by float id. */
+    private windows = new Map<string, Window>();
+
     private get root() {
         return this.state.root;
     }
@@ -81,7 +81,14 @@ class WorkspaceView extends Container {
         super({ id: 'workspace' });
 
         this.onChange = args.onChange;
-        this.state = loadLayout() ?? { root: defaultLayout(), floats: [] };
+
+        const loaded = loadLayout();
+        // A detached window cannot be reopened on load: window.open outside a
+        // user gesture is blocked. Rather than keep a record pointing at a
+        // window that does not exist, dock everything back and start clean.
+        this.state = loaded ?
+            dockAllFloats(loaded, () => 1) :
+            { root: defaultLayout(), floats: [] };
 
         // content belonging to no visible pane lives here, off-screen but
         // still in the document so it keeps its size and GL context
@@ -89,9 +96,24 @@ class WorkspaceView extends Container {
         this.parked.id = 'workspace-parked';
         this.dom.appendChild(this.parked);
 
+        // a detached window is a child of this page: if the page goes, so do
+        // they, and their content has to come home first or it is destroyed
+        window.addEventListener('pagehide', () => this.closeAllWindows());
+
         // Canvas resize is handled upstream: Scene observes #canvas-container
         // directly (see scene.ts), and that is the element the pane body
         // resizes, so splits and divider drags propagate without help here.
+    }
+
+    private closeAllWindows() {
+        this.windows.forEach((win) => {
+            try {
+                win.close();
+            } catch (e) {
+                // already gone
+            }
+        });
+        this.windows.clear();
     }
 
     /** Register the element that renders a given pane kind. */
@@ -130,15 +152,147 @@ class WorkspaceView extends Container {
         tree.style.minHeight = '0';
         this.dom.appendChild(tree);
 
-        // floating windows sit above the tree, in list order
-        this.state.floats.forEach(f => this.dom.appendChild(this.buildFloat(f)));
-
-        // move each kind's element into the surface claiming it, docked or not
-        listSurfaces(this.state).forEach(({ id, kind }) => {
-            const el = this.content.get(kind);
-            const body = this.dom.querySelector(`[data-pane-body="${id}"]`);
+        // move each docked kind's element into the pane claiming it
+        listPanes(this.root).forEach((p) => {
+            const el = this.content.get(p.kind);
+            const body = this.dom.querySelector(`[data-pane-body="${p.id}"]`);
             if (el && body) body.appendChild(el);
         });
+
+        this.syncWindows();
+    }
+
+    /** Open, populate and close detached windows to match the state. */
+    private syncWindows() {
+        // close windows whose float is gone
+        [...this.windows.keys()].forEach((id) => {
+            if (!this.state.floats.some(f => f.id === id)) {
+                const win = this.windows.get(id);
+                this.windows.delete(id);
+                try {
+                    win?.close();
+                } catch (e) {
+                    // already gone
+                }
+            }
+        });
+
+        this.state.floats.forEach((float) => {
+            let win = this.windows.get(float.id);
+            if (!win || win.closed) {
+                win = this.openWindow(float) ?? undefined;
+                if (!win) {
+                    // popup blocked - put the pane straight back rather than
+                    // stranding its content in the parking area
+                    queueMicrotask(() => this.mutate(dockFloat(this.state, float.id, id => this.paneArea(id))));
+                    return;
+                }
+                this.windows.set(float.id, win);
+            }
+
+            const host = win.document.querySelector('.ws-detached-body');
+            const el = this.content.get(float.kind);
+            if (host && el && el.ownerDocument !== win.document) {
+                host.appendChild(win.document.adoptNode(el));
+            } else if (host && el && el.parentElement !== host) {
+                host.appendChild(el);
+            }
+
+            const kindLabel = win.document.querySelector('.ws-detached-kind');
+            if (kindLabel) {
+                kindLabel.textContent = PANE_KINDS.find(k => k.kind === float.kind)?.label ?? float.kind;
+            }
+        });
+    }
+
+    private paneArea(paneId: string) {
+        const p = this.dom.querySelector(`[data-pane-body="${paneId}"]`);
+        if (!p) return 0;
+        const r = p.getBoundingClientRect();
+        return r.width * r.height;
+    }
+
+    /**
+     * Open a detached window and build its document: the opener's stylesheets,
+     * a host for the panel, and a small status bar with a dock-back button.
+     */
+    private openWindow(float: FloatNode): Window | null {
+        const label = PANE_KINDS.find(k => k.kind === float.kind)?.label ?? float.kind;
+        const features = [
+            'popup=yes',
+            `width=${float.width}`,
+            `height=${float.height}`,
+            `left=${float.x}`,
+            `top=${float.y}`
+        ].join(',');
+
+        const win = window.open('', `volulab-${float.id}`, features);
+        if (!win) return null;
+
+        const doc = win.document;
+        doc.title = `VoluLab - ${label}`;
+
+        // Stylesheets are cloned from the opener. The href property is read
+        // rather than the attribute so it is already absolute: the window is
+        // about:blank, where a relative path would resolve to nothing.
+        document.querySelectorAll('link[rel="stylesheet"]').forEach((node) => {
+            const link = doc.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = (node as HTMLLinkElement).href;
+            doc.head.appendChild(link);
+        });
+        document.querySelectorAll('style').forEach((node) => {
+            const style = doc.createElement('style');
+            style.textContent = node.textContent;
+            doc.head.appendChild(style);
+        });
+
+        doc.body.className = 'ws-detached';
+
+        const body = doc.createElement('div');
+        body.className = 'ws-detached-body';
+
+        const status = doc.createElement('div');
+        status.className = 'ws-detached-status';
+
+        const kind = doc.createElement('span');
+        kind.className = 'ws-detached-kind';
+        kind.textContent = label;
+
+        const spacer = doc.createElement('span');
+        spacer.className = 'ws-detached-spacer';
+
+        const dock = doc.createElement('button');
+        dock.className = 'ws-detached-dock';
+        dock.textContent = 'dock';
+        dock.title = 'return this panel to the main window';
+        dock.addEventListener('click', () => win.close());
+
+        status.appendChild(kind);
+        status.appendChild(spacer);
+        status.appendChild(dock);
+
+        doc.body.appendChild(body);
+        doc.body.appendChild(status);
+
+        // Closing the window docks the panel back. Its content must be adopted
+        // home first or it dies with the document, so remember the size and
+        // position the user left it at on the way out.
+        win.addEventListener('pagehide', () => {
+            if (!this.windows.has(float.id)) return;
+            this.windows.delete(float.id);
+            this.state = setFloatRect(this.state, float.id, {
+                x: win.screenX,
+                y: win.screenY,
+                width: win.innerWidth,
+                height: win.innerHeight
+            });
+            const el = this.content.get(float.kind);
+            if (el) this.parked.appendChild(document.adoptNode(el));
+            this.mutate(dockFloat(this.state, float.id, id => this.paneArea(id)));
+        });
+
+        return win;
     }
 
     private buildNode(node: LayoutNode): HTMLElement {
@@ -238,20 +392,21 @@ class WorkspaceView extends Container {
             this.mutateRoot(splitPane(this.root, node.id, 'col'));
         }));
 
-        // undocking and closing both need a pane to fall back to
+        // undocking and closing both need a pane to fall back to, and the
+        // viewport never leaves the main window
         if (listPanes(this.root).length > 1) {
-            header.appendChild(button('ws-undock', 'undock into a window', 'undock', () => {
-                // open the window over the pane it came from, nudged clear so
-                // it reads as having lifted off rather than replaced it
-                const paneRect = el.getBoundingClientRect();
-                const host = this.dom.getBoundingClientRect();
-                this.mutate(undockPane(this.state, node.id, {
-                    x: paneRect.left - host.left + 24,
-                    y: paneRect.top - host.top + 24,
-                    width: paneRect.width,
-                    height: paneRect.height
+            if (!SINGLETON_KINDS.includes(node.kind)) {
+                header.appendChild(button('ws-undock', 'open in a separate window', 'undock', () => {
+                    // open over the pane it came from, in screen coordinates
+                    const paneRect = el.getBoundingClientRect();
+                    this.mutate(undockPane(this.state, node.id, {
+                        x: window.screenX + paneRect.left,
+                        y: window.screenY + paneRect.top,
+                        width: Math.round(paneRect.width),
+                        height: Math.round(paneRect.height)
+                    }));
                 }));
-            }));
+            }
             header.appendChild(button('ws-close', 'close pane', 'close', () => {
                 this.mutateRoot(closePane(this.root, node.id));
             }));
@@ -263,143 +418,6 @@ class WorkspaceView extends Container {
 
         el.appendChild(header);
         el.appendChild(body);
-        return el;
-    }
-
-    /** A floating window: same header vocabulary, plus drag and resize. */
-    private buildFloat(float: FloatNode): HTMLElement {
-        const el = document.createElement('div');
-        el.className = 'ws-float';
-        el.style.left = `${float.x}px`;
-        el.style.top = `${float.y}px`;
-        el.style.width = `${float.width}px`;
-        el.style.height = `${float.height}px`;
-
-        // clicking anywhere in the window brings it to the front
-        el.addEventListener('pointerdown', () => {
-            if (this.state.floats[this.state.floats.length - 1]?.id !== float.id) {
-                this.mutate(raiseFloat(this.state, float.id));
-            }
-        }, true);
-
-        const header = document.createElement('div');
-        header.className = 'ws-pane-header ws-float-header';
-
-        const select = document.createElement('select');
-        select.className = 'ws-pane-kind';
-        PANE_KINDS.forEach(({ kind, label }) => {
-            const opt = document.createElement('option');
-            opt.value = kind;
-            opt.textContent = label;
-            select.appendChild(opt);
-        });
-        select.value = float.kind;
-        select.addEventListener('change', () => {
-            this.mutate(setFloatKind(this.state, float.id, select.value as PaneKind));
-        });
-        // the select must not start a window drag
-        select.addEventListener('pointerdown', e => e.stopPropagation());
-
-        const spacer = document.createElement('div');
-        spacer.className = 'ws-pane-spacer';
-
-        const button = (cls: string, title: string, glyph: keyof typeof ICON_PATHS, fn: () => void) => {
-            const b = document.createElement('button');
-            b.className = `ws-pane-button ${cls}`;
-            b.title = title;
-            b.appendChild(createIcon(glyph));
-            b.addEventListener('pointerdown', e => e.stopPropagation());
-            b.addEventListener('click', fn);
-            return b;
-        };
-
-        header.appendChild(select);
-        header.appendChild(spacer);
-        header.appendChild(button('ws-dock', 'dock back into the layout', 'dock', () => {
-            this.mutate(dockFloat(this.state, float.id, (paneId) => {
-                const p = this.dom.querySelector(`[data-pane-body="${paneId}"]`);
-                if (!p) return 0;
-                const r = p.getBoundingClientRect();
-                return r.width * r.height;
-            }));
-        }));
-
-        // a floating singleton has nowhere to go if closed, so it can only dock
-        if (!SINGLETON_KINDS.includes(float.kind)) {
-            header.appendChild(button('ws-close', 'close window', 'close', () => {
-                this.mutate(closeFloat(this.state, float.id));
-            }));
-        }
-
-        // drag the header to move the window
-        header.addEventListener('pointerdown', (e: PointerEvent) => {
-            e.preventDefault();
-            header.setPointerCapture(e.pointerId);
-            const host = this.dom.getBoundingClientRect();
-            const grabX = e.clientX - host.left - float.x;
-            const grabY = e.clientY - host.top - float.y;
-
-            const move = (ev: PointerEvent) => {
-                // keep the header on screen: the window can hang off the right
-                // and bottom, but never be dragged out of reach
-                const x = Math.min(Math.max(0, ev.clientX - host.left - grabX), host.width - 60);
-                const y = Math.min(Math.max(0, ev.clientY - host.top - grabY), host.height - 24);
-                el.style.left = `${Math.round(x)}px`;
-                el.style.top = `${Math.round(y)}px`;
-            };
-
-            const up = (ev: PointerEvent) => {
-                header.releasePointerCapture(ev.pointerId);
-                header.removeEventListener('pointermove', move);
-                header.removeEventListener('pointerup', up);
-                this.state = setFloatRect(this.state, float.id, {
-                    x: parseFloat(el.style.left),
-                    y: parseFloat(el.style.top)
-                });
-                saveLayout(this.state);
-            };
-
-            header.addEventListener('pointermove', move);
-            header.addEventListener('pointerup', up);
-        });
-
-        const body = document.createElement('div');
-        body.className = 'ws-pane-body';
-        body.setAttribute('data-pane-body', float.id);
-
-        const grip = document.createElement('div');
-        grip.className = 'ws-float-resize';
-        grip.addEventListener('pointerdown', (e: PointerEvent) => {
-            e.preventDefault();
-            e.stopPropagation();
-            grip.setPointerCapture(e.pointerId);
-            const startX = e.clientX, startY = e.clientY;
-            const startW = float.width, startH = float.height;
-
-            const move = (ev: PointerEvent) => {
-                el.style.width = `${Math.max(220, startW + ev.clientX - startX)}px`;
-                el.style.height = `${Math.max(120, startH + ev.clientY - startY)}px`;
-            };
-
-            const up = (ev: PointerEvent) => {
-                grip.releasePointerCapture(ev.pointerId);
-                grip.removeEventListener('pointermove', move);
-                grip.removeEventListener('pointerup', up);
-                this.state = setFloatRect(this.state, float.id, {
-                    width: parseFloat(el.style.width),
-                    height: parseFloat(el.style.height)
-                });
-                saveLayout(this.state);
-                this.onChange?.();
-            };
-
-            grip.addEventListener('pointermove', move);
-            grip.addEventListener('pointerup', up);
-        });
-
-        el.appendChild(header);
-        el.appendChild(body);
-        el.appendChild(grip);
         return el;
     }
 }

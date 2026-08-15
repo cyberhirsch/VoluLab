@@ -137,44 +137,72 @@
     }
 }
 
-// ─── floating windows ───────────────────────────────────────────────────────
+// ─── detached windows ───────────────────────────────────────────────────────
+//
+// A detached panel lives in its own browser window, whose document gets a copy
+// of this stylesheet. The window is just the panel plus a thin status bar.
 
-.ws-float {
-    position: absolute;
+.ws-detached {
+    margin: 0;
+    padding: 0;
+    height: 100vh;
     display: flex;
     flex-direction: column;
-    min-width: 220px;
-    min-height: 120px;
+    overflow: hidden;
+    background-color: $ink-0;
+    color: $ink-6;
+    font-family: $font-mono;
+    font-size: $font-size;
+}
+
+.ws-detached-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    position: relative;
     overflow: hidden;
     background-color: $ink-1;
-    border: $border-width solid $ink-3;
-    // the one hard-edged offset shadow in the app, so a window reads as
-    // lifted off the layout rather than painted into it
-    box-shadow: $shadow-dialog;
-    z-index: 3;
+
+    & > * {
+        width: 100%;
+        height: 100%;
+    }
 }
 
-.ws-float-header {
-    cursor: move;
+.ws-detached-status {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: $gap-sm;
+    height: $h-status;
+    padding: 0 $pad-x;
+    border-top: $border-width solid $ink-3;
+    background-color: $ink-1;
+    user-select: none;
 }
 
-// resize grip, bottom-right
-.ws-float-resize {
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    width: 14px;
-    height: 14px;
-    cursor: nwse-resize;
-    // two hairlines suggesting a corner, rather than an icon
-    background:
-        linear-gradient(135deg, transparent 0 50%, $ink-4 50% calc(50% + 1px), transparent calc(50% + 1px)),
-        linear-gradient(135deg, transparent 0 70%, $ink-4 70% calc(70% + 1px), transparent calc(70% + 1px));
+.ws-detached-kind {
+    color: $ink-5;
+}
+
+.ws-detached-spacer {
+    flex: 1 1 auto;
+}
+
+.ws-detached-dock {
+    height: $h-row;
+    padding: 0 $pad-x;
+    border: 0;
+    border-radius: 0;
+    outline: none;
+    color: $ink-5;
+    background-color: transparent;
+    font-family: $font-mono;
+    font-size: $font-size;
+    cursor: pointer;
 
     &:hover {
-        background:
-            linear-gradient(135deg, transparent 0 50%, $ink-6 50% calc(50% + 1px), transparent calc(50% + 1px)),
-            linear-gradient(135deg, transparent 0 70%, $ink-6 70% calc(70% + 1px), transparent calc(70% + 1px));
+        background-color: $ink-2;
+        color: $ink-7;
     }
 }
 
