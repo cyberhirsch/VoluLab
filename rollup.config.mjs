@@ -102,12 +102,18 @@ const application = {
     cache: false
 };
 
+// Changes on every build so the service worker names a fresh cache and evicts
+// the previous one. Without this the cache name is constant and a deployed
+// build is served forever, whatever is actually on the server.
+const BUILD_ID = Date.now().toString(36);
+
 const serviceWorker = {
     input: 'src/sw.ts',
     output: {
         dir: 'dist',
         format: 'esm',
-        sourcemap: SOURCEMAP
+        sourcemap: SOURCEMAP,
+        intro: `const __BUILD_ID__ = ${JSON.stringify(BUILD_ID)};`
     },
     plugins: [
         resolve(),

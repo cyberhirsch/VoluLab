@@ -3,7 +3,11 @@ import { version as appVersion } from '../package.json';
 // export default null
 declare let self: ServiceWorkerGlobalScope;
 
-const cacheName = `volulab-v${appVersion}`;
+// The cache name has to change whenever the build does, or the old cache is
+// never evicted and the app is pinned to whatever was deployed first. The
+// package version is not enough: it stays the same across deploys, so it used
+// to serve stale files indefinitely. __BUILD_ID__ is injected per build.
+const cacheName = `volulab-v${appVersion}-${__BUILD_ID__}`;
 
 const cacheUrls = [
     './',
@@ -25,33 +29,54 @@ const cacheUrls = [
 ];
 
 self.addEventListener('install', (event) => {
-    console.log(`installing v${appVersion}`);
+    console.log(`installing ${cacheName}`);
 
-    // create cache for current version
     event.waitUntil(
+        // the promise has to be returned, or install resolves before the
+        // cache is populated
         caches.open(cacheName)
-        .then((cache) => {
-            cache.addAll(cacheUrls);
-        })
+        .then(cache => cache.addAll(cacheUrls))
+        // take over from the previous worker instead of waiting for every tab
+        // holding the old version to close
+        .then(() => self.skipWaiting())
     );
 });
 
-self.addEventListener('activate', () => {
-    console.log(`activating v${appVersion}`);
+self.addEventListener('activate', (event) => {
+    console.log(`activating ${cacheName}`);
 
-    // delete the old caches once this one is activated
-    caches.keys().then((names) => {
-        for (const name of names) {
-            if (name !== cacheName) {
-                caches.delete(name);
-            }
-        }
-    });
+    event.waitUntil(
+        caches.keys()
+        .then(names => Promise.all(
+            names.filter(name => name !== cacheName).map(name => caches.delete(name))
+        ))
+        // drive already-open pages with the new worker
+        .then(() => self.clients.claim())
+    );
 });
 
 self.addEventListener('fetch', (event) => {
+    const { request } = event;
+
+    // Navigations go to the network first so a deploy is visible on the next
+    // load rather than after the cache happens to be evicted. The cache is
+    // still there as the offline fallback.
+    if (request.mode === 'navigate') {
+        event.respondWith(
+            fetch(request)
+            .then((response) => {
+                const copy = response.clone();
+                caches.open(cacheName).then(cache => cache.put(request, copy));
+                return response;
+            })
+            .catch(() => caches.match(request).then(cached => cached ?? caches.match('./index.html')))
+        );
+        return;
+    }
+
+    // Everything else is cache-first: those URLs are versioned by the cache
+    // name, so a new build repopulates them rather than reusing stale copies.
     event.respondWith(
-        caches.match(event.request)
-        .then(response => response ?? fetch(event.request))
+        caches.match(request).then(response => response ?? fetch(request))
     );
 });
