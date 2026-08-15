@@ -12,7 +12,9 @@ export default [
             globals: {
                 ...globals.browser,
                 ...globals.serviceworker,
-                BlobPart: 'readonly'
+                BlobPart: 'readonly',
+                // injected into the service worker bundle at build time
+                __BUILD_ID__: 'readonly'
             }
         },
         plugins: {
