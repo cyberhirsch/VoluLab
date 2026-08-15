@@ -1,0 +1,97 @@
+@use 'colors.scss' as *;
+
+// The menu is global chrome in the flex column above the pane tree, so it
+// takes part in the flow rather than floating over the canvas as it used to.
+//
+// It needs a z-index: the dropdown panels are absolutely positioned children
+// that hang down over the workspace, and #workspace is itself positioned and
+// comes later in DOM order - with both at z-index auto the workspace would
+// paint over every open menu. Height is left to #menu-bar so its bottom border
+// is counted rather than overflowing by a pixel.
+#menu {
+    position: relative;
+    z-index: 2;
+    flex: 0 0 auto;
+}
+
+#menu-bar {
+    position: relative;
+    width: 100%;
+    height: $h-toolbar;
+    border-radius: 0;
+    border-bottom: $border-width solid $ink-3;
+
+    overflow: hidden;
+
+    background-color: $ink-1;
+
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+#menu-container {
+    display: flex;
+    flex-direction: column;
+}
+
+// Options are flush left: the row fills the bar, but each option hugs its
+// own label instead of stretching to share the width.
+#menu-bar-options {
+    display: flex;
+    flex-direction: row;
+    flex-grow: 1;
+    justify-content: flex-start;
+    align-items: stretch;
+}
+
+// Brand mark. Two weights of one word - the second half recedes rather than
+// being a separate colour of its own.
+#menu-logo {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    padding: 0 10px;
+    letter-spacing: 0.08em;
+    text-transform: lowercase;
+    cursor: default;
+    user-select: none;
+}
+
+// scoped under the id so these beat PCUI's .font-regular, which sets
+// font-weight at the same specificity but later in the cascade
+#menu-logo .menu-logo-primary {
+    margin: 0;
+    color: $ink-7;
+    font-weight: 600;
+}
+
+#menu-logo .menu-logo-secondary {
+    margin: 0;
+    color: $ink-5;
+    font-weight: 300;
+}
+
+// Applied as a transform rather than editing the locale strings, so all nine
+// translations follow and non-cased scripts (ja, ko, zh) are simply unaffected.
+.menu-option {
+    padding: 0 10px;
+    margin: 0px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    text-align: left;
+    text-transform: lowercase;
+    text-overflow: clip;
+    color: $ink-5;
+
+    background-color: $ink-1;
+
+    cursor: pointer;
+
+    &:hover {
+        color: $ink-7;
+        background-color: $ink-2;
+    }
+}

@@ -1,0 +1,38 @@
+{
+    "name": "VoluLab",
+    "short_name": "VoluLab",
+    "description": "VoluLab is a browser-based editor for inspecting, editing and optimizing 3D Gaussian Splats and splat sequences.",
+    "display": "fullscreen",
+    "start_url": "./",
+    "scope": "./",
+    "background_color": "#ffffff",
+    "icons": [
+        {
+            "src": "./static/icons/logo.png",
+            "sizes": "287x282",
+            "type": "image/png"
+        }
+    ],
+    "screenshots": [
+        {
+            "src": "./static/images/screenshot-narrow.jpg",
+            "type": "image/jpeg",
+            "sizes": "2160x3840",
+            "form_factor": "narrow"
+        },
+        {
+            "src": "./static/images/screenshot-wide.jpg",
+            "type": "image/jpeg",
+            "sizes": "3840x2160",
+            "form_factor": "wide"
+        }
+    ],
+    "file_handlers": [
+        {
+            "action": "./",
+            "accept": {
+                "application/ply": [".ply"]
+            }
+        }
+    ]
+}

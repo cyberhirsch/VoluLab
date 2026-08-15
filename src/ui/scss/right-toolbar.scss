@@ -1,0 +1,109 @@
+@use 'colors.scss' as *;
+
+#right-toolbar {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    width: 26px;
+    transform: translate(0, -50%);
+    padding: $pad-x-sm 0px;
+    border-radius: 0;
+
+    background-color: $ink-1;
+    border: $border-width solid $ink-3;
+    border-right: 0;
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+
+    #right-toolbar-mode-toggle {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+
+        svg {
+            width: 16px;
+            height: 16px;
+        }
+    }
+
+    &>.right-toolbar-button, .right-toolbar-tool, .right-toolbar-toggle {
+        width: 26px;
+        height: $h-control;
+        margin: 0;
+        padding: 0px;
+        border: 0px;
+        border-radius: 0;
+
+        // centre the glyph in the compact button
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: visible;
+
+        &::before {
+            font-size: 14px !important;
+            line-height: 100%;
+        }
+
+        // see bottom-toolbar.scss - the 38-unit viewBox is mostly padding, so
+        // the box stays larger than the visible mark to match the font icons.
+        svg {
+            width: 32px;
+            height: 32px;
+            pointer-events: none;
+            color: $ink-5;
+        }
+    }
+
+    &>.right-toolbar-separator {
+        width: 14px;
+        height: $border-width;
+        margin: $gap-sm 0px;
+        background-color: $ink-3;
+    }
+
+    &>.right-toolbar-button {
+        svg {
+            color: $clr-default;
+        }
+    }
+
+    &>.right-toolbar-tool {
+        background-color: transparent;
+
+        svg {
+            color: $clr-default;
+        }
+
+        &.active {
+            color: $clr-active;
+            background-color: $clr-hilight !important;
+
+            svg {
+                color: $clr-active;
+            }
+        }
+
+        &.disabled {
+            background-color: transparent;
+
+            svg {
+                color: $clr-disabled;
+            }
+        }
+    }
+
+    &>.right-toolbar-toggle.active {
+        // highlight icon
+        &::before {
+            color: $clr-hilight;
+        }
+
+        svg {
+            color: $clr-hilight;
+        }
+    }
+}

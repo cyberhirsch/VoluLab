@@ -1,0 +1,303 @@
+@use 'pcui-theme-volulab.scss';
+@use 'colors.scss' as *;
+@use 'tooltips.scss';
+@use 'panel.scss';
+@use 'menu-panel.scss';
+@use 'menu.scss';
+@use 'scene-panel.scss';
+@use 'settings-panel.scss';
+@use 'color-panel.scss';
+@use 'splat-list.scss';
+@use 'transform.scss';
+@use 'bottom-toolbar.scss';
+@use 'right-toolbar.scss';
+@use 'select-toolbar.scss';
+@use 'data-panel.scss';
+@use 'popup.scss';
+@use 'mode-toggle.scss';
+@use 'settings-dialog.scss';
+@use 'spinner.scss';
+@use 'progress.scss';
+@use 'export-popup.scss';
+@use 'timeline-panel.scss';
+@use 'status-bar.scss';
+@use 'tool.scss';
+@use 'workspace.scss';
+
+// One size, sharp corners. See colors.scss for the token set.
+//
+// NOTE: font-family deliberately does NOT go on `*`. PCUI puts its icon
+// glyphs in the element's text content and lets the icon font arrive by
+// inheritance - and an inherited value loses to any directly matching rule,
+// including a zero-specificity `*`. Setting the family here silently replaces
+// every toolbar icon with tofu. It belongs on `body`, where it inherits.
+* {
+    font-size: $font-size;
+    user-select: none;
+    border-radius: $radius;
+}
+
+// Numbers line up in columns - counts, coordinates, frame indices, sizes.
+input,
+.pcui-numeric-input,
+.camera-info-value,
+.tabular {
+    font-variant-numeric: tabular-nums;
+}
+
+::selection {
+    background: $ink-6;
+    color: $ink-0;
+}
+
+// not on '*' - that breaks wheel scrolling over overflow:hidden elements (e.g. pcui labels)
+html {
+    height: 100%;
+    overscroll-behavior: none;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    max-height: 100%;
+    font-family: $font-mono;
+    background-color: $ink-0;
+    color: $ink-6;
+    line-height: $line-height;
+    overflow: hidden;
+    touch-action: none;
+    overscroll-behavior: none;
+    -webkit-font-smoothing: antialiased;
+}
+
+#app-container {
+    width: 100%;
+    height: 100%;
+}
+
+#editor-container {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: row;
+}
+
+#main-container {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    flex-grow: 1;
+}
+
+#sep-container {
+    background-color: $ink-1;
+}
+
+#sep-container > span {
+    color: $ink-5;
+}
+
+#coord-space-toggle.active {
+    background-color: $ink-2 !important;
+    color: $ink-7;
+}
+
+#file-selector {
+    display: none;
+}
+
+#file-menu {
+    position: absolute;
+}
+
+.file-menu-item span {
+    padding: $pad-y $pad-x;
+    color: $ink-5 !important;
+    font-size: $font-size;
+}
+
+#camera-info-overlay {
+    position: absolute;
+    left: 8px;
+    bottom: 12px;
+    text-shadow: 1px 1px 2px $ink-0;
+    font-family: $font-mono;
+
+    .camera-info-row {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        padding: 0;
+        font-family: inherit;
+    }
+
+    .camera-info-key {
+        margin: 0;
+        color: $ink-5;
+        font-family: inherit;
+        font-weight: normal;
+        overflow: visible;
+    }
+
+    .camera-info-value {
+        margin: 0 0 0 $gap-sm;
+        color: $ink-6;
+        font-family: inherit;
+        font-variant-numeric: tabular-nums;
+        overflow: visible;
+        cursor: text;
+        user-select: text;
+        padding: 0 $pad-x-sm;
+        border-radius: $radius;
+        border: $border-width solid transparent;
+        outline: none;
+        transition: background-color 0.15s ease;
+
+        &:hover {
+            background-color: $ink-2;
+        }
+
+        &:focus {
+            border-color: $ink-5;
+            background-color: $ink-2;
+        }
+
+        // transient paste feedback: brightness for ok, error red for bad
+        &.flash-ok {
+            background-color: $ink-6;
+            color: $ink-0;
+        }
+
+        &.flash-bad {
+            background-color: $error;
+            color: $ink-7;
+        }
+    }
+}
+
+#view-cube-container {
+    position: absolute;
+    width: 140px;
+    height: 140px;
+    right: 0px;
+    top: 0px;
+    pointer-events: none;
+}
+
+#mask-canvas {
+    display: none;
+    position: absolute;
+    opacity: 0.4;
+}
+
+#canvas-container {
+    width: 100%;
+    display: flex;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    flex-grow: 1;
+}
+
+#tools-container {
+    display: none;
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+    &.noevents {
+        pointer-events: none;
+    }
+}
+
+#canvas {
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+}
+
+#tooltips-container {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+#top-container {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+// placeholder
+.pcui-input-element[placeholder] {
+    &::after {
+        color: $ink-4;
+    }
+}
+
+.pcui-vector-input {
+    margin-left: $gap-sm;
+    margin-right: $gap-sm;
+}
+
+/* scrollbar styling - thin, grey, transparent track */
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: $ink-3 transparent;
+}
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: $ink-3;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: $ink-4;
+}
+::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+/* The four weight classes now differ by weight alone - one family throughout. */
+
+.font-thin {
+    font-family: $font-mono;
+    font-weight: 300;
+    font-style: normal;
+}
+
+.font-light {
+    font-family: $font-mono;
+    font-weight: 300;
+    font-style: normal;
+}
+
+.font-regular {
+    font-family: $font-mono;
+    font-weight: 400;
+    font-style: normal;
+}
+
+.font-bold {
+    font-family: $font-mono;
+    font-weight: 600;
+    font-style: normal;
+}

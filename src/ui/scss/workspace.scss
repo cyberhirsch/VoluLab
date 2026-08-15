@@ -1,0 +1,153 @@
+@use 'colors.scss' as *;
+
+// Blender-style pane tree, after Aerialist2. Pane headers are the shortest
+// piece of chrome in the app - 24px, hairline underline, no fill of their own
+// beyond the panel grey.
+
+#workspace {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background-color: $ink-0;
+}
+
+// content not currently claimed by a visible pane. Kept in the document (so
+// the WebGL context and element sizes survive) but out of the layout.
+#workspace-parked {
+    position: absolute;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.ws-split {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+}
+
+.ws-divider {
+    flex: 0 0 auto;
+    background-color: $ink-3;
+    z-index: 1;
+
+    &:hover {
+        background-color: $ink-5;
+    }
+}
+
+// a 1px rule with a wider invisible grab area
+.ws-divider-v {
+    width: $border-width;
+    cursor: col-resize;
+    border-left: 2px solid transparent;
+    border-right: 2px solid transparent;
+    background-clip: padding-box;
+}
+
+.ws-divider-h {
+    height: $border-width;
+    cursor: row-resize;
+    border-top: 2px solid transparent;
+    border-bottom: 2px solid transparent;
+    background-clip: padding-box;
+}
+
+.ws-pane {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background-color: $ink-1;
+}
+
+.ws-pane-header {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: $gap-sm;
+    height: $h-header;
+    padding: 0 $pad-x-sm;
+    border-bottom: $border-width solid $ink-3;
+    background-color: $ink-1;
+    user-select: none;
+}
+
+.ws-pane-spacer {
+    flex: 1 1 auto;
+}
+
+// the kind selector - reads as a label until you touch it
+.ws-pane-kind {
+    height: $h-row;
+    padding: 0 $pad-x-sm;
+    border: 0;
+    border-radius: 0;
+    outline: none;
+    color: $ink-6;
+    background-color: $ink-1;
+    font-family: $font-mono;
+    font-size: $font-size;
+    cursor: pointer;
+
+    &:hover {
+        background-color: $ink-2;
+        color: $ink-7;
+    }
+
+    option {
+        background-color: $ink-1;
+        color: $ink-6;
+    }
+}
+
+.ws-pane-button {
+    width: 18px;
+    height: $h-row;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    outline: none;
+    color: $ink-4;
+    background-color: transparent;
+    cursor: pointer;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    // Material Symbols fill most of their viewBox, so unlike the toolbar SVGs
+    // the drawn size is the box size - no padding to compensate for.
+    svg {
+        display: block;
+        pointer-events: none;
+    }
+
+    &:hover {
+        background-color: $ink-2;
+        color: $ink-7;
+    }
+}
+
+.ws-pane-body {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background-color: $ink-0;
+
+    // whatever content the pane claims fills it
+    & > * {
+        width: 100%;
+        height: 100%;
+    }
+}

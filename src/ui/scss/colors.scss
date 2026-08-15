@@ -1,0 +1,99 @@
+@use 'pcui-theme-volulab.scss' as theme;
+
+// ─── VoluLab design tokens ──────────────────────────────────────────────────
+//
+// Greyscale terminal chrome, after Aerialist2. Monospace everywhere, pure
+// greys, no colour accents, no corner radius. The 3D viewport is the only
+// thing on screen allowed to carry colour.
+//
+// Hierarchy comes from the grey ladder and from brightness changes on
+// hover/active — never from a hue. If a new state needs to stand out, take it
+// up the ladder toward $ink-7, or invert to a solid $ink-7 fill.
+
+// ─── grey ladder ────────────────────────────────────────────────────────────
+// Eight steps, dark-terminal first. Pick from these rather than inventing a
+// new dark value.
+
+$ink-0: #0c0c0c;    // app background / canvas
+$ink-1: #161616;    // panel + toolbar background
+$ink-2: #222222;    // raised surface, hover fill
+$ink-3: #3a3a3a;    // borders, separators
+$ink-4: #6e6e6e;    // muted text, idle icons
+$ink-5: #a8a8a8;    // secondary text, default icons
+$ink-6: #d4d4d4;    // primary text
+$ink-7: #f2f2f2;    // emphasis text, active state
+
+// ─── typography ─────────────────────────────────────────────────────────────
+// One family. Cascadia Mono ships with Windows Terminal, JetBrains Mono is the
+// cross-platform fallback, Consolas the floor.
+
+$font-mono: 'Cascadia Mono', 'JetBrains Mono', Consolas, 'SF Mono', Menlo, monospace;
+
+// Aerialist2 sets 13px/1.5, but it lays out with auto-height flex rows. This
+// UI inherits fixed-height rows and fixed-width label columns fitted to a 12px
+// sans. Monospace is wider per character and taller per line, so 13px/1.5
+// overflows them both ways - clipped descenders in 14px rows, truncated labels
+// in 140px columns. 12px with a normal line box matches the old metrics while
+// still reading larger, because mono has a bigger x-height than the Helvetica
+// stack it replaced.
+$font-size: 12px;           // base
+$font-size-sm: 11px;        // dense rows, status bar
+$font-size-xs: 10px;        // micro labels
+$line-height: normal;       // chrome - must fit fixed-height rows
+$line-height-prose: 1.5;    // opt-in for the reading surfaces (about, shortcuts)
+
+// ─── density ────────────────────────────────────────────────────────────────
+// Compact scale. Replaces the old 32/38px control heights.
+
+$h-toolbar: 28px;           // top / bottom toolbars
+$h-header: 24px;            // panel + pane headers
+$h-control: 22px;           // buttons, inputs, rows
+$h-row: 20px;               // list rows, menu items
+$h-status: 22px;            // status bar
+
+$pad-x: 6px;                // horizontal padding inside chrome
+$pad-x-sm: 4px;             // tight buttons
+$pad-y: 2px;
+$gap: 6px;
+$gap-sm: 4px;
+
+$radius: 0;                 // sharp corners, everywhere
+$border-width: 1px;
+
+// Hard offset shadow, not a soft blur — the one place VoluLab is allowed to
+// look like it sits above the page. Menus use the smaller step.
+$shadow-dialog: 6px 6px 0 0 #000;
+$shadow-menu: 4px 4px 0 0 #000;
+
+// ─── legacy aliases ─────────────────────────────────────────────────────────
+// The names the existing stylesheets already use, remapped onto the ladder so
+// every component inherits the greyscale language without a per-file edit.
+// Prefer the $ink-* / density tokens above in new code.
+
+$text-primary: $ink-6;
+$text-secondary: $ink-5;
+$text-dark: $ink-4;
+$text-darkest: $ink-3;
+
+$error: theme.$error;
+
+$clr-default: $ink-5;
+$clr-disabled: $ink-4;
+
+// The active pair is an inversion, not two shades of the same idea:
+// $clr-hilight is the solid "on" fill, $clr-active is what sits on top of it.
+// Every use of $clr-active in the stylesheets is a foreground over that fill
+// (toggle knob, active icon, active label), so it has to be the dark end.
+$clr-hilight: $ink-7;        // was #f60 — active state is now white, not orange
+$clr-active: $ink-0;         // was white — would be invisible on the fill above
+$clr-icon-hilight: $ink-7;   // was #FFAF50
+
+$bcg-lighter: $ink-3;
+$bcg-light: $ink-3;
+$bcg-primary: $ink-1;
+$bcg-dark: $ink-1;
+$bcg-darker: $ink-0;
+$bcg-darkest: $ink-0;
+
+// darken amount when showing modal dialogs
+$bcg-darken: rgba(0, 0, 0, 0.7);

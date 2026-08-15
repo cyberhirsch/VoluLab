@@ -1,0 +1,113 @@
+@use 'colors.scss' as *;
+
+#bottom-toolbar {
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    height: $h-toolbar;
+    transform: translate(-50%, 0);
+    padding: 0px $pad-x-sm;
+    border-radius: 0;
+    border-top: $border-width solid $ink-3;
+    border-left: $border-width solid $ink-3;
+    border-right: $border-width solid $ink-3;
+
+    background-color: $ink-1;
+
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.bottom-toolbar-button, .bottom-toolbar-tool, .bottom-toolbar-toggle {
+    width: 26px;
+    height: $h-control;
+    margin: 0px;
+    padding: 0px;
+    border: 0px;
+    border-radius: 0;
+
+    // centre the glyph in the compact button
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: visible;
+
+    &::before {
+        font-size: 14px !important;
+        line-height: 100%;
+    }
+
+    // The SVGs use a 0 0 38 38 viewBox but their ink only fills the middle
+    // ~40%, so the box has to stay much larger than the visible mark. At 32px
+    // the ink lands at ~13px, matching the 14px icon-font glyphs beside it.
+    // The box overflows the button harmlessly - it is transparent padding, and
+    // pointer-events are off so it never steals a click from a neighbour.
+    svg {
+        width: 32px;
+        height: 32px;
+        pointer-events: none;
+        color: $ink-5;
+    }
+
+    &:hover {
+        background-color: $ink-2;
+
+        svg {
+            color: $ink-7;
+        }
+    }
+}
+
+.bottom-toolbar-separator {
+    width: $border-width;
+    height: 14px;
+    margin: 0px $gap-sm;
+    background-color: $ink-3;
+}
+
+.bottom-toolbar-button {
+    svg {
+        color: $ink-5;
+    }
+}
+
+.bottom-toolbar-tool {
+    background-color: transparent;
+
+    svg {
+        color: $ink-5;
+    }
+
+    // active inverts to a solid fill - the only "on" indicator in the system
+    &.active {
+        color: $ink-0;
+        background-color: $ink-7 !important;
+
+        svg {
+            color: $ink-0;
+        }
+
+        &:hover svg {
+            color: $ink-0;
+        }
+    }
+
+    &.disabled {
+        background-color: transparent;
+
+        svg {
+            color: $ink-4;
+        }
+    }
+}
+
+.bottom-toolbar-toggle.active {
+    &::before {
+        color: $ink-7;
+    }
+
+    svg {
+        color: $ink-7;
+    }
+}

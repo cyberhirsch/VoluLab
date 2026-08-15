@@ -1,0 +1,14 @@
+@use 'colors.scss' as *;
+
+// The outliner fills its pane; the splat list takes whatever height is left
+// rather than being capped like the old floating card.
+.splat-list-container {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+#transform-panel {
+    padding: $pad-y 0;
+    overflow: auto;
+}

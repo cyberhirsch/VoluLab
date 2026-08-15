@@ -1,0 +1,13 @@
+.claude
+.cursor
+.DS_Store
+.idea
+.npmrc
+.vscode
+dist
+node_modules
+
+# Local reference material, not part of this project:
+#   VolumetricVideo   - a separate repository with its own history
+#   supersplat-main   - pristine upstream copy, kept for diffing
+Repos
