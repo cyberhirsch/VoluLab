@@ -1,34 +1,89 @@
 # VoluLab
 
-VoluLab is a browser-based editor for inspecting, editing, optimizing and
-publishing 3D Gaussian Splats and splat sequences. It runs entirely in the
-browser — nothing to download or install.
+VoluLab is a browser-based studio for volumetric scenes — spaces captured from
+the real world as **3D Gaussian Splats** rather than modelled as polygons. You
+open a capture, clean it up, place it in a usable coordinate system, move a
+camera through it and render the result.
 
-VoluLab is a fork of the **[SuperSplat Editor](https://github.com/playcanvas/supersplat)**
-by PlayCanvas, used under the MIT licence and rebranded and extended for
-volumetric video work. Essentially all of the splat engineering — loading,
-rendering, editing, serialising and publishing Gaussian Splats — is their work;
-this fork changes the interface, not the core. See [LICENSE](LICENSE) for the
-upstream copyright, and [Credits](#credits) below.
+It runs entirely client-side. No install, no account, no upload: the scene is
+read straight off your disk and never leaves the machine. That matters when a
+single capture is a couple of gigabytes and belongs to a client.
 
-## Context
+The problem it exists to solve: a fresh splat capture is technically correct and
+practically unusable. It arrives full of floaters and haze, carries whatever
+happened to be standing behind your subject, sits at an arbitrary scale, and is
+tilted at whatever angle the camera rig felt like. None of that is fixable in a
+viewer, and reaching for a general-purpose 3D package means fighting a data type
+it was never built for. VoluLab is the room where a raw capture becomes a shot
+you can actually use.
 
-VoluLab is the intended front end for
-[VolumetricVideo](https://github.com/cyberhirsch/VolumetricVideo), a
-reproduction of *Representing Long Volumetric Video with Temporal Gaussian
-Hierarchy* (Xu et al., SIGGRAPH Asia 2024). That project trains 4D Gaussian
-representations; this one views and edits them.
+## What You Can Do Today
 
-Note that the editor currently handles **3D** Gaussian Splats, with temporal
-playback supported only as PLY frame sequences (`frame0001.ply`,
-`frame0002.ply`, …) — see [`src/sequence.ts`](src/sequence.ts). Native support
-for the 4D primitive and its temporal hierarchy is not yet implemented.
+**Bring scenes in.** Load captures in the common splat formats, merge several
+into one scene, and keep the result as a project file that remembers your
+edits, camera work and view settings.
+
+**Select exactly what you mean.** Rectangle, lasso, polygon, brush and sphere
+or box volumes, plus a flood select that grows through connected regions and an
+eyedropper that picks by colour. Selections combine — add, subtract, intersect —
+so you can carve out an awkward region in a few passes instead of one perfect
+one.
+
+**Clean up.** Delete floaters and unwanted background outright, or lock parts of
+the scene so a later selection cannot touch them. Everything is undoable, and
+the splat data panel shows you the distributions behind the scene so you can
+find the outliers rather than hunt for them.
+
+**Place it properly.** Move, rotate and scale, with a measure tool for real
+distances and an orient tool for putting the ground plane where the ground
+actually is. A capture that arrives tilted and at arbitrary scale can be made
+metric and level.
+
+**Grade it.** Tint, temperature, saturation, brightness, black and white point,
+and transparency, applied to the scene rather than baked in afterwards.
+
+**Move the camera.** Store camera poses, lay them out on a timeline and let
+VoluLab interpolate between them along a spline. Orbit and fly navigation for
+setting shots up.
+
+**Play sequences.** Frame sequences load as an animated scene and scrub on the
+timeline, so a capture that changes over time can be reviewed in motion instead
+of frame by frame.
+
+**Get it out.** Export to the standard splat formats, including compressed
+variants for delivery, or render straight to an image or a video.
+
+## Where It's Going
+
+The direction is **volumetric video** — not just viewing something that moves,
+but authoring with it.
+
+**Volumetric video as a first-class citizen.** Today time is a thin layer over
+a stack of independent frames. The aim is for a moving scene to be one object
+with a real temporal dimension: edits that apply across time rather than
+per-frame, selections that persist as a subject moves, and playback that stays
+efficient over minutes rather than seconds.
+
+**A node-based workflow.** Cleanup and grading are currently a sequence of
+destructive operations with undo as the only way back. The plan is a graph:
+each operation a node, inputs and parameters editable after the fact, the whole
+recipe re-runnable on a new capture of the same setup. Reorder a cleanup pass or
+change a threshold without redoing everything downstream.
+
+**Deeper camera animation.** Poses and spline interpolation are the foundation.
+Beyond that: easing and timing you can actually shape, multiple cameras, lens
+and depth-of-field controls, and motion that can be matched to a real camera
+move.
+
+**Voxels and other volumetric formats.** Gaussian splats are one way to
+represent captured volume, not the only one. Voxel grids, and other volumetric
+representations alongside them, so the tool follows the work rather than the
+file format — including converting between them where it makes sense.
 
 ## Interface
 
-The layout is a Blender-style tree of resizable panes, after
-[Aerialist2](https://github.com/cyberhirsch/aerialist2). Each pane's function
-is switchable from its own header dropdown, and every pane can be split side by
+The layout is a Blender-style tree of resizable panes. Each pane's function is
+switchable from its own header dropdown, and every pane can be split side by
 side, split stacked, or closed. The layout persists across reloads.
 
 Pane kinds: **viewport**, **outliner**, **transform**, **timeline**, **splat
@@ -41,10 +96,10 @@ losing the canvas. The layout model lives in
 [`src/workspace.ts`](src/workspace.ts); the DOM rendering in
 [`src/ui/workspace-view.ts`](src/ui/workspace-view.ts).
 
-The visual language is a greyscale terminal aesthetic, also after Aerialist2:
-one monospace family throughout, an eight-step grey ladder, no corner radius,
-and no colour accents — the 3D viewport is the only thing on screen carrying
-colour. Errors are the sole exception. Design tokens live in
+The visual language is a greyscale terminal aesthetic: one monospace family
+throughout, an eight-step grey ladder, no corner radius, and no colour accents —
+the 3D viewport is the only thing on screen carrying colour. Errors are the sole
+exception. Design tokens live in
 [`src/ui/scss/colors.scss`](src/ui/scss/colors.scss); active states invert to a
 solid fill rather than taking a hue.
 
@@ -100,16 +155,15 @@ Supported languages live in [`static/locales`](static/locales).
 Run the development server and navigate to `http://localhost:3000/?lng=<locale>`,
 replacing `<locale>` with your language code (e.g. `fr`, `de`, `es`).
 
-## Known Rebranding Gaps
+## Known Gaps
 
-- The wordmark in the menu bar is VoluLab's, but the application logo in
-  [`src/ui/about-popup.ts`](src/ui/about-popup.ts) is still the upstream
-  SuperSplat mark, as are the PWA icons in [`static/icons`](static/icons).
-- Scene publishing ([`src/publish.ts`](src/publish.ts)) uploads to the
-  PlayCanvas backend and requires a PlayCanvas account.
-- Help and About links point at upstream PlayCanvas resources.
-- Project files keep the upstream `.ssproj` extension and MIME type so existing
-  SuperSplat projects still load.
+- Scene publishing ([`src/publish.ts`](src/publish.ts)) still uploads to the
+  PlayCanvas backend and needs a PlayCanvas account, so the menu item is
+  present but not useful here.
+- The PWA icon is a single non-square image rather than the conventional 192
+  and 512 pixel pair, pending a square master.
+- Project files keep the `.ssproj` extension and MIME type from upstream, so
+  existing projects load without conversion.
 
 ## Credits
 
