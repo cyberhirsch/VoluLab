@@ -347,6 +347,19 @@ export const setFloatRect = (
     };
 };
 
+/**
+ * Assign a kind to a detached window. No singleton juggling is needed here:
+ * the viewport is never offered in a detached window's selector, because it
+ * cannot leave the main window in the first place.
+ */
+export const setFloatKind = (state: WorkspaceState, id: string, kind: PaneKind): WorkspaceState => {
+    if (SINGLETON_KINDS.includes(kind)) return state;
+    return {
+        ...state,
+        floats: state.floats.map(f => (f.id === id ? { ...f, kind } : f))
+    };
+};
+
 /** Dock every detached window back into the tree. */
 export const dockAllFloats = (
     state: WorkspaceState,

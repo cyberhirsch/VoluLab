@@ -140,7 +140,9 @@
 // ─── detached windows ───────────────────────────────────────────────────────
 //
 // A detached panel lives in its own browser window, whose document gets a copy
-// of this stylesheet. The window is just the panel plus a thin status bar.
+// of this stylesheet. The window is the panel plus the same header a docked
+// pane has, so it still reads as part of the app - one bar, not two, because a
+// detached panel is small and a second row of chrome costs more than it says.
 
 .ws-detached {
     margin: 0;
@@ -165,44 +167,6 @@
     & > * {
         width: 100%;
         height: 100%;
-    }
-}
-
-.ws-detached-status {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    gap: $gap-sm;
-    height: $h-status;
-    padding: 0 $pad-x;
-    border-top: $border-width solid $ink-3;
-    background-color: $ink-1;
-    user-select: none;
-}
-
-.ws-detached-kind {
-    color: $ink-5;
-}
-
-.ws-detached-spacer {
-    flex: 1 1 auto;
-}
-
-.ws-detached-dock {
-    height: $h-row;
-    padding: 0 $pad-x;
-    border: 0;
-    border-radius: 0;
-    outline: none;
-    color: $ink-5;
-    background-color: transparent;
-    font-family: $font-mono;
-    font-size: $font-size;
-    cursor: pointer;
-
-    &:hover {
-        background-color: $ink-2;
-        color: $ink-7;
     }
 }
 

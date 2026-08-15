@@ -16,6 +16,7 @@ import {
     listPanes,
     loadLayout,
     saveLayout,
+    setFloatKind,
     setFloatRect,
     setPaneKind,
     setRatio,
@@ -41,19 +42,22 @@ const ICON_PATHS = {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-const createIcon = (name: keyof typeof ICON_PATHS, size = 14) => {
-    const svg = document.createElementNS(SVG_NS, 'svg');
+// takes a document so detached windows can build icons in their own
+const createIconIn = (doc: Document, name: keyof typeof ICON_PATHS, size = 14) => {
+    const svg = doc.createElementNS(SVG_NS, 'svg');
     svg.setAttribute('viewBox', '0 -960 960 960');
     svg.setAttribute('width', `${size}`);
     svg.setAttribute('height', `${size}`);
     svg.setAttribute('fill', 'currentColor');
     svg.setAttribute('aria-hidden', 'true');
 
-    const path = document.createElementNS(SVG_NS, 'path');
+    const path = doc.createElementNS(SVG_NS, 'path');
     path.setAttribute('d', ICON_PATHS[name]);
     svg.appendChild(path);
     return svg;
 };
+
+const createIcon = (name: keyof typeof ICON_PATHS, size = 14) => createIconIn(document, name, size);
 
 /**
  * Renders a workspace layout tree into DOM, after Aerialist2's WorkspaceView.
@@ -178,31 +182,49 @@ class WorkspaceView extends Container {
         });
 
         this.state.floats.forEach((float) => {
-            let win = this.windows.get(float.id);
-            if (!win || win.closed) {
-                win = this.openWindow(float) ?? undefined;
+            const existing = this.windows.get(float.id);
+            if (existing && !existing.closed) {
+                this.populateWindow(existing, float);
+                return;
+            }
+
+            // requestWindow is async, so this has to stay in the click's task
+            // to keep the user gesture that both it and window.open require
+            this.openWindow(float).then((win) => {
                 if (!win) {
-                    // popup blocked - put the pane straight back rather than
+                    // blocked - put the pane straight back rather than
                     // stranding its content in the parking area
-                    queueMicrotask(() => this.mutate(dockFloat(this.state, float.id, id => this.paneArea(id))));
+                    this.mutate(dockFloat(this.state, float.id, id => this.paneArea(id)));
+                    return;
+                }
+                // the float may have been docked again while we waited
+                if (!this.state.floats.some(f => f.id === float.id)) {
+                    win.close();
                     return;
                 }
                 this.windows.set(float.id, win);
-            }
+                this.populateWindow(win, float);
+            });
+        });
+    }
 
-            const host = win.document.querySelector('.ws-detached-body');
-            const el = this.content.get(float.kind);
-            if (host && el && el.ownerDocument !== win.document) {
+    /** Move the panel into a prepared window and label its status bar. */
+    private populateWindow(win: Window, float: FloatNode) {
+        const host = win.document.querySelector('.ws-detached-body');
+        const el = this.content.get(float.kind);
+        if (host && el) {
+            if (el.ownerDocument !== win.document) {
                 host.appendChild(win.document.adoptNode(el));
-            } else if (host && el && el.parentElement !== host) {
+            } else if (el.parentElement !== host) {
                 host.appendChild(el);
             }
+        }
 
-            const kindLabel = win.document.querySelector('.ws-detached-kind');
-            if (kindLabel) {
-                kindLabel.textContent = PANE_KINDS.find(k => k.kind === float.kind)?.label ?? float.kind;
-            }
-        });
+        const select = win.document.querySelector('.ws-pane-kind') as HTMLSelectElement | null;
+        if (select && select.value !== float.kind) select.value = float.kind;
+
+        const label = PANE_KINDS.find(k => k.kind === float.kind)?.label ?? float.kind;
+        if (win.document.title !== label) win.document.title = label;
     }
 
     private paneArea(paneId: string) {
@@ -215,26 +237,52 @@ class WorkspaceView extends Container {
     /**
      * Open a detached window and build its document: the opener's stylesheets,
      * a host for the panel, and a small status bar with a dock-back button.
+     *
+     * Document Picture-in-Picture is preferred because its window has no
+     * address bar or tab strip, only a thin title bar - a plain popup spends
+     * ~60px of a small panel's height telling you it is at about:blank. Only
+     * one PiP window may exist at a time, so anything beyond the first falls
+     * back to window.open.
      */
-    private openWindow(float: FloatNode): Window | null {
+    private async openWindow(float: FloatNode): Promise<Window | null> {
         const label = PANE_KINDS.find(k => k.kind === float.kind)?.label ?? float.kind;
-        const features = [
-            'popup=yes',
-            `width=${float.width}`,
-            `height=${float.height}`,
-            `left=${float.x}`,
-            `top=${float.y}`
-        ].join(',');
 
-        const win = window.open('', `volulab-${float.id}`, features);
+        let win: Window | null = null;
+
+        const pip = (window as any).documentPictureInPicture;
+        if (pip?.requestWindow && !pip.window) {
+            try {
+                win = await pip.requestWindow({
+                    width: float.width,
+                    height: float.height,
+                    disallowReturnToOpener: true
+                });
+            } catch (e) {
+                // denied or unsupported options - fall through to a popup
+                win = null;
+            }
+        }
+
+        if (!win) {
+            const features = [
+                'popup=yes',
+                `width=${float.width}`,
+                `height=${float.height}`,
+                `left=${float.x}`,
+                `top=${float.y}`
+            ].join(',');
+            win = window.open('', `volulab-${float.id}`, features);
+        }
+
         if (!win) return null;
 
         const doc = win.document;
-        doc.title = `VoluLab - ${label}`;
+        // short: the window is small and the browser truncates anyway
+        doc.title = label;
 
         // Stylesheets are cloned from the opener. The href property is read
-        // rather than the attribute so it is already absolute: the window is
-        // about:blank, where a relative path would resolve to nothing.
+        // rather than the attribute so it is already absolute: a detached
+        // window has no useful base URL for a relative path to resolve against.
         document.querySelectorAll('link[rel="stylesheet"]').forEach((node) => {
             const link = doc.createElement('link');
             link.rel = 'stylesheet';
@@ -249,31 +297,45 @@ class WorkspaceView extends Container {
 
         doc.body.className = 'ws-detached';
 
+        // The same header the docked pane has, so a detached panel still reads
+        // as part of the app: kind selector on the left, dock button right.
+        // One bar rather than a header and a status bar - a detached panel is
+        // small and a second row of chrome would cost more than it says.
+        const header = doc.createElement('div');
+        header.className = 'ws-pane-header';
+
+        const select = doc.createElement('select');
+        select.className = 'ws-pane-kind';
+        // the viewport cannot be detached, so it is not on offer here
+        PANE_KINDS.filter(k => !SINGLETON_KINDS.includes(k.kind)).forEach(({ kind, label: text }) => {
+            const opt = doc.createElement('option');
+            opt.value = kind;
+            opt.textContent = text;
+            select.appendChild(opt);
+        });
+        select.value = float.kind;
+        select.addEventListener('change', () => {
+            this.mutate(setFloatKind(this.state, float.id, select.value as PaneKind));
+        });
+
+        const spacer = doc.createElement('div');
+        spacer.className = 'ws-pane-spacer';
+
+        const dock = doc.createElement('button');
+        dock.className = 'ws-pane-button ws-dock';
+        dock.title = 'return this panel to the main window';
+        dock.appendChild(createIconIn(doc, 'dock'));
+        dock.addEventListener('click', () => win.close());
+
+        header.appendChild(select);
+        header.appendChild(spacer);
+        header.appendChild(dock);
+
         const body = doc.createElement('div');
         body.className = 'ws-detached-body';
 
-        const status = doc.createElement('div');
-        status.className = 'ws-detached-status';
-
-        const kind = doc.createElement('span');
-        kind.className = 'ws-detached-kind';
-        kind.textContent = label;
-
-        const spacer = doc.createElement('span');
-        spacer.className = 'ws-detached-spacer';
-
-        const dock = doc.createElement('button');
-        dock.className = 'ws-detached-dock';
-        dock.textContent = 'dock';
-        dock.title = 'return this panel to the main window';
-        dock.addEventListener('click', () => win.close());
-
-        status.appendChild(kind);
-        status.appendChild(spacer);
-        status.appendChild(dock);
-
+        doc.body.appendChild(header);
         doc.body.appendChild(body);
-        doc.body.appendChild(status);
 
         // Closing the window docks the panel back. Its content must be adopted
         // home first or it dies with the document, so remember the size and
