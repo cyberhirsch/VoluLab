@@ -31,6 +31,11 @@ class EditHistory {
         events.on('edit.redo', () => this.redo());
         events.on('edit.add', (editOp: EditOp, suppressOp = false) => this.add(editOp, suppressOp));
         events.on('edit.removeForShape', (shape: unknown) => this.removeForShape(shape));
+        events.on('edit.goto', (cursor: number) => this.goto(cursor));
+
+        // read access for views that draw the history rather than drive it -
+        // the node panel builds its graph from this
+        events.function('edit.history', () => ({ ops: this.history, cursor: this.cursor }));
     }
 
     private queue<T>(fn: () => T | Promise<T>): Promise<T> {
@@ -95,9 +100,29 @@ class EditHistory {
         this.fireEvents();
     }
 
+    /**
+     * Move the cursor to an absolute position, undoing or redoing as needed.
+     * One queued task rather than one per step, so nothing interleaves halfway
+     * through the travel.
+     */
+    goto(cursor: number) {
+        return this.queue(async () => {
+            const target = Math.max(0, Math.min(this.history.length, cursor));
+            while (this.cursor > target) {
+                await this._undo();
+            }
+            while (this.cursor < target) {
+                await this._redo();
+            }
+        });
+    }
+
     fireEvents() {
         this.events.fire('edit.canUndo', this.canUndo());
         this.events.fire('edit.canRedo', this.canRedo());
+        // anything that reshapes history or moves the cursor lands here, so a
+        // view can redraw off this one event
+        this.events.fire('edit.changed');
     }
 
     clear() {

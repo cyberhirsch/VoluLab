@@ -19,6 +19,7 @@
 export type PaneKind =
     | 'viewport'
     | 'outliner'
+    | 'nodes'
     | 'transform'
     | 'timeline'
     | 'data'
@@ -28,6 +29,7 @@ export type PaneKind =
 export const PANE_KINDS: { kind: PaneKind; label: string }[] = [
     { kind: 'viewport', label: 'viewport' },
     { kind: 'outliner', label: 'outliner' },
+    { kind: 'nodes', label: 'nodes' },
     { kind: 'transform', label: 'transform' },
     { kind: 'timeline', label: 'timeline' },
     { kind: 'data', label: 'splat data' },

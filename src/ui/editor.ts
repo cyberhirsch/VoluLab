@@ -10,6 +10,7 @@ import { ExportPopup } from './export-popup';
 import { ImageSettingsDialog } from './image-settings-dialog';
 import { i18n } from './localization';
 import { Menu } from './menu';
+import { NodePanel } from './node-panel';
 import { OutlinerPanel } from './outliner-panel';
 import { Popup, ShowOptions } from './popup';
 import { Progress } from './progress';
@@ -116,6 +117,7 @@ class EditorUI {
 
         const timelinePanel = new TimelinePanel(events, tooltips);
         const dataPanel = new DataPanel(events, tooltips);
+        const nodePanel = new NodePanel(events);
         const statusBar = new StatusBar(events, tooltips);
 
         // panels are pane content now, so they are always "shown" - the
@@ -126,6 +128,7 @@ class EditorUI {
         colorPanel.hidden = false;
         outlinerPanel.hidden = false;
         transformPanel.hidden = false;
+        nodePanel.hidden = false;
 
         const workspace = new WorkspaceView({
             onChange: () => events.fire('workspace.changed')
@@ -133,6 +136,7 @@ class EditorUI {
 
         workspace.register('viewport', canvasContainer.dom);
         workspace.register('outliner', outlinerPanel.dom);
+        workspace.register('nodes', nodePanel.dom);
         workspace.register('transform', transformPanel.dom);
         workspace.register('timeline', timelinePanel.dom);
         workspace.register('data', dataPanel.dom);
