@@ -10,7 +10,6 @@ const cacheUrls = [
     './index.css',
     './index.html',
     './index.js',
-    './index.js.map',
     './manifest.json',
     './static/icons/logo.png',
     './static/images/screenshot-narrow.jpg',

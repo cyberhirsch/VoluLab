@@ -39,12 +39,16 @@ const outputHeader = () => {
 
 outputHeader();
 
+// Sourcemaps are ~15MB of the build and only useful while developing, so a
+// release build drops them. Set SOURCEMAP=1 to get them back in a release.
+const SOURCEMAP = process.env.SOURCEMAP === '1' || BUILD_TYPE !== 'release';
+
 const application = {
     input: 'src/index.ts',
     output: {
         dir: 'dist',
         format: 'esm',
-        sourcemap: true
+        sourcemap: SOURCEMAP
     },
     plugins: [
         copyAndWatch({
@@ -103,7 +107,7 @@ const serviceWorker = {
     output: {
         dir: 'dist',
         format: 'esm',
-        sourcemap: true
+        sourcemap: SOURCEMAP
     },
     plugins: [
         resolve(),
