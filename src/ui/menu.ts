@@ -109,6 +109,45 @@ class Menu extends Container {
         buttonsContainer.append(selection);
         buttonsContainer.append(render);
 
+        // Undo and redo live up here as well as in the Edit menu, because the
+        // menu bar is the only chrome that is always on screen. The toolbar
+        // copies of these buttons belong to the viewport, and go with it when
+        // its pane is showing something else.
+        const history = new Container({
+            id: 'menu-history'
+        });
+
+        const shortcuts: ShortcutManager = events.invoke('shortcutManager');
+
+        const historyButton = (svg: string, label: string, shortcutId: string, fire: string) => {
+            const button = new Container({
+                class: 'menu-history-button'
+            });
+            button.append(createSvg(svg));
+            button.dom.setAttribute('role', 'button');
+            const shortcut = shortcuts?.formatShortcut(shortcutId);
+            button.dom.title = shortcut ? `${label} (${shortcut})` : label;
+            button.dom.addEventListener('click', () => {
+                if (!button.class.contains('disabled')) events.fire(fire);
+            });
+            // nothing to undo yet, so they start out unavailable
+            button.class.add('disabled');
+            history.append(button);
+            return button;
+        };
+
+        const undoButton = historyButton(editUndo, 'undo', 'edit.undo', 'edit.undo');
+        const redoButton = historyButton(editRedo, 'redo', 'edit.redo', 'edit.redo');
+
+        events.on('edit.canUndo', (value: boolean) => {
+            undoButton.class[value ? 'remove' : 'add']('disabled');
+        });
+        events.on('edit.canRedo', (value: boolean) => {
+            redoButton.class[value ? 'remove' : 'add']('disabled');
+        });
+
+        buttonsContainer.append(history);
+
         menubar.append(buttonsContainer);
 
         // Get the shortcut manager for displaying keyboard shortcuts

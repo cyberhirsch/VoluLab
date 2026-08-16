@@ -135,7 +135,7 @@ class GraphPanel extends Container {
 
         this.empty = document.createElement('div');
         this.empty.className = 'gn-empty';
-        this.empty.textContent = 'nothing loaded';
+        this.empty.textContent = 'right-click to add an import node';
 
         this.dom.appendChild(this.stage);
         this.dom.appendChild(this.empty);
@@ -475,6 +475,13 @@ class GraphPanel extends Container {
     private addItems(): MenuEntry[] {
         const splat = this.events.invoke('selection') as Splat;
         return [
+            {
+                // an import node is a loaded object, so adding one is the load.
+                // Always available - it is how the graph gets its first object,
+                // and everything else needs one to hang off.
+                label: 'add import node',
+                action: () => this.events.invoke('scene.import')
+            },
             {
                 label: 'add select node',
                 disabled: !splat,

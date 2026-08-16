@@ -95,3 +95,51 @@
         background-color: $ink-2;
     }
 }
+
+// Undo and redo, sitting after the menu options. A separator rather than a
+// gap keeps them reading as part of the bar rather than as a floating pair.
+#menu-history {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    margin-left: 8px;
+    padding-left: 8px;
+    border-left: $border-width solid $ink-3;
+}
+
+.menu-history-button {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: $h-control;
+    color: $ink-5;
+    cursor: pointer;
+
+    // the toolbar svgs draw into roughly the middle 40% of a 38-unit viewBox,
+    // so the box has to be generous for the ink to match the menu text
+    svg {
+        width: 26px;
+        height: 26px;
+        fill: currentColor;
+        pointer-events: none;
+    }
+
+    &:hover {
+        color: $ink-7;
+        background-color: $ink-2;
+    }
+
+    // nothing to undo or redo: still present, so the bar does not reflow
+    &.disabled {
+        color: $ink-3;
+        cursor: default;
+
+        &:hover {
+            color: $ink-3;
+            background-color: transparent;
+        }
+    }
+}
