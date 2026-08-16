@@ -1,5 +1,9 @@
 # Node backlog
 
+**Status.** Tier A is done except for making colour selection-scoped, which
+turned out to be the largest item in the document rather than the smallest -
+see the note below for why. Tiers B and C are untouched.
+
 Candidate nodes for the graph, ordered by what they cost rather than by how
 they read. A lot of the work is already done: several of these are a *face*
 over an edit op that exists and already takes part in undo, bypass and
@@ -14,58 +18,79 @@ Terms used below:
 
 ---
 
-## Before adding anything: make colour selection-scoped
+## Still open: make colour selection-scoped
 
-`SetSplatColorAdjustmentOp` grades the whole object. Every other node in
-Tier A is already selection-scoped, so this is the odd one out, and adding
-nodes around it widens the inconsistency rather than fixing it.
+`SetSplatColorAdjustmentOp` grades the whole object. Every other node is
+selection-scoped, so this is the odd one out.
 
-The grade currently lives in per-splat uniforms (`clrScale`, `clrOffset`,
-see `Splat.onPreRender` and `gradeTransform` in `src/color-grade.ts`), which
-is why it cannot vary per gaussian. Making it scoped means either baking the
-grade into the colour data, or carrying a per-gaussian grade index the way
-`transformPalette` already carries per-gaussian transforms — the second is
-the closer precedent and the one worth copying.
+The grade lives in per-splat uniforms (`clrScale`, `clrOffset`, see
+`Splat.onPreRender` and `gradeTransform` in `src/color-grade.ts`), which is
+why it cannot vary per gaussian.
 
-**Do this first.**
+**Baking it into the colour data is the wrong answer.** The grade is
+currently a live view transform, which is exactly why a colour node stays
+re-editable for nothing. Baking would mean re-grading already-graded data.
+
+The right answer is a **grade palette**, following the precedent
+`transformPalette` sets for per-gaussian transforms:
+
+- A per-gaussian `R16U` index texture alongside `splatTransform`.
+- A palette of grades. Store each as a **3x4 matrix plus an alpha scale**,
+  not as the eight parameters: saturation is a linear map and the levels are
+  affine, so a grade *is* a matrix — and two of them compose by multiplying,
+  which the eight-parameter form cannot represent. Composition is what lets a
+  second colour node stack on a region an earlier one already touched.
+- The op keeps its parameters, as now, so the panel still edits meaning
+  rather than matrix entries. The slot is recomputed from them on replay.
+
+The cost is not the palette, it is that **four paths read the grade** and all
+four would need the per-gaussian lookup: the render shader
+(`src/shaders/splat-shader.ts`), the histogram and range-select shaders
+(`src/shaders/splat-value-shader.ts`), and the CPU export path
+(`src/splat-serialize.ts`, which builds one `ColorGrade` per splat). Doing
+only the renderer would leave export and the histogram quietly disagreeing
+with what is on screen, which is worse than the current honest limitation.
+
+A useful first step that is safe on its own: make `gradeTransform` return a
+matrix and have all four consumers use it *with a single per-object grade*.
+Behaviour-identical, verifiable, and it removes the parameterisation problem
+before any per-gaussian work starts.
 
 ---
 
-## Tier A — the op exists, it needs a node face
+## Tier A — done
 
-Cheap. The behaviour, undo and re-evaluation are already there.
+### Output node — done
 
-### Output node
+Carries format, filename, SH band count and selection scope, and drives
+`scene.write` directly rather than reopening the export dialog. Not an edit:
+`do`/`undo` are no-ops. Writing winds the history to the node's position
+first and back afterwards, so where it sits in the chain is what it exports.
+Drawn with an input and no output.
 
-The counterpart to the import node, and the thing that turns the graph from
-a record of what happened into a pipeline. Several output nodes means
-several deliverables from one graph.
+### Transform node — done
 
-- Exists: `scene.export`, `scene.write`, `scene.publish`, and the whole
-  settings set in `src/ui/export-popup.ts` (format, `maxSHBands`,
-  per-format options).
-- Needed: a terminal node holding one of those settings sets, and a node
-  pane face for it. It has an input and no output.
+Shows position, rotation and scale; editing a field replays from that node.
+A transform is committed bundled with its pivot placement, so ops are now
+named and edited by their principal member (`principalOp` in
+`src/edit-ops.ts`) rather than being drawn as "combined edit".
 
-### Transform node
+Worth knowing: a world-space selection downstream of a transform will
+legitimately catch different splats after the object moves. That is the
+model working — see the note on the model matrix in `src/select-query.ts`.
 
-- Exists: `EntityTransformOp` (whole object) and `SplatsTransformOp`
-  (selected gaussians, via the transform palette). `src/ui/transform.ts`
-  already edits them.
-- Needed: a label, and the transform pane's controls mounted in the node
-  pane the way the colour panel is.
-- Note: `SplatsTransformOp` is **already selection-scoped**. It is the best
-  demonstration that the graph does real per-gaussian work.
+### Delete / restore / hide — done
 
-### Delete / restore node
+No parameters to turn, so they report what they did: how many splats they
+touched, read from what the op resolved rather than recomputed, plus a line
+on what bypassing one means. `StateOp.affected` is the accessor.
 
-- Exists: `DeleteSelectionOp`, `ResetOp`. They already appear in the graph,
-  unlabelled and without settings. Bypass already un-deletes them.
-- Needed: a face, and a count of what was removed.
+### Still missing from Tier A
 
-### Hide node
-
-- Exists: `HideSelectionOp`, `UnhideAllOp`. Same situation.
+`SplatsTransformOp` (transform the selected gaussians rather than the whole
+object) has no node face. It is **already selection-scoped**, so it is the
+cheapest possible demonstration that the graph does real per-gaussian work,
+and worth doing next.
 
 ---
 
@@ -146,13 +171,13 @@ The bridge to voxels and the other volumetric formats named as targets.
 
 ---
 
-## Recommended order
+## Recommended order from here
 
-1. **Colour selection-scoped** — fixes an inconsistency rather than adding to
-   it.
-2. **Output node** — closes the loop, on machinery that already exists.
-3. **Transform node** — proves per-gaussian work in the graph.
-4. **Cleanup** — the operation that would make this reached for daily.
+1. **`SplatsTransformOp` node face** — small, and selection-scoped already.
+2. **Colour selection-scoped**, in the two steps above: matrix form first as
+   a safe no-op refactor, then the palette.
+3. **Cleanup** — the operation that would make this reached for daily.
+4. **SH bands node** — the file-size lever, and cheap next to Tier C.
 
 ---
 
