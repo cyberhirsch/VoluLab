@@ -1,8 +1,9 @@
 import { Container } from '@playcanvas/pcui';
 
-import { EditOp, SelectOp } from '../edit-ops';
+import { EditOp, SelectMode, SelectOp, SplatRenameOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
+import { Splat } from '../splat';
 
 /**
  * The parameters of whichever node the graph has selected.
@@ -41,6 +42,9 @@ class NodePanel extends Container {
 
     private selected: number | null = null;
 
+    /** set when the graph has an import node open - its settings are the object */
+    private importSplat: Splat | null = null;
+
     constructor(events: Events, args = {}) {
         args = {
             ...args,
@@ -65,10 +69,13 @@ class NodePanel extends Container {
         this.empty.textContent = 'no node selected';
         this.dom.appendChild(this.empty);
 
-        events.on('graph.selected', (index: number | null) => {
-            this.selected = index;
+        events.on('graph.selected', (selected: { index: number | null, splat: Splat | null, isImport: boolean }) => {
+            this.selected = selected?.index ?? null;
+            this.importSplat = selected?.isImport ? selected.splat : null;
             this.rebuild();
         });
+        events.on('splat.name', () => this.rebuild());
+        events.on('splat.visibility', () => this.rebuild());
         events.on('edit.changed', () => this.rebuild());
         events.on('tool.activated', () => this.rebuild());
 
@@ -98,6 +105,12 @@ class NodePanel extends Container {
         // the chrome around them
         this.mounts.forEach(el => el.remove());
         this.body.replaceChildren();
+
+        if (this.importSplat) {
+            this.empty.hidden = true;
+            this.buildImport(this.importSplat);
+            return;
+        }
 
         const current = this.currentOp();
         if (!current) {
@@ -137,9 +150,63 @@ class NodePanel extends Container {
         return row;
     }
 
+    /** A read-only figure, right-aligned against its label. */
+    private stat(label: string, value: string) {
+        const row = this.row(label);
+        const el = document.createElement('div');
+        el.className = 'nd-value';
+        el.textContent = value;
+        row.appendChild(el);
+        this.body.appendChild(row);
+    }
+
     /**
-     * A select node's settings: which tool authors it, how it combines with
-     * what is already selected, and what it currently resolves by.
+     * An import node's settings are the object it brought in: what it is
+     * called, whether it is showing, and what it contains.
+     */
+    private buildImport(splat: Splat) {
+        const nameRow = this.row('name');
+        const name = document.createElement('input');
+        name.type = 'text';
+        name.className = 'nd-text';
+        name.value = splat.name ?? '';
+        const commitName = () => {
+            const next = name.value.trim();
+            if (next && next !== splat.name) {
+                this.events.fire('edit.add', new SplatRenameOp(splat, next));
+            }
+        };
+        name.addEventListener('change', commitName);
+        name.addEventListener('keydown', (e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') name.blur();
+        });
+        nameRow.appendChild(name);
+        this.body.appendChild(nameRow);
+
+        const visRow = this.row('visible');
+        const vis = document.createElement('button');
+        vis.type = 'button';
+        vis.className = 'nd-choice';
+        vis.textContent = splat.visible ? 'shown' : 'hidden';
+        if (splat.visible) vis.classList.add('nd-choice-active');
+        vis.addEventListener('click', () => {
+            splat.visible = !splat.visible;
+        });
+        visRow.appendChild(vis);
+        this.body.appendChild(visRow);
+
+        const total = splat.splatData?.numSplats ?? 0;
+        this.stat('gaussians', total.toLocaleString());
+        this.stat('selected', (splat.numSelected ?? 0).toLocaleString());
+        this.stat('hidden', (splat.numLocked ?? 0).toLocaleString());
+        this.stat('deleted', (splat.numDeleted ?? 0).toLocaleString());
+    }
+
+    /**
+     * A select node's settings: which tool authors it, and the gestures it is
+     * made of. Every gesture lands in the node being worked on, so the list
+     * grows rather than the graph.
      *
      * The tool buttons fire the same events the viewport toolbar does - there
      * is one set of selection controls, reachable from either place.
@@ -162,46 +229,79 @@ class NodePanel extends Container {
         toolRow.appendChild(tools);
         this.body.appendChild(toolRow);
 
-        const modeRow = this.row('mode');
-        const modes = document.createElement('div');
-        modes.className = 'nd-choices';
-        SELECT_MODES.forEach(({ mode, label }) => {
-            const b = document.createElement('button');
-            b.className = 'nd-choice';
-            b.type = 'button';
-            b.textContent = label;
-            if (op.mode === mode) b.classList.add('nd-choice-active');
-            b.addEventListener('click', () => {
-                // the bit operation follows the mode, so both move together;
-                // re-running the query is what applies the change
-                op.setMode(mode as typeof op.mode);
-                this.events.invoke('edit.reselect', index, op.query);
+        if (!op.steps.length) {
+            const note = document.createElement('div');
+            note.className = 'nd-note';
+            note.textContent = 'empty - pick a tool and draw in the viewport';
+            this.body.appendChild(note);
+            return;
+        }
+
+        // The steps, oldest first. Each is a gesture that went into this node,
+        // with the mode it combined by and a way to drop it again.
+        op.steps.forEach((step, i) => {
+            const row = this.row(i === 0 ? 'steps' : '');
+            row.classList.add('nd-step');
+
+            const modes = document.createElement('div');
+            modes.className = 'nd-choices';
+            SELECT_MODES.forEach(({ mode, label }) => {
+                // the first step has nothing before it to combine with, so it
+                // is a plain replacement whatever it was drawn as
+                if (i === 0 && mode !== 'set') return;
+                const b = document.createElement('button');
+                b.className = 'nd-choice';
+                b.type = 'button';
+                b.textContent = label;
+                if (step.mode === mode) b.classList.add('nd-choice-active');
+                b.addEventListener('click', () => {
+                    const steps = op.steps.map((s, j) => (j === i ? { ...s, mode: mode as SelectMode } : s));
+                    this.events.invoke('edit.reselect', index, steps);
+                });
+                modes.appendChild(b);
             });
-            modes.appendChild(b);
+            row.appendChild(modes);
+
+            const by = document.createElement('div');
+            by.className = 'nd-value nd-step-by';
+            by.textContent = describeQuery(step.query);
+            by.title = describeQuery(step.query);
+            row.appendChild(by);
+
+            const drop = document.createElement('button');
+            drop.type = 'button';
+            drop.className = 'nd-drop';
+            drop.textContent = '×';
+            drop.title = 'remove this step';
+            drop.addEventListener('click', () => {
+                this.events.invoke('edit.reselect', index, op.steps.filter((_, j) => j !== i));
+            });
+            row.appendChild(drop);
+
+            this.body.appendChild(row);
         });
-        modeRow.appendChild(modes);
-        this.body.appendChild(modeRow);
 
-        const byRow = this.row('by');
-        const by = document.createElement('div');
-        by.className = 'nd-value';
-        by.textContent = describeQuery(op.query);
-        byRow.appendChild(by);
-        this.body.appendChild(byRow);
-
-        if (isParametric(op.query)) {
+        // parameters belong to the last step, which is the one just drawn
+        const last = op.steps[op.steps.length - 1];
+        if (isParametric(last.query)) {
             this.buildQueryFields(op, index);
         } else {
             const note = document.createElement('div');
             note.className = 'nd-note';
-            note.textContent = 'a stored hit set - draw again with a tool above to replace it';
+            note.textContent = 'a stored hit set - draw again to replace it';
             this.body.appendChild(note);
         }
     }
 
-    /** Numeric fields for the query kinds that have any. */
+    /** Numeric fields for the last step, where its query kind has any. */
     private buildQueryFields(op: SelectOp, index: number) {
-        const query = op.query;
+        const at = op.steps.length - 1;
+        const query = op.steps[at].query;
+
+        // a field edits one step in place, leaving the rest of the list alone
+        const withQuery = (next: SelectQuery) => {
+            return op.steps.map((s, j) => (j === at ? { ...s, query: next } : s));
+        };
 
         const slider = (label: string, value: number, min: number, max: number, step: number, apply: (v: number) => SelectQuery) => {
             const row = this.row(label);
@@ -223,7 +323,7 @@ class NodePanel extends Container {
                 readout.textContent = parseFloat(input.value).toFixed(3);
             });
             input.addEventListener('change', () => {
-                this.events.invoke('edit.reselect', index, apply(parseFloat(input.value)));
+                this.events.invoke('edit.reselect', index, withQuery(apply(parseFloat(input.value))));
             });
 
             row.appendChild(input);

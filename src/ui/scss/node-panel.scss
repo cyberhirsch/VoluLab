@@ -111,3 +111,60 @@
     font-family: $font-mono;
     font-size: $font-size-sm;
 }
+
+// A gesture that went into a selection: how it combines, what it was, and a
+// way to drop it. Denser than an ordinary row because there are several.
+.nd-step {
+    gap: $gap-sm;
+}
+
+.nd-step-by {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: $ink-5;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nd-drop {
+    flex: 0 0 auto;
+    width: 16px;
+    height: $h-row;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    outline: none;
+    background-color: transparent;
+    color: $ink-4;
+    font-family: $font-mono;
+    font-size: $font-size;
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover {
+        color: $ink-7;
+        background-color: $ink-2;
+    }
+}
+
+// the object's name, on an import node
+.nd-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: $h-row;
+    padding: 0 $pad-x-sm;
+    border: $border-width solid $ink-3;
+    border-radius: 0;
+    outline: none;
+    background-color: $ink-0;
+    color: $ink-6;
+    font-family: $font-mono;
+    font-size: $font-size;
+
+    &:focus {
+        border-color: $ink-5;
+        color: $ink-7;
+    }
+}

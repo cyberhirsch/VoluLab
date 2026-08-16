@@ -208,6 +208,7 @@ export const resolveHits = async (splat: Splat, query: SelectQuery): Promise<(i:
     }
 
     if (query.kind === 'range') {
+        scene.forceRender = true;
         const cam = scene.camera.camera;
         const options: any = {
             entityMatrix: splat.entity.getWorldTransform(),
@@ -247,6 +248,11 @@ export const resolveHits = async (splat: Splat, query: SelectQuery): Promise<(i:
             options.viewProjection = query.viewProjection;
             break;
     }
+
+    // The readback completes on a rendered frame. A selection node resolves
+    // several queries in a row, and without asking for a frame each time the
+    // second one waits on a render that nothing is going to schedule.
+    scene.forceRender = true;
 
     const data = await scene.dataProcessor.intersect(options, splat);
     // the buffer is pooled, so copy what we need out of it before releasing.

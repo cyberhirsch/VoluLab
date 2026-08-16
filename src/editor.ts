@@ -415,8 +415,8 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     /** The node the graph currently has open, if any. */
     let openNode: number | null = null;
 
-    events.on('graph.selected', (index: number | null) => {
-        openNode = index;
+    events.on('graph.selected', (selected: { index: number | null }) => {
+        openNode = selected?.index ?? null;
     });
 
     const history = () => (events.invoke('edit.history') ?? { ops: [], cursor: 0 }) as
@@ -455,23 +455,25 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     /** Put the graph's cursor on a node, so the next edit continues it. */
     const openInGraph = (index: number) => events.fire('graph.selectIndex', index);
 
+    /**
+     * A selection gesture goes into the select node being worked on.
+     *
+     * Every mode folds in, because refining a selection - draw, extend, trim -
+     * is one act of selecting. The node keeps the steps and states the result,
+     * so the graph gains a node when you ask for one, not whenever the
+     * selection moves.
+     */
     const addSelect = (splat: Splat, mode: SelectMode, query: SelectQuery) => {
-        // Only a plain 'set' replaces an existing node, and only a node that is
-        // itself a 'set'. add/remove/intersect are compositional - they mean
-        // "and also this" - so neither folding one into the node it was
-        // composed with, nor overwriting one with a fresh selection, is right:
-        // both throw away a node that was built on purpose.
-        const target = mode === 'set' ?
-            nodeToEdit(splat, op => op instanceof SelectOp && op.mode === 'set') :
-            null;
+        const target = nodeToEdit(splat, op => op instanceof SelectOp);
 
         if (target !== null) {
-            (history().ops[target] as SelectOp).setMode(mode);
-            events.invoke('edit.reselect', target, query);
+            const existing = history().ops[target] as SelectOp;
+            events.invoke('edit.reselect', target,
+                mode === 'set' ? [{ mode, query }] : [...existing.steps, { mode, query }]);
             return;
         }
 
-        events.fire('edit.add', new SelectOp(splat, mode, query));
+        events.fire('edit.add', new SelectOp(splat, [{ mode, query }]));
     };
 
     /**
@@ -514,13 +516,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     // an empty select node, waiting for a viewport gesture to fill it
     events.on('graph.addSelectNode', () => {
-        selectedSplats().forEach((splat) => {
-            appendAndOpen(new SelectOp(splat, 'set', {
-                kind: 'frozen',
-                source: 'empty',
-                hits: IndexRanges.fromPredicate(0, () => false)
-            }));
-        });
+        selectedSplats().forEach(splat => appendAndOpen(new SelectOp(splat, [])));
     });
 
     // a colour node with no adjustment yet - the panel writes into it

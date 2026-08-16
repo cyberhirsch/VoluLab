@@ -170,15 +170,6 @@ class SelectInvertOp extends StateOp {
 
 type SelectMode = 'add' | 'remove' | 'set' | 'intersect';
 
-// op → bit operation and op → predicate, kept as parallel lookups keyed by the
-// same union so adding a mode forces both to be updated together.
-const selectBitOps: Record<SelectMode, BitOp> = {
-    add: BitOp.SET,
-    remove: BitOp.CLEAR,
-    set: BitOp.TOGGLE,
-    intersect: BitOp.CLEAR
-};
-
 /**
  * Combine a hit set with the current selection state.
  *
@@ -211,39 +202,89 @@ const combineWithState = (splat: Splat, mode: SelectMode, isHit: (i: number) => 
     return IndexRanges.fromPredicate(splatData.numSplats, preds[mode]);
 };
 
+/** One gesture inside a selection: what was drawn, and how it combined. */
+type SelectStep = { mode: SelectMode; query: SelectQuery };
+
 /**
- * A selection, stored as the query that produced it.
+ * A selection node.
  *
- * The query is public and replaceable: `setQuery` swaps the parameters and
- * drops the resolved set, so re-applying the op runs the new query. That is
- * what makes a selection node in the graph something you can turn a dial on
- * rather than only look at.
+ * It holds a list of steps rather than a single query, because refining a
+ * selection - drawing, then shift-drawing to extend, then ctrl-drawing to trim
+ * - is one act of selecting, not three edits. Each gesture adds a step to the
+ * node being worked on, so the graph gains a node when you decide it should,
+ * not every time the selection moves.
+ *
+ * However many steps it has, the op means one thing: "the selection is this
+ * afterwards". The steps are folded into a desired set, starting from whatever
+ * was selected before the op, and applied as a difference against it. So the
+ * bit operation is always a toggle, and add/remove/intersect live inside the
+ * fold rather than in how the result is written.
  */
 class SelectOp extends StateOp {
     name = 'selectOp';
 
-    mode: SelectMode;
-    query: SelectQuery;
+    steps: SelectStep[];
 
-    constructor(splat: Splat, mode: SelectMode, query: SelectQuery) {
-        super(splat, null, State.selected, selectBitOps[mode]);
-        this.mode = mode;
-        this.query = query;
-        // reads this.query rather than the constructor argument, so replacing
-        // the query changes what the next resolve asks
-        this.resolver = async (s: Splat) => combineWithState(s, this.mode, await resolveHits(s, this.query));
+    constructor(splat: Splat, steps: SelectStep[]) {
+        // TOGGLE, always: the op states the result, not the gesture
+        super(splat, null, State.selected, BitOp.TOGGLE);
+        this.steps = steps;
+
+        // reads this.steps rather than the constructor argument, so editing the
+        // list changes what the next resolve asks
+        this.resolver = async (s: Splat) => {
+            const numSplats = s.splatData.numSplats;
+            const state = s.splatData.getProp('state') as Uint8Array;
+
+            // start from the selection as it stands going in, so a first step
+            // of 'add' extends what was there rather than replacing it
+            const desired = new Uint8Array(numSplats);
+            for (let i = 0; i < numSplats; ++i) {
+                desired[i] = (state[i] & State.selected) ? 1 : 0;
+            }
+
+            for (const step of this.steps) {
+                // one pass per step, ascending, which is what a hit predicate
+                // requires - each step gets a fresh one
+                const isHit = await resolveHits(s, step.query);
+                for (let i = 0; i < numSplats; ++i) {
+                    const hit = isHit(i);
+                    switch (step.mode) {
+                        case 'set': desired[i] = hit ? 1 : 0; break;
+                        case 'add': if (hit) desired[i] = 1; break;
+                        case 'remove': if (hit) desired[i] = 0; break;
+                        case 'intersect': if (!hit) desired[i] = 0; break;
+                    }
+                }
+            }
+
+            return combineWithState(s, 'set', i => desired[i] === 1);
+        };
     }
 
-    setQuery(query: SelectQuery) {
-        this.query = query;
+    /** The last gesture, which is what the node is labelled by. */
+    get query(): SelectQuery | null {
+        return this.steps.length ? this.steps[this.steps.length - 1].query : null;
+    }
+
+    get mode(): SelectMode {
+        return this.steps.length ? this.steps[this.steps.length - 1].mode : 'set';
+    }
+
+    /**
+     * Fold a gesture in.
+     *
+     * A 'set' says what the selection is outright, so everything before it in
+     * this node no longer contributes and is dropped - refining a fresh
+     * selection leaves one step, not a pile of them.
+     */
+    addStep(step: SelectStep) {
+        this.steps = step.mode === 'set' ? [step] : [...this.steps, step];
         this.invalidate();
     }
 
-    /** How the hit set combines with the current selection. */
-    setMode(mode: SelectMode) {
-        this.mode = mode;
-        // the bit operation is derived from the mode, so it has to move with it
-        this.op = selectBitOps[mode];
+    setSteps(steps: SelectStep[]) {
+        this.steps = steps;
         this.invalidate();
     }
 }
@@ -634,6 +675,7 @@ class SplatRenameOp {
 export {
     EditOp,
     SelectMode,
+    SelectStep,
     StateOp,
     SelectAllOp,
     SelectNoneOp,

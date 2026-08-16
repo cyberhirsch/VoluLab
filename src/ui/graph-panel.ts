@@ -1,6 +1,6 @@
 import { Container } from '@playcanvas/pcui';
 
-import { EditOp, MultiOp, SelectOp } from '../edit-ops';
+import { EditOp, MultiOp, SelectOp, SelectStep } from '../edit-ops';
 import { Events } from '../events';
 import { describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -72,6 +72,14 @@ const OP_LABELS: Record<string, string> = {
 };
 
 const opLabel = (op: EditOp) => OP_LABELS[op.name] ?? op.name;
+
+// What a select node shows on its second line: the gesture, or how many of
+// them, since a refined selection is one node holding several steps.
+const describeSteps = (steps: SelectStep[]) => {
+    if (!steps.length) return 'empty';
+    if (steps.length === 1) return describeQuery(steps[0].query);
+    return `${steps.length} steps`;
+};
 
 // Pointer capture throws on an id the element does not hold - a pointer that
 // was already released, or one the browser cancelled underneath us. Neither is
@@ -404,12 +412,24 @@ class GraphPanel extends Container {
 
     private setSelection(keys: object[]) {
         this.selection = new Set(keys);
-        // the node pane edits one thing at a time, so it hears about a single
-        // selection and is told to show nothing when there are several
+        this.announce();
+        this.rebuild();
+    }
+
+    /**
+     * Tell the node pane what to show. It edits one thing at a time, so it
+     * hears about a single selection and is told to show nothing when there
+     * are several. An import node has no history index but does have an
+     * object, which is what its settings are.
+     */
+    private announce() {
         const only = this.selection.size === 1 ?
             this.nodes.find(n => this.selection.has(n.key)) : null;
-        this.events.fire('graph.selected', only && only.index !== -1 ? only.index : null);
-        this.rebuild();
+        this.events.fire('graph.selected', {
+            index: only && only.index !== -1 ? only.index : null,
+            splat: only?.splat ?? null,
+            isImport: !!only && only.index === -1 && !!only.splat
+        });
     }
 
     /** The ops behind the current selection, as history indices. */
@@ -533,17 +553,17 @@ class GraphPanel extends Container {
 
             // a selection shows what it selects by, not merely that it selected
             const select = op instanceof SelectOp ? op : null;
+            const steps = select?.steps ?? [];
             add(key, {
                 index: i,
-                kind: select ?
-                    (select.mode === 'set' ? 'select' : `select ${select.mode}`) :
-                    opLabel(op),
-                name: select ? describeQuery(select.query) : '',
+                kind: 'select',
+                name: select ? describeSteps(steps) : '',
                 applied: i < cursor,
                 splat,
                 select: !!select,
                 bypassed: !!op.bypassed,
-                frozen: select ? !isParametric(select.query) : undefined,
+                // frozen only when nothing in it can be re-run
+                frozen: steps.length ? steps.every(s => !isParametric(s.query)) : undefined,
                 key: op
             });
         });
@@ -587,7 +607,8 @@ class GraphPanel extends Container {
                 // straight to the field: setSelection would rebuild again, and
                 // this is already the rebuild that found it
                 this.selection = new Set([wanted.key]);
-                this.events.fire('graph.selected', wanted.index);
+                this.nodes = nodes;
+                this.announce();
             }
         }
 

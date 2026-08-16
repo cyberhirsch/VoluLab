@@ -1,7 +1,6 @@
 import { CommandQueue } from './command-queue';
-import { EditOp, MultiOp, SelectOp, StateOp } from './edit-ops';
+import { EditOp, MultiOp, SelectOp, SelectStep, StateOp } from './edit-ops';
 import { Events } from './events';
-import { SelectQuery } from './select-query';
 import { Splat } from './splat';
 
 // Check if an operation references a specific splat
@@ -33,7 +32,7 @@ class EditHistory {
         events.on('edit.add', (editOp: EditOp, suppressOp = false) => this.add(editOp, suppressOp));
         events.on('edit.removeForShape', (shape: unknown) => this.removeForShape(shape));
         events.on('edit.goto', (cursor: number) => this.goto(cursor));
-        events.function('edit.reselect', (index: number, query: SelectQuery) => this.reselect(index, query));
+        events.function('edit.reselect', (index: number, steps: SelectStep[]) => this.reselect(index, steps));
         events.function('edit.removeAt', (indices: number[]) => this.removeAt(indices));
         events.function('edit.refresh', (index: number) => this.refresh(index));
         events.function('edit.setBypassed', (index: number, bypassed: boolean) => this.setBypassed(index, bypassed));
@@ -211,7 +210,7 @@ class EditHistory {
      * Ops that froze a hit set - a brush stroke, a ring-mode pick - replay that
      * set unchanged, because there is nothing else they could mean.
      */
-    reselect(index: number, query: SelectQuery) {
+    reselect(index: number, steps: SelectStep[]) {
         const op = this.history[index];
         if (!(op instanceof SelectOp)) return Promise.resolve();
 
@@ -220,7 +219,7 @@ class EditHistory {
         // a cursor that had not happened yet leaves the tail of history undone
         return this.queue(() => this.replayAround(
             index,
-            () => op.setQuery(query),
+            () => op.setSteps(steps),
             // at minimum the edited op itself is applied, so its result is
             // visible even if the cursor sat before it
             resume => Math.max(resume, index + 1)
