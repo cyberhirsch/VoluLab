@@ -52,10 +52,15 @@ four would need the per-gaussian lookup: the render shader
 only the renderer would leave export and the histogram quietly disagreeing
 with what is on screen, which is worse than the current honest limitation.
 
-A useful first step that is safe on its own: make `gradeTransform` return a
-matrix and have all four consumers use it *with a single per-object grade*.
-Behaviour-identical, verifiable, and it removes the parameterisation problem
-before any per-gaussian work starts.
+**The first step is done.** `gradeMatrix` in `src/color-grade.ts` returns the
+matrix, and all four paths use it with a single per-object grade -
+behaviour-identical, verified against the original formula over 5000 random
+parameter sets and against the GPU through the histogram. What remains is the
+per-gaussian half: the index texture, the palette, and the lookup in the
+three shaders plus the export path.
+
+Note for whoever does it: GLSL reads a mat3 column-major and this matrix is
+not symmetric. Getting that backwards grades plausibly and wrongly.
 
 ---
 
