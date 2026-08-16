@@ -2,7 +2,7 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Quat, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { EditHistory } from './edit-history';
-import { SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, ResetOp, MultiOp, AddSplatOp, SetLocalFrameOp } from './edit-ops';
+import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, ResetOp, MultiOp, AddSplatOp, SetLocalFrameOp, SetSplatColorAdjustmentOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -412,9 +412,66 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         };
     };
 
+    /**
+     * The select node the graph currently has open, if any.
+     *
+     * A node added from the graph starts empty and is filled by drawing in the
+     * viewport - that is what wires it to the viewport controls. So while a
+     * select node is open, a gesture replaces its query rather than appending
+     * another node. With nothing open, a gesture appends, which is how
+     * selection has always behaved.
+     */
+    let openSelectNode: number | null = null;
+
+    events.on('graph.selected', (index: number | null) => {
+        const ops = (events.invoke('edit.history') as { ops: EditOp[] })?.ops ?? [];
+        openSelectNode = (index !== null && ops[index] instanceof SelectOp) ? index : null;
+    });
+
     const addSelect = (splat: Splat, op: SelectMode, query: SelectQuery) => {
+        if (openSelectNode !== null) {
+            const target = openSelectNode;
+            const ops = (events.invoke('edit.history') as { ops: EditOp[] })?.ops ?? [];
+            const existing = ops[target];
+            if (existing instanceof SelectOp && existing.splat === splat) {
+                existing.setMode(op);
+                events.invoke('edit.reselect', target, query);
+                return;
+            }
+        }
         events.fire('edit.add', new SelectOp(splat, op, query));
     };
+
+    // an empty select node, waiting for a viewport gesture to fill it
+    events.on('graph.addSelectNode', () => {
+        selectedSplats().forEach((splat) => {
+            events.fire('edit.add', new SelectOp(splat, 'set', {
+                kind: 'frozen',
+                source: 'empty',
+                hits: IndexRanges.fromPredicate(0, () => false)
+            }));
+        });
+    });
+
+    // a colour node with no adjustment yet - the panel writes into it
+    events.on('graph.addColourNode', () => {
+        selectedSplats().forEach((splat) => {
+            const current = {
+                tintClr: splat.tintClr.clone(),
+                temperature: splat.temperature,
+                saturation: splat.saturation,
+                brightness: splat.brightness,
+                blackPoint: splat.blackPoint,
+                whitePoint: splat.whitePoint,
+                transparency: splat.transparency
+            };
+            events.fire('edit.add', new SetSplatColorAdjustmentOp({
+                splat,
+                oldState: { ...current },
+                newState: { ...current }
+            }));
+        });
+    });
 
     events.on('select.mask', (op: SelectMode, mask: Uint8Array | Uint32Array) => {
         selectedSplats().forEach((splat) => {

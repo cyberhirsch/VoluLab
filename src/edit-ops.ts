@@ -228,6 +228,14 @@ class SelectOp extends StateOp {
         this.query = query;
         this.invalidate();
     }
+
+    /** How the hit set combines with the current selection. */
+    setMode(mode: SelectMode) {
+        this.mode = mode;
+        // the bit operation is derived from the mode, so it has to move with it
+        this.op = selectBitOps[mode];
+        this.invalidate();
+    }
 }
 
 class HideSelectionOp extends StateOp {

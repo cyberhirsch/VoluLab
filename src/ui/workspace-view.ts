@@ -24,6 +24,7 @@ import {
     splitPane,
     undockPane
 } from '../workspace';
+import { contributedMenuItems, showContextMenu } from './context-menu';
 
 /**
  * Somewhere a layout tree is rendered: the main window, or one detached window.
@@ -547,6 +548,49 @@ class WorkspaceView extends Container {
         const body = doc.createElement('div');
         body.className = 'ws-pane-body';
         body.setAttribute('data-pane-body', node.id);
+
+        // Right-click anywhere in the pane offers what the header offers. The
+        // handler sits on the pane rather than on the app so it works in a
+        // detached window too, and content that wants its own menu simply
+        // stops the event before it reaches here.
+        el.addEventListener('contextmenu', (e: MouseEvent) => {
+            e.preventDefault();
+            const last = listPanes(s.root).length <= 1;
+            // whatever the pointer was over gets to go first - its items are
+            // the specific ones, the pane's are the general fallback
+            const contributed = contributedMenuItems(e);
+            showContextMenu(doc, e.clientX, e.clientY, [
+                ...(contributed.length ? [...contributed, 'separator' as const] : []),
+                {
+                    label: 'split side by side',
+                    action: () => split('row')
+                },
+                {
+                    label: 'split stacked',
+                    action: () => split('col')
+                },
+                'separator',
+                {
+                    label: 'open in a separate window',
+                    disabled: last || !s.canUndock || SINGLETON_KINDS.includes(node.kind),
+                    action: () => {
+                        const paneRect = el.getBoundingClientRect();
+                        this.mutate(undockPane(this.state, node.id, {
+                            x: window.screenX + paneRect.left,
+                            y: window.screenY + paneRect.top,
+                            width: Math.round(paneRect.width),
+                            height: Math.round(paneRect.height)
+                        }));
+                    }
+                },
+                {
+                    label: 'close pane',
+                    disabled: last,
+                    hint: last ? 'last pane' : undefined,
+                    action: () => s.edit(root => closePane(root, node.id))
+                }
+            ]);
+        });
 
         el.appendChild(header);
         el.appendChild(body);

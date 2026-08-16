@@ -7,6 +7,7 @@ import { BottomToolbar } from './bottom-toolbar';
 import { CameraInfoOverlay } from './camera-info-overlay';
 import { ColorPanel } from './color-panel';
 import { ExportPopup } from './export-popup';
+import { GraphPanel } from './graph-panel';
 import { ImageSettingsDialog } from './image-settings-dialog';
 import { i18n } from './localization';
 import { Menu } from './menu';
@@ -117,7 +118,11 @@ class EditorUI {
 
         const timelinePanel = new TimelinePanel(events, tooltips);
         const dataPanel = new DataPanel(events, tooltips);
+        const graphPanel = new GraphPanel(events);
         const nodePanel = new NodePanel(events);
+        // the colour controls are a node's parameters now, so they live inside
+        // the node pane rather than in a pane of their own
+        nodePanel.mount('colour', colorPanel.dom);
         const statusBar = new StatusBar(events, tooltips);
 
         // panels are pane content now, so they are always "shown" - the
@@ -129,6 +134,7 @@ class EditorUI {
         outlinerPanel.hidden = false;
         transformPanel.hidden = false;
         nodePanel.hidden = false;
+        graphPanel.hidden = false;
 
         const workspace = new WorkspaceView({
             onChange: () => events.fire('workspace.changed')
@@ -136,12 +142,12 @@ class EditorUI {
 
         workspace.register('viewport', canvasContainer.dom);
         workspace.register('outliner', outlinerPanel.dom);
-        workspace.register('nodes', nodePanel.dom);
+        workspace.register('graph', graphPanel.dom);
+        workspace.register('node', nodePanel.dom);
         workspace.register('transform', transformPanel.dom);
         workspace.register('timeline', timelinePanel.dom);
         workspace.register('data', dataPanel.dom);
         workspace.register('settings', settingsPanel.dom);
-        workspace.register('color', colorPanel.dom);
         workspace.rebuild();
 
         // the menu bar is global chrome, above the pane tree

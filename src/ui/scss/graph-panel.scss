@@ -1,0 +1,158 @@
+@use 'colors.scss' as *;
+
+// The node graph. Same greyscale language as the rest of the chrome: the only
+// hierarchy is the ink ladder, and "currently applied" is the bright end.
+
+#graph-panel {
+    position: relative;
+    overflow: hidden;
+    background-color: $ink-0;
+    cursor: grab;
+
+    // a faint grid, so panning has something to move against
+    background-image:
+        linear-gradient(to right, $ink-1 1px, transparent 1px),
+        linear-gradient(to bottom, $ink-1 1px, transparent 1px);
+    background-size: 24px 24px;
+
+    &.gn-panning {
+        cursor: grabbing;
+    }
+}
+
+.gn-stage {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+    // the stage is only a coordinate frame; clicks belong to what is on it
+    pointer-events: none;
+}
+
+.gn-edges {
+    position: absolute;
+    top: 0;
+    left: 0;
+    overflow: visible;
+}
+
+.gn-edge {
+    fill: none;
+    stroke: $ink-3;
+    stroke-width: 1;
+
+    // an edge into an unapplied node is drawn as the dashed continuation of a
+    // chain that stops at the cursor
+    &.gn-pending {
+        stroke: $ink-2;
+        stroke-dasharray: 3 3;
+    }
+}
+
+.gn-node {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+    box-sizing: border-box;
+    padding: 0 $pad-x;
+    border: $border-width solid $ink-3;
+    background-color: $ink-1;
+    color: $ink-6;
+    font-family: $font-mono;
+    font-size: $font-size-sm;
+    line-height: $line-height;
+    cursor: pointer;
+    pointer-events: auto;
+    user-select: none;
+
+    &:hover {
+        border-color: $ink-5;
+        background-color: $ink-2;
+        color: $ink-7;
+    }
+
+    // past the history cursor: present, but not currently applied
+    &.gn-pending {
+        border-style: dashed;
+        border-color: $ink-2;
+        color: $ink-4;
+
+        .gn-node-kind {
+            color: $ink-4;
+        }
+    }
+
+    // a source node is where a chain starts, so it carries the solid edge
+    &.gn-source {
+        border-color: $ink-4;
+        background-color: $ink-2;
+    }
+
+    // a stored hit set with no parameters behind it. Marked with a left rule
+    // rather than a different fill, so it reads as a qualifier on the node and
+    // not as another state of it.
+    &.gn-frozen {
+        border-left-width: 3px;
+        border-left-color: $ink-4;
+    }
+}
+
+.gn-node-kind {
+    color: $ink-5;
+    font-size: $font-size-xs;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.gn-node-name {
+    color: $ink-7;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+// on an operation the second line is the query's parameters, which are
+// supporting detail rather than the node's identity
+.gn-node:not(.gn-source) .gn-node-name {
+    color: $ink-5;
+}
+
+.gn-node.gn-pending .gn-node-name {
+    color: $ink-4;
+}
+
+// the little connector studs on the left and right edges
+.gn-port {
+    position: absolute;
+    top: 50%;
+    width: 5px;
+    height: 5px;
+    margin-top: -3px;
+    border: $border-width solid $ink-4;
+    background-color: $ink-0;
+}
+
+.gn-port-in {
+    left: -3px;
+}
+
+.gn-port-out {
+    right: -3px;
+}
+
+.gn-empty {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    text-align: center;
+    color: $ink-4;
+    font-family: $font-mono;
+    font-size: $font-size-sm;
+    pointer-events: none;
+}

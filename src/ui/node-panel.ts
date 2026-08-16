@@ -1,108 +1,45 @@
 import { Container } from '@playcanvas/pcui';
 
-import { EditOp, MultiOp, SelectOp } from '../edit-ops';
+import { EditOp, SelectOp } from '../edit-ops';
 import { Events } from '../events';
-import { describeQuery, isParametric } from '../select-query';
-import { Splat } from '../splat';
+import { SelectQuery, describeQuery, isParametric } from '../select-query';
 
 /**
- * The node graph.
+ * The parameters of whichever node the graph has selected.
  *
- * This is a view over the edit history, not a second store: every node is an
- * entry that already exists in EditHistory, drawn where it belongs rather than
- * as a flat list. Each loaded object gets an import node, and the operations
- * touching that object hang off it as a chain, so the graph reads as "what has
- * been done to this thing, in order".
- *
- * Clicking a node moves the history cursor to just after it, which is undo/redo
- * addressed by position instead of by repetition. Nodes past the cursor are
- * drawn dimmed - they exist, they are simply not currently applied.
- *
- * What it is not, yet: editable. A node cannot be re-ordered, disabled or
- * re-evaluated, because a selection op stores the index ranges it resolved to
- * rather than the intent that produced them - see the note in edit-ops.ts.
- * Making selections parametric is the next step, and this view is what will
- * display them.
+ * The pane owns no controls of its own beyond the select node's. Anything with
+ * a panel already - colour being the first - has that panel mounted here, so
+ * there is one place to look at a node's settings rather than a pane per kind.
+ * That is what replaced the standalone colour pane.
  */
 
-const NODE_W = 148;
-const NODE_H = 38;
-const COL_GAP = 44;
-const LANE_GAP = 34;
-const PAD = 28;
+const SELECT_TOOLS: { id: string, label: string, event: string }[] = [
+    { id: 'rectSelection', label: 'rectangle', event: 'tool.rectSelection' },
+    { id: 'lassoSelection', label: 'lasso', event: 'tool.lassoSelection' },
+    { id: 'polygonSelection', label: 'polygon', event: 'tool.polygonSelection' },
+    { id: 'brushSelection', label: 'brush', event: 'tool.brushSelection' },
+    { id: 'sphereSelection', label: 'sphere', event: 'tool.sphereSelection' },
+    { id: 'boxSelection', label: 'box', event: 'tool.boxSelection' },
+    { id: 'floodSelection', label: 'flood', event: 'tool.floodSelection' },
+    { id: 'eyedropperSelection', label: 'colour', event: 'tool.eyedropperSelection' }
+];
 
-const MIN_SCALE = 0.3;
-const MAX_SCALE = 2.5;
-
-const SVG_NS = 'http://www.w3.org/2000/svg';
-
-// EditOp.name is the internal identifier; these are what a person should read.
-// Anything missing falls through to the raw name rather than to a blank node.
-const OP_LABELS: Record<string, string> = {
-    selectAll: 'select all',
-    selectNone: 'deselect all',
-    selectInvert: 'invert selection',
-    selectOp: 'select',
-    hideSelection: 'hide selection',
-    unhideAll: 'unhide all',
-    deleteSelection: 'delete selection',
-    reset: 'restore deleted',
-    entityTransform: 'transform',
-    splatsTransform: 'transform splats',
-    setPivot: 'place pivot',
-    setLocalFrame: 'local frame',
-    shapeTransform: 'selection volume',
-    setSplatColor: 'color grade',
-    multiOp: 'combined edit',
-    addSplat: 'add object',
-    splatRename: 'rename'
-};
-
-const opLabel = (op: EditOp) => OP_LABELS[op.name] ?? op.name;
-
-// The object an op belongs to, or null for ops that act on the scene at large
-// (the pivot, a selection volume, an animation track). MultiOp is grouped by
-// its first member, which is what its members share in practice.
-const opSplat = (op: EditOp): Splat | null => {
-    if (op instanceof MultiOp) {
-        for (const nested of op.ops) {
-            const splat = opSplat(nested);
-            if (splat) return splat;
-        }
-        return null;
-    }
-    return ((op as any).splat as Splat) ?? null;
-};
-
-interface NodeModel {
-    /** history index this node moves the cursor past, or -1 for an import */
-    index: number;
-    kind: string;
-    name: string;
-    x: number;
-    y: number;
-    applied: boolean;
-    splat: Splat | null;
-    /** set on selections: false where the query can be run again */
-    frozen?: boolean;
-}
-
-interface EdgeModel {
-    from: NodeModel;
-    to: NodeModel;
-}
+const SELECT_MODES: { mode: string, label: string }[] = [
+    { mode: 'set', label: 'set' },
+    { mode: 'add', label: 'add' },
+    { mode: 'remove', label: 'remove' },
+    { mode: 'intersect', label: 'keep' }
+];
 
 class NodePanel extends Container {
     private events: Events;
 
-    private stage: HTMLElement;
-    private edges: SVGSVGElement;
+    /** long-lived panels this pane hosts, by the node kind they belong to */
+    private mounts = new Map<string, HTMLElement>();
+    private body: HTMLElement;
     private empty: HTMLElement;
 
-    // view transform, applied to the stage as a whole
-    private tx = PAD;
-    private ty = PAD;
-    private scale = 1;
+    private selected: number | null = null;
 
     constructor(events: Events, args = {}) {
         args = {
@@ -115,261 +52,211 @@ class NodePanel extends Container {
 
         this.events = events;
 
-        // the panel is a viewport onto a larger stage
-        this.dom.classList.add('np-viewport');
-
-        this.stage = document.createElement('div');
-        this.stage.className = 'np-stage';
-
-        this.edges = document.createElementNS(SVG_NS, 'svg');
-        this.edges.classList.add('np-edges');
-        this.stage.appendChild(this.edges);
-
-        this.empty = document.createElement('div');
-        this.empty.className = 'np-empty';
-        this.empty.textContent = 'nothing loaded';
-
-        this.dom.appendChild(this.stage);
-        this.dom.appendChild(this.empty);
-
-        // the viewport swallows pointer events so panning here doesn't also
-        // orbit the camera underneath
         ['pointerdown', 'pointerup', 'pointermove', 'wheel', 'dblclick'].forEach((name) => {
             this.dom.addEventListener(name, (event: Event) => event.stopPropagation());
         });
 
-        this.bindNavigation();
+        this.body = document.createElement('div');
+        this.body.className = 'nd-body';
+        this.dom.appendChild(this.body);
 
-        const refresh = () => this.rebuild();
-        events.on('edit.changed', refresh);
-        events.on('scene.elementAdded', refresh);
-        events.on('scene.elementRemoved', refresh);
-        events.on('splat.name', refresh);
+        this.empty = document.createElement('div');
+        this.empty.className = 'nd-empty';
+        this.empty.textContent = 'no node selected';
+        this.dom.appendChild(this.empty);
 
-        // The panel is built before main.ts has registered the scene and
-        // history accessors it reads, so the first draw waits for the current
-        // synchronous startup to finish rather than asking too early.
-        queueMicrotask(refresh);
-    }
-
-    /** Pan by dragging the background, zoom on the wheel, double-click to reset. */
-    private bindNavigation() {
-        let panning = false;
-        let startX = 0;
-        let startY = 0;
-        let originX = 0;
-        let originY = 0;
-
-        this.dom.addEventListener('pointerdown', (e: PointerEvent) => {
-            // a click that started on a node is that node's, not the canvas's
-            if ((e.target as HTMLElement).closest('.np-node')) return;
-            panning = true;
-            startX = e.clientX;
-            startY = e.clientY;
-            originX = this.tx;
-            originY = this.ty;
-            this.dom.setPointerCapture(e.pointerId);
-            this.dom.classList.add('np-panning');
+        events.on('graph.selected', (index: number | null) => {
+            this.selected = index;
+            this.rebuild();
         });
+        events.on('edit.changed', () => this.rebuild());
+        events.on('tool.activated', () => this.rebuild());
 
-        this.dom.addEventListener('pointermove', (e: PointerEvent) => {
-            if (!panning) return;
-            this.tx = originX + (e.clientX - startX);
-            this.ty = originY + (e.clientY - startY);
-            this.applyTransform();
-        });
-
-        const endPan = (e: PointerEvent) => {
-            if (!panning) return;
-            panning = false;
-            this.dom.releasePointerCapture(e.pointerId);
-            this.dom.classList.remove('np-panning');
-        };
-        this.dom.addEventListener('pointerup', endPan);
-        this.dom.addEventListener('pointercancel', endPan);
-
-        this.dom.addEventListener('wheel', (e: WheelEvent) => {
-            e.preventDefault();
-            const rect = this.dom.getBoundingClientRect();
-            const px = e.clientX - rect.left;
-            const py = e.clientY - rect.top;
-
-            const next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, this.scale * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
-            // keep the point under the cursor fixed while the scale changes
-            const k = next / this.scale;
-            this.tx = px - (px - this.tx) * k;
-            this.ty = py - (py - this.ty) * k;
-            this.scale = next;
-            this.applyTransform();
-        }, { passive: false });
-
-        this.dom.addEventListener('dblclick', (e: MouseEvent) => {
-            if ((e.target as HTMLElement).closest('.np-node')) return;
-            this.tx = PAD;
-            this.ty = PAD;
-            this.scale = 1;
-            this.applyTransform();
-        });
-    }
-
-    private applyTransform() {
-        this.stage.style.transform = `translate(${this.tx}px, ${this.ty}px) scale(${this.scale})`;
+        queueMicrotask(() => this.rebuild());
     }
 
     /**
-     * Lay the history out as one chain per object.
-     *
-     * Lanes are seeded from the scene rather than from history, so an object
-     * that was loaded from disk - which never produced an AddSplatOp - still
-     * gets an import node to hang its edits off.
+     * Hand the pane a panel to show for a node kind. The element is long-lived
+     * and simply moved in and out, the same contract the workspace uses, so a
+     * panel keeps its wiring and its state across selections.
      */
-    private build(): { nodes: NodeModel[]; edges: EdgeModel[] } {
-        const { ops, cursor } = (this.events.invoke('edit.history') ?? { ops: [], cursor: 0 }) as
-            { ops: EditOp[]; cursor: number };
-        const splats = (this.events.invoke('scene.allSplats') ?? []) as Splat[];
+    mount(kind: string, element: HTMLElement) {
+        this.mounts.set(kind, element);
+        element.remove();
+    }
 
-        // lane key -> the nodes in it, left to right. Insertion order of the
-        // map is the row order on screen.
-        const lanes = new Map<Splat | null, NodeModel[]>();
-        const laneOf = (key: Splat | null) => {
-            if (!lanes.has(key)) lanes.set(key, []);
-            return lanes.get(key);
-        };
-
-        // y is filled in below, once every lane exists and the rows are known
-        const add = (key: Splat | null, node: Omit<NodeModel, 'x' | 'y'>) => {
-            const lane = laneOf(key);
-            lane.push({ ...node, x: lane.length * (NODE_W + COL_GAP), y: 0 });
-        };
-
-        splats.forEach((splat) => {
-            add(splat, {
-                index: -1,
-                kind: 'import',
-                name: splat.name ?? 'object',
-                applied: true,
-                splat
-            });
-        });
-
-        ops.forEach((op, i) => {
-            const splat = opSplat(op);
-            // an op with no object of its own - or whose object is gone - still
-            // belongs somewhere; the scene lane is where those collect
-            const key = splat && splats.includes(splat) ? splat : null;
-            if (key === null && laneOf(null).length === 0) {
-                add(null, { index: -1, kind: 'scene', name: '', applied: true, splat: null });
-            }
-            // a selection shows what it selects by, not merely that it selected
-            const select = op instanceof SelectOp ? op : null;
-            add(key, {
-                index: i,
-                kind: select ?
-                    (select.mode === 'set' ? 'select' : `select ${select.mode}`) :
-                    opLabel(op),
-                name: select ? describeQuery(select.query) : '',
-                applied: i < cursor,
-                splat,
-                frozen: select ? !isParametric(select.query) : undefined
-            });
-        });
-
-        const nodes: NodeModel[] = [];
-        const edges: EdgeModel[] = [];
-
-        [...lanes.values()].forEach((lane, row) => {
-            lane.forEach((node, col) => {
-                node.y = row * (NODE_H + LANE_GAP);
-                if (col > 0) edges.push({ from: lane[col - 1], to: node });
-                nodes.push(node);
-            });
-        });
-
-        return { nodes, edges };
+    /** The op the graph currently has selected, if it is still there. */
+    private currentOp(): { op: EditOp, index: number } | null {
+        if (this.selected === null) return null;
+        const history = this.events.invoke('edit.history') as { ops: EditOp[] };
+        const op = history?.ops?.[this.selected];
+        return op ? { op, index: this.selected } : null;
     }
 
     private rebuild() {
-        const { nodes, edges } = this.build();
+        // take mounted panels out before clearing, or they are destroyed with
+        // the chrome around them
+        this.mounts.forEach(el => el.remove());
+        this.body.replaceChildren();
 
-        [...this.stage.querySelectorAll('.np-node')].forEach(n => n.remove());
-        this.edges.replaceChildren();
+        const current = this.currentOp();
+        if (!current) {
+            this.empty.hidden = false;
+            this.empty.textContent = 'no node selected';
+            return;
+        }
 
-        this.empty.hidden = nodes.length > 0;
+        const { op, index } = current;
 
-        const width = Math.max(...nodes.map(n => n.x + NODE_W), 0) + PAD;
-        const height = Math.max(...nodes.map(n => n.y + NODE_H), 0) + PAD;
-        this.edges.setAttribute('width', `${width}`);
-        this.edges.setAttribute('height', `${height}`);
-        this.edges.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        if (op.name === 'setSplatColor') {
+            const panel = this.mounts.get('colour');
+            if (panel) {
+                this.empty.hidden = true;
+                this.body.appendChild(panel);
+                return;
+            }
+        }
 
-        edges.forEach(({ from, to }) => {
-            const x1 = from.x + NODE_W;
-            const y1 = from.y + NODE_H / 2;
-            const x2 = to.x;
-            const y2 = to.y + NODE_H / 2;
-            const bend = Math.max(16, (x2 - x1) * 0.5);
+        if (op instanceof SelectOp) {
+            this.empty.hidden = true;
+            this.buildSelect(op, index);
+            return;
+        }
 
-            const path = document.createElementNS(SVG_NS, 'path');
-            path.setAttribute('d', `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`);
-            path.setAttribute('class', to.applied ? 'np-edge' : 'np-edge np-pending');
-            this.edges.appendChild(path);
-        });
-
-        nodes.forEach(node => this.stage.appendChild(this.buildNode(node)));
-
-        this.applyTransform();
+        this.empty.hidden = false;
+        this.empty.textContent = `${op.name} has no settings`;
     }
 
-    private buildNode(node: NodeModel): HTMLElement {
-        const el = document.createElement('div');
-        el.className = 'np-node';
-        if (!node.applied) el.classList.add('np-pending');
-        if (node.index === -1) el.classList.add('np-source');
-        // a stored hit set rather than a query that can be turned
-        if (node.frozen) el.classList.add('np-frozen');
-        el.style.left = `${node.x}px`;
-        el.style.top = `${node.y}px`;
-        el.style.width = `${NODE_W}px`;
-        el.style.height = `${NODE_H}px`;
+    private row(label: string): HTMLElement {
+        const row = document.createElement('div');
+        row.className = 'nd-row';
+        const text = document.createElement('div');
+        text.className = 'nd-row-label';
+        text.textContent = label;
+        row.appendChild(text);
+        return row;
+    }
 
-        const kind = document.createElement('div');
-        kind.className = 'np-node-kind';
-        kind.textContent = node.kind;
-        el.appendChild(kind);
+    /**
+     * A select node's settings: which tool authors it, how it combines with
+     * what is already selected, and what it currently resolves by.
+     *
+     * The tool buttons fire the same events the viewport toolbar does - there
+     * is one set of selection controls, reachable from either place.
+     */
+    private buildSelect(op: SelectOp, index: number) {
+        const active = this.events.invoke('tool.active');
 
-        if (node.name) {
-            const name = document.createElement('div');
-            name.className = 'np-node-name';
-            name.textContent = node.name;
-            name.title = node.name;
-            el.appendChild(name);
-        }
+        const toolRow = this.row('tool');
+        const tools = document.createElement('div');
+        tools.className = 'nd-choices';
+        SELECT_TOOLS.forEach(({ id, label, event }) => {
+            const b = document.createElement('button');
+            b.className = 'nd-choice';
+            b.type = 'button';
+            b.textContent = label;
+            if (active === id) b.classList.add('nd-choice-active');
+            b.addEventListener('click', () => this.events.fire(event));
+            tools.appendChild(b);
+        });
+        toolRow.appendChild(tools);
+        this.body.appendChild(toolRow);
 
-        // an input port only where an edge actually arrives - the first node in
-        // a lane is a source
-        if (node.x > 0) {
-            const inPort = document.createElement('div');
-            inPort.className = 'np-port np-port-in';
-            el.appendChild(inPort);
-        }
-        const outPort = document.createElement('div');
-        outPort.className = 'np-port np-port-out';
-        el.appendChild(outPort);
+        const modeRow = this.row('mode');
+        const modes = document.createElement('div');
+        modes.className = 'nd-choices';
+        SELECT_MODES.forEach(({ mode, label }) => {
+            const b = document.createElement('button');
+            b.className = 'nd-choice';
+            b.type = 'button';
+            b.textContent = label;
+            if (op.mode === mode) b.classList.add('nd-choice-active');
+            b.addEventListener('click', () => {
+                // the bit operation follows the mode, so both move together;
+                // re-running the query is what applies the change
+                op.setMode(mode as typeof op.mode);
+                this.events.invoke('edit.reselect', index, op.query);
+            });
+            modes.appendChild(b);
+        });
+        modeRow.appendChild(modes);
+        this.body.appendChild(modeRow);
 
-        if (node.index === -1) {
-            el.title = node.splat ? 'select this object' : 'edits not tied to one object';
-            if (node.splat) {
-                el.addEventListener('click', () => this.events.fire('selection', node.splat));
-            }
+        const byRow = this.row('by');
+        const by = document.createElement('div');
+        by.className = 'nd-value';
+        by.textContent = describeQuery(op.query);
+        byRow.appendChild(by);
+        this.body.appendChild(byRow);
+
+        if (isParametric(op.query)) {
+            this.buildQueryFields(op, index);
         } else {
-            el.title = node.applied ?
-                'undo back to before this step' :
-                'redo forward through this step';
-            // the cursor sits after the op, so this step is the last applied one
-            el.addEventListener('click', () => this.events.fire('edit.goto', node.index + 1));
+            const note = document.createElement('div');
+            note.className = 'nd-note';
+            note.textContent = 'a stored hit set - draw again with a tool above to replace it';
+            this.body.appendChild(note);
+        }
+    }
+
+    /** Numeric fields for the query kinds that have any. */
+    private buildQueryFields(op: SelectOp, index: number) {
+        const query = op.query;
+
+        const slider = (label: string, value: number, min: number, max: number, step: number, apply: (v: number) => SelectQuery) => {
+            const row = this.row(label);
+            const input = document.createElement('input');
+            input.type = 'range';
+            input.className = 'nd-slider';
+            input.min = `${min}`;
+            input.max = `${max}`;
+            input.step = `${step}`;
+            input.value = `${value}`;
+
+            const readout = document.createElement('div');
+            readout.className = 'nd-value';
+            readout.textContent = value.toFixed(3);
+
+            // live while dragging would re-run the whole tail of the history on
+            // every pixel, so the query is only replaced when the drag ends
+            input.addEventListener('input', () => {
+                readout.textContent = parseFloat(input.value).toFixed(3);
+            });
+            input.addEventListener('change', () => {
+                this.events.invoke('edit.reselect', index, apply(parseFloat(input.value)));
+            });
+
+            row.appendChild(input);
+            row.appendChild(readout);
+            this.body.appendChild(row);
+        };
+
+        if (query.kind === 'color') {
+            slider('threshold', query.threshold, 0, 1, 0.001, v => ({ ...query, threshold: v }));
+
+            const swatch = this.row('reference');
+            const chip = document.createElement('div');
+            chip.className = 'nd-swatch';
+            chip.style.backgroundColor = `rgb(${Math.round(query.ref.r * 255)}, ${Math.round(query.ref.g * 255)}, ${Math.round(query.ref.b * 255)})`;
+            swatch.appendChild(chip);
+            this.body.appendChild(swatch);
         }
 
-        return el;
+        if (query.kind === 'point') {
+            slider('radius', query.size, 1, 64, 1, v => ({ ...query, size: v }));
+        }
+
+        if (query.kind === 'range') {
+            slider('from', query.rangeStart, 0, query.numBins, 1, v => ({ ...query, rangeStart: Math.round(v) }));
+            slider('to', query.rangeEnd, 0, query.numBins, 1, v => ({ ...query, rangeEnd: Math.round(v) }));
+        }
+
+        if (query.kind === 'sphere' || query.kind === 'box') {
+            const note = document.createElement('div');
+            note.className = 'nd-note';
+            note.textContent = 'move the gizmo in the viewport to change the volume';
+            this.body.appendChild(note);
+        }
     }
 }
 

@@ -19,23 +19,31 @@
 export type PaneKind =
     | 'viewport'
     | 'outliner'
-    | 'nodes'
+    | 'graph'
+    | 'node'
     | 'transform'
     | 'timeline'
     | 'data'
-    | 'settings'
-    | 'color';
+    | 'settings';
 
 export const PANE_KINDS: { kind: PaneKind; label: string }[] = [
     { kind: 'viewport', label: 'viewport' },
     { kind: 'outliner', label: 'outliner' },
-    { kind: 'nodes', label: 'nodes' },
+    { kind: 'graph', label: 'graph' },
+    { kind: 'node', label: 'node' },
     { kind: 'transform', label: 'transform' },
     { kind: 'timeline', label: 'timeline' },
     { kind: 'data', label: 'splat data' },
-    { kind: 'settings', label: 'settings' },
-    { kind: 'color', label: 'color' }
+    { kind: 'settings', label: 'settings' }
 ];
+
+// Kinds that have been renamed or absorbed. A stored layout naming an old one
+// is migrated rather than thrown away, which would cost the user their layout.
+const RENAMED_KINDS: Record<string, PaneKind> = {
+    nodes: 'graph',
+    // the colour panel is a node's parameters now, shown in the node pane
+    color: 'node'
+};
 
 // there is only one canvas, so only one pane can host it
 export const SINGLETON_KINDS: PaneKind[] = ['viewport'];
@@ -93,7 +101,7 @@ export const pane = (kind: PaneKind): PaneNode => {
 /**
  * Three columns:
  *
- *   outliner    | viewport | color
+ *   outliner    | viewport | node
  *   splat data  |          |
  *   transform   | timeline | settings
  */
@@ -128,7 +136,7 @@ export const defaultLayout = (): LayoutNode => {
         id: paneId(),
         dir: 'col',
         ratio: 0.5,
-        a: pane('color'),
+        a: pane('node'),
         b: pane('settings')
     };
 
@@ -446,16 +454,37 @@ const migrateFloat = (n: unknown): unknown => {
     return { ...f, root: pane(f.kind as PaneKind) };
 };
 
+/** Rewrite panes naming a kind that has since been renamed or absorbed. */
+const migrateKinds = (n: unknown): unknown => {
+    if (typeof n !== 'object' || n === null) return n;
+    const node = n as Record<string, unknown>;
+    if (node.type === 'pane') {
+        const renamed = RENAMED_KINDS[node.kind as string];
+        return renamed ? { ...node, kind: renamed } : node;
+    }
+    if (node.type === 'split') {
+        return { ...node, a: migrateKinds(node.a), b: migrateKinds(node.b) };
+    }
+    return node;
+};
+
 export const loadLayout = (): WorkspaceState | null => {
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
         if (!raw) return null;
         const parsed = JSON.parse(raw) as WorkspaceState;
-        if (!parsed || !isValidNode(parsed.root)) return null;
+        // migrate before validating: an unmigrated pane names a kind that no
+        // longer exists, which validation would reject as corrupt
+        const root = migrateKinds(parsed?.root);
+        if (!isValidNode(root)) return null;
 
         const floats = Array.isArray(parsed.floats) ?
-            parsed.floats.map(migrateFloat).filter(isValidFloat) : [];
-        const state = { root: parsed.root, floats };
+            parsed.floats
+            .map(migrateFloat)
+            .map(f => (typeof f === 'object' && f !== null ?
+                { ...(f as object), root: migrateKinds((f as any).root) } : f))
+            .filter(isValidFloat) : [];
+        const state = { root, floats };
 
         // a stored layout that lost its viewport entirely would strand the
         // canvas, so fall back to the default rather than load it
