@@ -209,12 +209,17 @@ class ColorPanel extends Container {
         });
         i18n.bindText(transparencyLabel, 'panel.colors.transparency');
 
+        // The slider is in log space - the panel stores exp(value) - so the old
+        // +6 end asked for a 400x alpha multiplier, and everything much above
+        // zero clamped on arrival. Half the travel did nothing. The top now
+        // stops at a little over 4x, which is as far as boosting alpha stays
+        // meaningful, and the bottom still reaches effectively transparent.
         const transparencySlider = new MyFancySliderInput({
             class: 'color-panel-row-slider',
             min: -6,
-            max: 6,
+            max: 1.5,
             step: 0.01,
-            value: 1
+            value: 0
         });
 
         transparencyRow.append(transparencyLabel);

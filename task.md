@@ -190,10 +190,9 @@ The bridge to voxels and the other volumetric formats named as targets.
   an R/B tilt with no white-point model and no magenta/green axis, and it
   shifts luminance as a side effect.
 - **Saturation uses Rec.601 luma coefficients** (0.299/0.587/0.114). Rec.709
-  is the defensible choice for anything modern.
-- **Transparency wastes half its slider.** The panel maps it through
-  `exp(value)` over -6…6, so everything above ~0 is a multiplier large enough
-  to clamp immediately.
+  is the defensible choice for anything modern. Left alone deliberately:
+  changing them changes how every existing grade looks, so it is a decision
+  rather than a fix.
 - **Node reordering is impossible.** Node positions are free, but the chain
   order is history order. Reordering means reordering history, which is a
   real feature and not a drawing change.
