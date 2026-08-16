@@ -34,6 +34,8 @@ class EditHistory {
         events.on('edit.removeForShape', (shape: unknown) => this.removeForShape(shape));
         events.on('edit.goto', (cursor: number) => this.goto(cursor));
         events.function('edit.reselect', (index: number, query: SelectQuery) => this.reselect(index, query));
+        events.function('edit.removeAt', (indices: number[]) => this.removeAt(indices));
+        events.function('edit.setBypassed', (index: number, bypassed: boolean) => this.setBypassed(index, bypassed));
 
         // read access for views that draw the history rather than drive it -
         // the node panel builds its graph from this
@@ -84,7 +86,10 @@ class EditHistory {
         // only advance the cursor after a successful undo so a thrown editOp leaves
         // history in a consistent state for subsequent undo/redo.
         const editOp = this.history[this.cursor - 1];
-        await editOp.undo();
+        // a bypassed op was never applied, so there is nothing to reverse
+        if (!editOp.bypassed) {
+            await editOp.undo();
+        }
         this.cursor--;
         this.events.fire('edit.apply', editOp);
         this.fireEvents();
@@ -94,12 +99,73 @@ class EditHistory {
         // only advance the cursor after a successful redo so a thrown editOp leaves
         // history in a consistent state for subsequent undo/redo.
         const editOp = this.history[this.cursor];
-        if (!suppressOp) {
+        if (!suppressOp && !editOp.bypassed) {
             await editOp.do();
         }
         this.cursor++;
         this.events.fire('edit.apply', editOp);
         this.fireEvents();
+    }
+
+    /**
+     * Wind back to `index`, run `mutate`, drop what the ops after it resolved,
+     * then wind forward again.
+     *
+     * Every structural change to applied history has this shape: you cannot
+     * edit an op that is currently applied without first reversing it, and
+     * everything standing on it has to be asked again afterwards.
+     */
+    private async replayAround(index: number, mutate: () => void, cursorAfter: (resume: number) => number) {
+        const resume = this.cursor;
+
+        while (this.cursor > index) {
+            await this._undo();
+        }
+
+        mutate();
+
+        for (let i = index; i < this.history.length; ++i) {
+            const later = this.history[i];
+            if (later instanceof StateOp) later.invalidate();
+        }
+
+        const target = Math.max(0, Math.min(this.history.length, cursorAfter(resume)));
+        while (this.cursor < target) {
+            await this._redo();
+        }
+        this.fireEvents();
+    }
+
+    /** Drop ops from the history entirely, rebuilding what stood on them. */
+    removeAt(indices: number[]) {
+        const sorted = [...new Set(indices)].filter(i => i >= 0 && i < this.history.length).sort((a, b) => a - b);
+        if (!sorted.length) return Promise.resolve();
+
+        return this.queue(() => this.replayAround(
+            sorted[0],
+            () => {
+                // back to front, so the earlier indices stay valid as we splice
+                [...sorted].reverse().forEach((i) => {
+                    this.history.splice(i, 1)[0].destroy?.();
+                });
+            },
+            resume => resume - sorted.filter(i => i < resume).length
+        ));
+    }
+
+    /** Turn an op off or on in place, rebuilding what stood on it. */
+    setBypassed(index: number, bypassed: boolean) {
+        const op = this.history[index];
+        if (!op || !!op.bypassed === bypassed) return Promise.resolve();
+
+        return this.queue(() => this.replayAround(
+            index,
+            () => {
+                op.bypassed = bypassed;
+            },
+            // the op is still there, so the cursor lands exactly where it was
+            resume => resume
+        ));
     }
 
     /**
@@ -135,24 +201,16 @@ class EditHistory {
         const op = this.history[index];
         if (!(op instanceof SelectOp)) return Promise.resolve();
 
-        return this.queue(async () => {
-            // read inside the task, not outside it: an add or undo issued just
-            // before this one may still be queued, and winding back to a cursor
-            // that had not happened yet leaves the tail of the history undone
-            const resume = this.cursor;
-
-            while (this.cursor > index) {
-                await this._undo();
-            }
-            op.setQuery(query);
-            for (let i = index; i < this.history.length; ++i) {
-                const later = this.history[i];
-                if (later instanceof StateOp) later.invalidate();
-            }
-            while (this.cursor < Math.max(resume, index + 1)) {
-                await this._redo();
-            }
-        });
+        // the cursor is read inside the queued task, not here: an add or undo
+        // issued just before this one may still be queued, and winding back to
+        // a cursor that had not happened yet leaves the tail of history undone
+        return this.queue(() => this.replayAround(
+            index,
+            () => op.setQuery(query),
+            // at minimum the edited op itself is applied, so its result is
+            // visible even if the cursor sat before it
+            resume => Math.max(resume, index + 1)
+        ));
     }
 
     fireEvents() {

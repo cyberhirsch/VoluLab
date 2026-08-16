@@ -16,6 +16,16 @@ interface EditOp {
     do(): void | Promise<void>;
     undo(): void | Promise<void>;
     destroy?(): void;
+    /**
+     * Skip this op when the history is replayed, without removing it.
+     *
+     * The history walks past a bypassed op rather than applying it, so the
+     * cursor still counts it and everything downstream re-resolves as though
+     * the edit had not been made. Toggling it winds the history back first -
+     * see EditHistory.setBypassed - because an op that is already applied has
+     * to be reversed while it can still reverse itself.
+     */
+    bypassed?: boolean;
 }
 
 const enum BitOp {

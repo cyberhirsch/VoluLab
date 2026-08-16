@@ -156,3 +156,65 @@
     font-size: $font-size-sm;
     pointer-events: none;
 }
+
+// ─── editing ────────────────────────────────────────────────────────────────
+
+#graph-panel {
+    outline: none;
+}
+
+.gn-node {
+    // a node is dragged, so it should not look like text
+    &:active {
+        cursor: grabbing;
+    }
+
+    // The selected node inverts its border rather than its fill: the fill
+    // carries applied/pending, and one node cannot say two things with the
+    // same channel.
+    &.gn-selected {
+        border-color: $ink-7;
+        box-shadow: 0 0 0 1px $ink-7;
+        color: $ink-7;
+    }
+
+    // Bypassed: stepped over when the history replays. Struck through, because
+    // it is still in the chain - unlike a removed node, which is simply gone.
+    &.gn-bypassed {
+        border-style: dotted;
+        color: $ink-4;
+
+        .gn-node-kind {
+            text-decoration: line-through;
+        }
+
+        .gn-node-name {
+            color: $ink-4;
+        }
+    }
+}
+
+.gn-edge-bypassed {
+    stroke: $ink-2;
+    stroke-dasharray: 2 4;
+}
+
+// how many committed changes a folded node stands for
+.gn-node-count {
+    position: absolute;
+    top: 2px;
+    right: 4px;
+    color: $ink-4;
+    font-size: $font-size-xs;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+}
+
+// marquee select. Drawn on the stage, so it is in graph coordinates and keeps
+// its place under the cursor at any zoom.
+.gn-marquee {
+    position: absolute;
+    border: $border-width dashed $ink-5;
+    background-color: rgba(242, 242, 242, 0.06);
+    pointer-events: none;
+}
