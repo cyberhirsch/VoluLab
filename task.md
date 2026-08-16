@@ -1,8 +1,9 @@
 # Node backlog
 
-**Status.** Tier A is done. Making colour selection-scoped turned out to be
-the largest item in the document rather than the smallest - the note below
-says why, and what the shape of it is. Tiers B and C are untouched.
+**Status.** Tier A is done. Tier B is done bar the two that need a second
+input or a sequence model. Tier C is done bar voxelise. What remains is
+listed at the bottom, and every one of those is open because of a real
+architectural question rather than because it was skipped.
 
 Candidate nodes for the graph, ordered by what they cost rather than by how
 they read. A lot of the work is already done: several of these are a *face*
@@ -97,21 +98,21 @@ rebuilding the map. That is the gizmo's job rather than a text field's.
 
 ## Tier B — modest new work
 
-### SH bands node
+### SH bands node — done
 
-The biggest single lever on file size for volumetric video.
+`SetShBandsOp` caps `splat.shBandLimit`, which meets the view setting and the
+file's own band count in `rebuildMaterial`. A limit rather than a truncation,
+so it is reversible and the viewport previews it.
 
-- Exists: `maxSHBands` in `src/splat-serialize.ts` (export-time only), and
-  `view.bands` which already previews band count on screen.
-- Needed: an op that fixes the band count for a branch rather than for the
-  export as a whole, so it is visible in the chain and previewable.
+### Crop node — done
 
-### Crop node
+`CropOp`: a box or sphere, keep inside or outside, position and size as
+numbers. Resolves through the same `resolveHits` the shape selections use.
+A fresh one sits 5% wider than the object, since a box exactly on the bound
+puts every surface gaussian on the boundary.
 
-- Composable today as box-select → invert → delete, which is three nodes for
-  one idea.
-- Needed: one node with a volume gizmo and an inside/outside switch.
-  `BoxShape`/`SphereShape` and `ShapeTransformOp` already exist.
+Only ever adds to what is deleted — widening it does not resurrect what an
+earlier node removed. Bypassing that node does.
 
 ### Merge node
 
@@ -141,25 +142,25 @@ something across a sequence rather than on one frame.
 
 ## Tier C — real new machinery, and the ones people want daily
 
-### Cleanup / floater removal
+### Cleanup / floater removal — done
 
-The most-wanted operation on captured splats. Right now it is a manual lasso
-job.
+`CleanupOp`. Mean distance to the k nearest neighbours, thresholded at so
+many deviations above average. Neighbours come from a uniform grid sized for
+a handful of points per cell, searched outward a ring at a time. Parameters
+are neighbour count and spread.
 
-- Statistical outlier removal: drop gaussians whose mean distance to their k
-  nearest neighbours exceeds some multiple of the standard deviation.
-- Needed: a spatial structure — a GPU grid, or a kd-tree built in a worker.
-  Nothing like it exists yet.
-- Parameters: neighbour count, standard-deviation multiplier.
+Runs on the CPU inside the op's resolver. Fine at the counts tested; a
+million-point capture will want this moved to a worker, which is a change of
+where it runs rather than of what it does.
 
-### Decimate
+### Decimate — done
 
-The other half of file size.
+`DecimateOp`. Ranks by opacity times footprint and drops the least important
+until a fraction remains. Ranking rather than thresholding, because "keep
+40%" transfers between captures in a way "alpha above 0.03" does not.
 
-- Reduce count by importance: opacity × volume × screen contribution.
-- Needed: an importance pass and a stable ordering so the result does not
-  flicker between frames of a sequence — which matters more here than it
-  would for a single still.
+Open: the ordering is not yet stable across the frames of a sequence, so a
+decimated sequence may shimmer. That matters only once the frame node exists.
 
 ### Voxelise
 
@@ -172,12 +173,21 @@ The bridge to voxels and the other volumetric formats named as targets.
 
 ---
 
-## Recommended order from here
+## What is left, and why
 
-1. **Colour selection-scoped**, in the two steps above: matrix form first as
-   a safe no-op refactor, then the palette.
-2. **Cleanup** — the operation that would make this reached for daily.
-3. **SH bands node** — the file-size lever, and cheap next to Tier C.
+Four things, each blocked on a decision rather than on effort:
+
+1. **Colour selection-scoped** — needs the grade palette described above, and
+   the per-gaussian lookup added to four separate paths. The largest item
+   here. Start with the matrix refactor, which is safe on its own.
+2. **Merge** — needs a second input, which means the chain stops being linear.
+   That is the moment this becomes a real DAG, and it should be chosen rather
+   than backed into.
+3. **Frame / time** — needs a decision about what an edit means on a frame
+   that has not been loaded yet.
+4. **Voxelise** — needs a decision about what the output *is*: a splat object
+   that happens to be grid-aligned, or a different element type the rest of
+   the app has to understand.
 
 ---
 
