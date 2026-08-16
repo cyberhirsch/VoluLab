@@ -70,6 +70,10 @@ const OP_LABELS: Record<string, string> = {
     multiOp: 'combined edit',
     addSplat: 'add object',
     splatRename: 'rename',
+    crop: 'crop',
+    cleanup: 'cleanup',
+    decimate: 'decimate',
+    setShBands: 'sh bands',
     output: 'output'
 };
 
@@ -780,6 +784,22 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addColourNode', splat)
                     },
                     {
+                        label: 'crop',
+                        action: () => this.events.fire('graph.addCropNode', splat)
+                    },
+                    {
+                        label: 'cleanup',
+                        action: () => this.events.fire('graph.addCleanupNode', splat)
+                    },
+                    {
+                        label: 'decimate',
+                        action: () => this.events.fire('graph.addDecimateNode', splat)
+                    },
+                    {
+                        label: 'sh bands',
+                        action: () => this.events.fire('graph.addShBandsNode', splat)
+                    },
+                    {
                         label: 'output',
                         action: () => this.events.fire('graph.addOutputNode', splat)
                     }
@@ -927,6 +947,30 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addColourNode')
+            },
+            {
+                label: 'add crop node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addCropNode')
+            },
+            {
+                label: 'add cleanup node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addCleanupNode')
+            },
+            {
+                label: 'add decimate node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addDecimateNode')
+            },
+            {
+                label: 'add sh bands node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addShBandsNode')
             },
             {
                 label: 'add output node',

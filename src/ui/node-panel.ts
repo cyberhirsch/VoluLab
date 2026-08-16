@@ -1,7 +1,7 @@
 import { Container } from '@playcanvas/pcui';
-import { Quat, Vec3 } from 'playcanvas';
+import { Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { EditOp, EntityTransformOp, OutputFileType, OutputOp, SelectMode, SelectOp, SplatRenameOp, SplatsTransformOp, StateOp, principalOp } from '../edit-ops';
+import { CleanupOp, CropOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -146,18 +146,43 @@ class NodePanel extends Container {
             return;
         }
 
-        // The state ops - delete, hide and their inverses - have no parameters
-        // to turn. What they do have is a result, and how much of the object it
-        // touched is the thing worth knowing about one.
-        if (op instanceof StateOp) {
+        if (op instanceof CropOp) {
             this.empty.hidden = true;
-            this.buildStateOp(op);
+            this.buildCrop(op, index);
+            return;
+        }
+
+        if (op instanceof CleanupOp) {
+            this.empty.hidden = true;
+            this.buildCleanup(op, index);
+            return;
+        }
+
+        if (op instanceof DecimateOp) {
+            this.empty.hidden = true;
+            this.buildDecimate(op, index);
+            return;
+        }
+
+        if (op instanceof SetShBandsOp) {
+            this.empty.hidden = true;
+            this.buildShBands(op, index);
             return;
         }
 
         if (op instanceof SplatsTransformOp) {
             this.empty.hidden = true;
             this.buildSplatsTransform(op);
+            return;
+        }
+
+        // Last of the state ops, because crop, cleanup and decimate are all
+        // StateOps too and each has real parameters - this is the fallback for
+        // the ones that have none: delete, hide, and their inverses. What they
+        // do have is a result, and how much they touched is worth knowing.
+        if (op instanceof StateOp) {
+            this.empty.hidden = true;
+            this.buildStateOp(op);
             return;
         }
 
@@ -306,6 +331,152 @@ class NodePanel extends Container {
         this.body.appendChild(note);
     }
 
+    /**
+     * A slider whose change replays the node it belongs to.
+     *
+     * Only on release, never while dragging: each step re-resolves the op and
+     * everything after it, which is far too much work to do per pixel.
+     */
+    private replaySlider(
+        label: string,
+        value: number,
+        min: number,
+        max: number,
+        step: number,
+        index: number,
+        apply: (v: number) => void,
+        format: (v: number) => string = v => `${v}`
+    ) {
+        const row = this.row(label);
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.className = 'nd-slider';
+        input.min = `${min}`;
+        input.max = `${max}`;
+        input.step = `${step}`;
+        input.value = `${value}`;
+
+        const readout = document.createElement('div');
+        readout.className = 'nd-value';
+        readout.textContent = format(value);
+
+        input.addEventListener('input', () => {
+            readout.textContent = format(parseFloat(input.value));
+        });
+        // the change goes with the replay, not before it - see EditHistory.refresh
+        input.addEventListener('change', () => {
+            const v = parseFloat(input.value);
+            this.events.invoke('edit.refresh', index, () => apply(v));
+        });
+
+        row.appendChild(input);
+        row.appendChild(readout);
+        this.body.appendChild(row);
+    }
+
+    /** A two-state button whose change replays the node. */
+    private replayToggle(label: string, on: boolean, text: string, index: number, apply: () => void) {
+        const row = this.row(label);
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'nd-choice';
+        b.textContent = text;
+        if (on) b.classList.add('nd-choice-active');
+        b.addEventListener('click', () => {
+            this.events.invoke('edit.refresh', index, apply);
+        });
+        row.appendChild(b);
+        this.body.appendChild(row);
+    }
+
+    private buildCrop(op: CropOp, index: number) {
+        const t = new Vec3();
+        const s = new Vec3();
+        op.transform.getTranslation(t);
+        op.transform.getScale(s);
+
+        const rebuild = () => {
+            const m = new Mat4();
+            m.setTRS(t, Quat.IDENTITY, s);
+            op.setVolume(op.shape, m, op.keepInside);
+        };
+
+        const triple = (label: string, v: Vec3) => {
+            const row = this.row(label);
+            const fields = (['x', 'y', 'z'] as const).map((axis) => {
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.className = 'nd-num';
+                input.step = '0.05';
+                input.value = `${+v[axis].toFixed(4)}`;
+                input.addEventListener('keydown', e => e.stopPropagation());
+                input.addEventListener('change', () => {
+                    this.events.invoke('edit.refresh', index, () => {
+                        (['x', 'y', 'z'] as const).forEach((a, i) => {
+                            v[a] = parseFloat(fields[i].value) || 0;
+                        });
+                        rebuild();
+                    });
+                });
+                row.appendChild(input);
+                return input;
+            });
+            this.body.appendChild(row);
+        };
+
+        this.replayToggle('shape', op.shape === 'sphere', op.shape, index, () => {
+            op.setVolume(op.shape === 'box' ? 'sphere' : 'box', op.transform, op.keepInside);
+        });
+        this.replayToggle('keep', op.keepInside, op.keepInside ? 'inside' : 'outside', index, () => {
+            op.setVolume(op.shape, op.transform, !op.keepInside);
+        });
+
+        triple('centre', t);
+        triple('size', s);
+
+        this.stat('removed', op.affected < 0 ? 'not applied' : op.affected.toLocaleString());
+    }
+
+    private buildCleanup(op: CleanupOp, index: number) {
+        this.replaySlider('neighbours', op.neighbours, 4, 64, 1, index, (v) => {
+            op.setParams(Math.round(v), op.deviations);
+        });
+        this.replaySlider('spread', op.deviations, 0.25, 4, 0.05, index, (v) => {
+            op.setParams(op.neighbours, v);
+        }, v => v.toFixed(2));
+
+        this.stat('removed', op.affected < 0 ? 'not applied' : op.affected.toLocaleString());
+
+        const note = document.createElement('div');
+        note.className = 'nd-note';
+        note.textContent = 'removes gaussians sitting further from their neighbours than most. lower spread removes more';
+        this.body.appendChild(note);
+    }
+
+    private buildDecimate(op: DecimateOp, index: number) {
+        this.replaySlider('keep', op.fraction, 0.01, 1, 0.01, index, (v) => {
+            op.setFraction(v);
+        }, v => `${Math.round(v * 100)}%`);
+
+        this.stat('removed', op.affected < 0 ? 'not applied' : op.affected.toLocaleString());
+
+        const note = document.createElement('div');
+        note.className = 'nd-note';
+        note.textContent = 'drops the least important first - faint and small before bright and large';
+        this.body.appendChild(note);
+    }
+
+    private buildShBands(op: SetShBandsOp, index: number) {
+        this.replaySlider('bands', op.newBands, 0, 3, 1, index, (v) => {
+            op.newBands = Math.round(v);
+        });
+
+        const note = document.createElement('div');
+        note.className = 'nd-note';
+        note.textContent = 'fewer bands means a smaller file and flatter view-dependent shading. 0 keeps colour only';
+        this.body.appendChild(note);
+    }
+
     /** What a state op did, and a note on what it means to bypass it. */
     private buildStateOp(op: StateOp) {
         const NOTES: Record<string, string> = {
@@ -350,8 +521,7 @@ class NodePanel extends Container {
                 input.addEventListener('keydown', e => e.stopPropagation());
                 input.addEventListener('change', () => {
                     const next = fields.map(f => parseFloat(f.value) || 0);
-                    apply(next);
-                    this.events.invoke('edit.refresh', index);
+                    this.events.invoke('edit.refresh', index, () => apply(next));
                 });
                 row.appendChild(input);
                 return input;

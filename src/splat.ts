@@ -68,6 +68,7 @@ class Splat extends Element {
     _tintClr = new Color(1, 1, 1);
     _temperature = 0;
     _saturation = 1;
+    _shBandLimit = 3;
     _exposure = 0;
     _brightness = 0;
     _blackPoint = 0;
@@ -116,7 +117,10 @@ class Splat extends Element {
             glsl.set('gsplatPS', fragmentShader);
             glsl.set('gsplatCenterVS', gsplatCenter);
 
-            material.setDefine('SH_BANDS', `${Math.min(bands, (instance.resource as GSplatResource).shBands)}`);
+            // three limits meet here: what the view asks for, what this object
+            // has been capped to by an sh-bands node, and what the data holds
+            const available = (instance.resource as GSplatResource).shBands;
+            material.setDefine('SH_BANDS', `${Math.min(bands, this._shBandLimit, available)}`);
             material.setParameter('splatState', this.stateTexture);
             material.setParameter('splatTransform', this.transformTexture);
             material.update();
@@ -588,6 +592,23 @@ class Splat extends Element {
         return this._saturation;
     }
 
+    /**
+     * How many spherical-harmonic bands this object shows and exports, capped
+     * further by the view setting and by what the file actually contains.
+     */
+    set shBandLimit(value: number) {
+        if (value !== this._shBandLimit) {
+            this._shBandLimit = value;
+            this.rebuildMaterial(this.scene.events.invoke('view.bands'));
+            this.scene.events.fire('splat.shBandLimit', this);
+            this.scene.forceRender = true;
+        }
+    }
+
+    get shBandLimit() {
+        return this._shBandLimit;
+    }
+
     /** stops, not a factor: +1 doubles the light, -1 halves it */
     set exposure(value: number) {
         if (value !== this._exposure) {
@@ -681,6 +702,7 @@ class Splat extends Element {
             temperature: this.temperature,
             saturation: this.saturation,
             exposure: this.exposure,
+            shBandLimit: this.shBandLimit,
             brightness: this.brightness,
             blackPoint: this.blackPoint,
             whitePoint: this.whitePoint,
@@ -700,8 +722,9 @@ class Splat extends Element {
         this.tintClr = new Color(tintClr[0], tintClr[1], tintClr[2], tintClr[3]);
         this.temperature = temperature ?? 0;
         this.saturation = saturation ?? 1;
-        // older documents predate exposure
+        // older documents predate exposure and the band limit
         this.exposure = doc.exposure ?? 0;
+        this.shBandLimit = doc.shBandLimit ?? 3;
         this.brightness = brightness;
         this.blackPoint = blackPoint;
         this.whitePoint = whitePoint;

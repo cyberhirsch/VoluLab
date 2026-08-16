@@ -2,7 +2,7 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Quat, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { EditHistory } from './edit-history';
-import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, OutputOp, ResetOp, MultiOp, AddSplatOp, SetLocalFrameOp, SetSplatColorAdjustmentOp } from './edit-ops';
+import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -524,6 +524,33 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         events.fire('selection', splat);
         return [splat];
     };
+
+    // A crop starts around what it is cropping, so the volume is something to
+    // shrink rather than something to hunt for.
+    events.on('graph.addCropNode', (target?: Splat) => {
+        addTarget(target).forEach((splat) => {
+            const bound = splat.worldBound;
+            // a little wider than the object: sitting exactly on the bound puts
+            // every surface gaussian on the boundary, and adding a crop node
+            // should not delete anything until it is actually tightened
+            const size = Math.max(bound.halfExtents.x, bound.halfExtents.y, bound.halfExtents.z) * 2.1;
+            const m = new Mat4();
+            m.setTRS(bound.center, Quat.IDENTITY, new Vec3(size, size, size));
+            appendAndOpen(new CropOp(splat, 'box', m, true));
+        });
+    });
+
+    events.on('graph.addCleanupNode', (target?: Splat) => {
+        addTarget(target).forEach(splat => appendAndOpen(new CleanupOp(splat)));
+    });
+
+    events.on('graph.addDecimateNode', (target?: Splat) => {
+        addTarget(target).forEach(splat => appendAndOpen(new DecimateOp(splat, 0.5)));
+    });
+
+    events.on('graph.addShBandsNode', (target?: Splat) => {
+        addTarget(target).forEach(splat => appendAndOpen(new SetShBandsOp(splat, splat.shBandLimit)));
+    });
 
     events.on('graph.addOutputNode', (target?: Splat) => {
         addTarget(target).forEach((splat) => {

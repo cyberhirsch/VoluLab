@@ -34,7 +34,7 @@ class EditHistory {
         events.on('edit.goto', (cursor: number) => this.goto(cursor));
         events.function('edit.reselect', (index: number, steps: SelectStep[]) => this.reselect(index, steps));
         events.function('edit.removeAt', (indices: number[]) => this.removeAt(indices));
-        events.function('edit.refresh', (index: number) => this.refresh(index));
+        events.function('edit.refresh', (index: number, mutate?: () => void) => this.refresh(index, mutate));
         events.function('edit.setBypassed', (index: number, bypassed: boolean) => this.setBypassed(index, bypassed));
 
         // read access for views that draw the history rather than drive it -
@@ -154,14 +154,19 @@ class EditHistory {
     }
 
     /**
-     * Re-apply an op whose parameters were changed in place, rebuilding what
-     * stood on it. Nothing to mutate here - the caller already has.
+     * Change an op's parameters and rebuild what stood on it.
+     *
+     * The change is handed in rather than made beforehand, and that is not a
+     * convenience: the op has to be reversed while it still remembers what it
+     * did. Editing it first - invalidating its resolved set, or moving the
+     * target it undoes towards - leaves the undo with nothing to undo, and the
+     * old effect stays applied underneath the new one.
      */
-    refresh(index: number) {
+    refresh(index: number, mutate: () => void = () => {}) {
         if (!this.history[index]) return Promise.resolve();
         return this.queue(() => this.replayAround(
             index,
-            () => {},
+            mutate,
             resume => Math.max(resume, index + 1)
         ));
     }

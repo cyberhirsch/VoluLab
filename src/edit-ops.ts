@@ -669,6 +669,313 @@ class AddSplatOp {
     }
 }
 
+/**
+ * Delete everything outside a volume - or inside it.
+ *
+ * Composable from a shape select, an invert and a delete, which is three nodes
+ * for one idea. As a single node it is also re-runnable: the volume is a
+ * parameter, so moving or resizing it re-evaluates rather than leaving the
+ * first crop baked in.
+ *
+ * A crop only ever adds to what is deleted. Splats an earlier node removed stay
+ * removed, so widening a crop does not resurrect them - that is the earlier
+ * node's business, and bypassing it is how you take it back.
+ */
+class CropOp extends StateOp {
+    name = 'crop';
+
+    shape: 'box' | 'sphere';
+    transform: Mat4;
+    keepInside: boolean;
+
+    constructor(splat: Splat, shape: 'box' | 'sphere', transform: Mat4, keepInside = true) {
+        super(splat, null, State.deleted, BitOp.SET, State.deleted);
+        this.shape = shape;
+        this.transform = transform;
+        this.keepInside = keepInside;
+
+        this.resolver = async (s: Splat) => {
+            const isHit = await resolveHits(s, { kind: this.shape, transform: this.transform });
+            const state = s.splatData.getProp('state') as Uint8Array;
+            return IndexRanges.fromPredicate(s.splatData.numSplats, (i) => {
+                const inside = isHit(i);
+                const keep = this.keepInside ? inside : !inside;
+                return !keep && (state[i] & State.deleted) === 0;
+            });
+        };
+    }
+
+    /** Change the volume and forget what the old one caught. */
+    setVolume(shape: 'box' | 'sphere', transform: Mat4, keepInside: boolean) {
+        this.shape = shape;
+        this.transform = transform;
+        this.keepInside = keepInside;
+        this.invalidate();
+    }
+
+    destroy() {
+        super.destroy();
+        this.transform = null;
+    }
+}
+
+/**
+ * Cap how many spherical-harmonic bands an object carries.
+ *
+ * The single biggest lever on file size, and previewable: dropping bands is
+ * visible in the viewport straight away rather than only at export. Stored as
+ * a limit rather than by truncating the data, so it stays reversible and the
+ * bands come back if the node is bypassed.
+ */
+class SetShBandsOp {
+    name = 'setShBands';
+    splat: Splat;
+    oldBands: number;
+    newBands: number;
+
+    constructor(splat: Splat, bands: number) {
+        this.splat = splat;
+        this.oldBands = splat.shBandLimit;
+        this.newBands = bands;
+    }
+
+    do() {
+        this.splat.shBandLimit = this.newBands;
+    }
+
+    undo() {
+        this.splat.shBandLimit = this.oldBands;
+    }
+
+    destroy() {
+        this.splat = null;
+    }
+}
+
+/**
+ * Drop the least important gaussians until only a fraction remain.
+ *
+ * Importance is opacity times footprint: a large transparent blob and a tiny
+ * opaque speck both contribute little, and the product says so. Ranking rather
+ * than thresholding, because a threshold that suits one capture suits no other
+ * - "keep 40%" transfers between scenes in a way "alpha above 0.03" does not.
+ *
+ * Like a crop, this only ever adds to what is deleted.
+ */
+class DecimateOp extends StateOp {
+    name = 'decimate';
+
+    /** how much to keep, 0..1 */
+    fraction: number;
+
+    constructor(splat: Splat, fraction: number) {
+        super(splat, null, State.deleted, BitOp.SET, State.deleted);
+        this.fraction = fraction;
+
+        this.resolver = (s: Splat) => {
+            const data = s.splatData;
+            const n = data.numSplats;
+            const state = data.getProp('state') as Uint8Array;
+            const opacity = data.getProp('opacity') as Float32Array;
+            const sx = data.getProp('scale_0') as Float32Array;
+            const sy = data.getProp('scale_1') as Float32Array;
+            const sz = data.getProp('scale_2') as Float32Array;
+
+            // candidates are what is still here; anything already deleted is
+            // not ours to rank or to resurrect
+            const live: number[] = [];
+            for (let i = 0; i < n; ++i) {
+                if ((state[i] & State.deleted) === 0) live.push(i);
+            }
+
+            const keep = Math.max(0, Math.min(live.length, Math.round(live.length * this.fraction)));
+            const drop = live.length - keep;
+            if (drop <= 0) return IndexRanges.fromPredicate(0, () => false);
+
+            // scales are stored as logs, so the exponentials are the radii and
+            // their product stands in for volume
+            const importance = (i: number) => {
+                const alpha = opacity ? 1 / (1 + Math.exp(-opacity[i])) : 1;
+                const vol = (sx && sy && sz) ?
+                    Math.exp(sx[i]) * Math.exp(sy[i]) * Math.exp(sz[i]) : 1;
+                return alpha * vol;
+            };
+
+            // partial ordering would do, but the counts here are small enough
+            // that a sort is simpler to be sure of
+            const ranked = live.slice().sort((a, b) => importance(a) - importance(b));
+            const doomed = new Uint8Array(n);
+            for (let k = 0; k < drop; ++k) doomed[ranked[k]] = 1;
+
+            return IndexRanges.fromPredicate(n, i => doomed[i] === 1);
+        };
+    }
+
+    setFraction(fraction: number) {
+        this.fraction = fraction;
+        this.invalidate();
+    }
+}
+
+/**
+ * Statistical outlier removal - the floaters a capture leaves behind.
+ *
+ * For each gaussian, the mean distance to its `neighbours` nearest others; a
+ * gaussian is an outlier when that mean sits further than `deviations` standard
+ * deviations above the average. Floaters are exactly the points with no close
+ * company, so the measure finds them without anyone having to lasso.
+ *
+ * Neighbours are found through a uniform grid sized so that cells hold a
+ * handful of points each. That makes the search local instead of comparing
+ * everything with everything, which at these counts is the difference between
+ * a moment and never.
+ *
+ * Like a crop, this only ever adds to what is deleted.
+ */
+class CleanupOp extends StateOp {
+    name = 'cleanup';
+
+    neighbours: number;
+    deviations: number;
+
+    constructor(splat: Splat, neighbours = 16, deviations = 1.5) {
+        super(splat, null, State.deleted, BitOp.SET, State.deleted);
+        this.neighbours = neighbours;
+        this.deviations = deviations;
+
+        this.resolver = (s: Splat) => {
+            const data = s.splatData;
+            const n = data.numSplats;
+            const state = data.getProp('state') as Uint8Array;
+            const px = data.getProp('x') as Float32Array;
+            const py = data.getProp('y') as Float32Array;
+            const pz = data.getProp('z') as Float32Array;
+            if (!px || !py || !pz) return IndexRanges.fromPredicate(0, () => false);
+
+            const live: number[] = [];
+            for (let i = 0; i < n; ++i) {
+                if ((state[i] & State.deleted) === 0) live.push(i);
+            }
+            const k = Math.min(this.neighbours, live.length - 1);
+            if (k < 1) return IndexRanges.fromPredicate(0, () => false);
+
+            // bounds, to size the grid
+            let x0 = Infinity, y0 = Infinity, z0 = Infinity;
+            let x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+            for (const i of live) {
+                if (px[i] < x0) x0 = px[i];
+                if (py[i] < y0) y0 = py[i];
+                if (pz[i] < z0) z0 = pz[i];
+                if (px[i] > x1) x1 = px[i];
+                if (py[i] > y1) y1 = py[i];
+                if (pz[i] > z1) z1 = pz[i];
+            }
+
+            // aim for a few points per cell, so a 3x3x3 block around a point
+            // holds comfortably more than k of them
+            const span = Math.max(x1 - x0, y1 - y0, z1 - z0) || 1;
+            const target = Math.max(1, Math.cbrt(live.length / 4));
+            const cell = span / target;
+            const dim = (lo: number, hi: number) => Math.max(1, Math.ceil((hi - lo) / cell) + 1);
+            const nx = dim(x0, x1), ny = dim(y0, y1), nz = dim(z0, z1);
+
+            const cellOf = (i: number) => {
+                const cx = Math.min(nx - 1, Math.floor((px[i] - x0) / cell));
+                const cy = Math.min(ny - 1, Math.floor((py[i] - y0) / cell));
+                const cz = Math.min(nz - 1, Math.floor((pz[i] - z0) / cell));
+                return (cz * ny + cy) * nx + cx;
+            };
+
+            const buckets = new Map<number, number[]>();
+            for (const i of live) {
+                const c = cellOf(i);
+                const b = buckets.get(c);
+                if (b) b.push(i); else buckets.set(c, [i]);
+            }
+
+            // mean distance to the k nearest, searching outward a ring at a
+            // time until the block seen holds enough candidates
+            const means = new Float64Array(live.length);
+            const dist2: number[] = [];
+
+            for (let idx = 0; idx < live.length; ++idx) {
+                const i = live[idx];
+                const cx = Math.min(nx - 1, Math.floor((px[i] - x0) / cell));
+                const cy = Math.min(ny - 1, Math.floor((py[i] - y0) / cell));
+                const cz = Math.min(nz - 1, Math.floor((pz[i] - z0) / cell));
+
+                dist2.length = 0;
+                for (let r = 1; r <= 4; ++r) {
+                    dist2.length = 0;
+                    for (let dz = -r; dz <= r; ++dz) {
+                        const z = cz + dz;
+                        if (z < 0 || z >= nz) continue;
+                        for (let dy = -r; dy <= r; ++dy) {
+                            const y = cy + dy;
+                            if (y < 0 || y >= ny) continue;
+                            for (let dx = -r; dx <= r; ++dx) {
+                                const x = cx + dx;
+                                if (x < 0 || x >= nx) continue;
+                                const b = buckets.get((z * ny + y) * nx + x);
+                                if (!b) continue;
+                                for (const j of b) {
+                                    if (j === i) continue;
+                                    const ex = px[j] - px[i];
+                                    const ey = py[j] - py[i];
+                                    const ez = pz[j] - pz[i];
+                                    dist2.push(ex * ex + ey * ey + ez * ez);
+                                }
+                            }
+                        }
+                    }
+                    if (dist2.length >= k) break;
+                }
+
+                if (!dist2.length) {
+                    // nothing anywhere near it; the emptiest possible neighbourhood
+                    means[idx] = Infinity;
+                    continue;
+                }
+
+                dist2.sort((a, b) => a - b);
+                const take = Math.min(k, dist2.length);
+                let sum = 0;
+                for (let m = 0; m < take; ++m) sum += Math.sqrt(dist2[m]);
+                means[idx] = sum / take;
+            }
+
+            // threshold at mean + deviations * sigma, over the finite values
+            let sum = 0, count = 0;
+            for (const m of means) {
+                if (isFinite(m)) {
+                    sum += m;
+                    count++;
+                }
+            }
+            const avg = count ? sum / count : 0;
+            let varSum = 0;
+            for (const m of means) {
+                if (isFinite(m)) varSum += (m - avg) * (m - avg);
+            }
+            const sigma = count ? Math.sqrt(varSum / count) : 0;
+            const limit = avg + this.deviations * sigma;
+
+            const doomed = new Uint8Array(n);
+            for (let idx = 0; idx < live.length; ++idx) {
+                if (!isFinite(means[idx]) || means[idx] > limit) doomed[live[idx]] = 1;
+            }
+
+            return IndexRanges.fromPredicate(n, i => doomed[i] === 1);
+        };
+    }
+
+    setParams(neighbours: number, deviations: number) {
+        this.neighbours = neighbours;
+        this.deviations = deviations;
+        this.invalidate();
+    }
+}
+
 /** The formats an output node can write. Viewer exports need their own settings. */
 type OutputFileType = 'ply' | 'compressedPly' | 'splat' | 'sog' | 'spz';
 
@@ -768,6 +1075,10 @@ export {
     AnimTrackEditOp,
     MultiOp,
     principalOp,
+    CropOp,
+    DecimateOp,
+    CleanupOp,
+    SetShBandsOp,
     OutputOp,
     OutputSettings,
     OutputFileType,
