@@ -15,7 +15,7 @@ import {
 } from 'playcanvas';
 
 import { BufferPool } from './buffer-pool';
-import { gradeTransform } from '../color-grade';
+import { gradeMatrix } from '../color-grade';
 import { packedMaskHeight, packedMaskWidth } from './histogram-config';
 import { vertexShader, fragmentShader } from '../shaders/select-by-range-shader';
 import { Splat } from '../splat';
@@ -143,8 +143,8 @@ class SelectByRange {
         const onScreenOnly = options.onScreenOnly ? 1 : 0;
 
         // the one derivation, so this cannot drift from what is rendered
-        const { saturation, transparency } = splat;
-        const { scale: cgScale, offset: cgOffset } = gradeTransform(splat);
+        const { transparency } = splat;
+        const grade = gradeMatrix(splat);
 
         const values: any = {
             transformA,
@@ -160,9 +160,8 @@ class SelectByRange {
             viewProjection: viewProjection.data,
             cameraWorldPos: [cameraPos.x, cameraPos.y, cameraPos.z],
             onScreenOnly,
-            cgScale: [cgScale.r, cgScale.g, cgScale.b],
-            cgOffset,
-            cgSaturation: saturation,
+            cgMatrix: grade.m,
+            cgOffset: grade.t,
             transparency,
             output_params: [resources.texture.width, resources.texture.height],
             minMax: [options.min, options.max],

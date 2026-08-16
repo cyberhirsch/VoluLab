@@ -18,7 +18,7 @@ import {
 
 import { drawPointsWithShader } from './draw-points';
 import { GRID_DIM, NUM_BINS } from './histogram-config';
-import { gradeTransform } from '../color-grade';
+import { gradeMatrix } from '../color-grade';
 import {
     fullscreenVS,
     tileMinMaxFS,
@@ -194,8 +194,8 @@ class CalcHistogram {
         const onScreenOnly = options?.onScreenOnly ? 1 : 0;
 
         // the one derivation, so this cannot drift from what is rendered
-        const { saturation, transparency } = splat;
-        const { scale: cgScale, offset: cgOffset } = gradeTransform(splat);
+        const { transparency } = splat;
+        const grade = gradeMatrix(splat);
 
         const values: any = {
             transformA,
@@ -211,9 +211,8 @@ class CalcHistogram {
             viewProjection: viewProjection.data,
             cameraWorldPos: [cameraPos.x, cameraPos.y, cameraPos.z],
             onScreenOnly,
-            cgScale: [cgScale.r, cgScale.g, cgScale.b],
-            cgOffset,
-            cgSaturation: saturation,
+            cgMatrix: grade.m,
+            cgOffset: grade.t,
             transparency
         };
 

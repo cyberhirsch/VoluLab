@@ -72,9 +72,8 @@ uniform mat4 viewProjection;
 uniform vec3 cameraWorldPos;
 uniform int onScreenOnly;
 
-uniform vec3 cgScale;
+uniform mat3 cgMatrix;      // tint, temperature, levels and saturation, folded
 uniform float cgOffset;
-uniform float cgSaturation;
 uniform float transparency;
 
 // SH band weighting constants (matches engine's gsplatEvalSH GLSL chunk).
@@ -110,9 +109,7 @@ struct Splat {
 };
 
 vec3 applyColorGrade(vec3 c) {
-    c = cgOffset + c * cgScale;
-    float grey = dot(c, vec3(0.299, 0.587, 0.114));
-    return mix(vec3(grey), c, cgSaturation);
+    return cgMatrix * c + vec3(cgOffset);
 }
 
 vec3 rgb2hsv(vec3 c) {

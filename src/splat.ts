@@ -15,7 +15,7 @@ import {
     Vec3
 } from 'playcanvas';
 
-import { gradeTransform } from './color-grade';
+import { gradeMatrix } from './color-grade';
 import { Element, ElementType } from './element';
 import { Serializer } from './serializer';
 import { vertexShader, fragmentShader, gsplatCenter } from './shaders/splat-shader';
@@ -466,15 +466,15 @@ class Splat extends Element {
         material.setParameter('unselectedClr', [unselectedClr.r, unselectedClr.g, unselectedClr.b, unselectedClr.a]);
         material.setParameter('lockedClr', [lockedClr.r, lockedClr.g, lockedClr.b, lockedClr.a]);
 
-        // exposure, levels, tint and temperature all collapse into one scale
-        // and one offset - worked out in color-grade.ts so the renderer, the
-        // histogram and the cpu path cannot drift apart
-        const { offset, scale } = gradeTransform(this);
+        // the whole grade as one matrix and one translation - worked out in
+        // color-grade.ts so the renderer, the histogram, the range selector and
+        // the export path cannot drift apart
+        const grade = gradeMatrix(this);
 
-        material.setParameter('clrOffset', [offset, offset, offset]);
-        material.setParameter('clrScale', [scale.r, scale.g, scale.b, this.transparency]);
+        material.setParameter('clrMatrix', grade.m);
+        material.setParameter('clrOffset', [grade.t, grade.t, grade.t]);
+        material.setParameter('clrAlpha', grade.alpha);
 
-        material.setParameter('saturation', this.saturation);
         material.setParameter('transformPalette', this.transformPalette.texture);
 
         if (this.visible && selected) {

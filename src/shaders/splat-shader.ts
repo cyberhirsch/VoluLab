@@ -6,8 +6,9 @@ uniform sampler2D splatState;
 uniform vec4 selectedClr;
 uniform vec4 lockedClr;
 
+uniform mat3 clrMatrix;     // tint, temperature, levels and saturation, folded
 uniform vec3 clrOffset;
-uniform vec4 clrScale;
+uniform float clrAlpha;
 
 varying mediump vec4 texCoord_flags;            // xy: texCoord, z: selected, w: locked
 varying mediump vec4 color;
@@ -18,13 +19,6 @@ varying mediump vec4 color;
 #endif
 
 mediump vec4 discardVec = vec4(0.0, 0.0, 2.0, 1.0);
-
-uniform float saturation;
-
-vec3 applySaturation(vec3 color) {
-    vec3 grey = vec3(dot(color, vec3(0.299, 0.587, 0.114)));
-    return grey + (color - grey) * saturation;
-}
 
 void main(void) {
     // read gaussian details
@@ -122,11 +116,9 @@ void main(void) {
             color.xyz += evalSH(sh, dir) * scale;
         #endif
 
-        // apply tint/brightness
-        color = color * clrScale + vec4(clrOffset, 0.0);
-
-        // apply saturation
-        color.xyz = applySaturation(color.xyz);
+        // the whole grade is one matrix and one translation - saturation is a
+        // linear map, so it folds in rather than following on afterwards
+        color = vec4(clrMatrix * color.xyz + clrOffset, color.a * clrAlpha);
 
         // don't allow out-of-range alpha
         color.a = clamp(color.a, 0.0, 1.0);

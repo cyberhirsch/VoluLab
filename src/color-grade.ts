@@ -53,20 +53,67 @@ const gradeTransform = (p: GradeParams) => {
     };
 };
 
+/** Rec.601 luma weights, as the saturation lerp has always used. */
+const LUMA = { r: 0.299, g: 0.587, b: 0.114 };
+
+/**
+ * The whole grade as one 3x3 matrix and one translation.
+ *
+ * Saturation is a linear map - a lerp towards grey, which is a projection -
+ * and the levels are affine, so the eight parameters collapse to exactly this
+ * and nothing is lost. Two consequences, both wanted:
+ *
+ *  - The renderer, the histogram and the export path stop each carrying their
+ *    own arrangement of scale, offset and saturation.
+ *  - Two grades compose by multiplying, which the parameter form cannot
+ *    express. That is what a second colour node stacking on a region an
+ *    earlier one already touched will need.
+ *
+ * Written out: c' = sat·(s∘c) + (1-sat)·((w∘s)·c)·1 + o·1, where the offset
+ * survives the saturation untouched because a grey stays put under it.
+ */
+const gradeMatrix = (p: GradeParams) => {
+    const { scale, offset } = gradeTransform(p);
+    const sat = p.saturation;
+    const k = 1 - sat;
+
+    // Column-major, because that is what GLSL means by mat3 and this array is
+    // uploaded straight into one. Each column j is the input channel's
+    // contribution: k*w_j*s_j spread across all three outputs, plus sat*s_j on
+    // its own. The matrix is not symmetric, so the order is not cosmetic - read
+    // the other way round it grades by the transpose and quietly gets it wrong.
+    const col = (w: number, s: number, axis: number) => {
+        const shared = k * w * s;
+        return [
+            shared + (axis === 0 ? sat * s : 0),
+            shared + (axis === 1 ? sat * s : 0),
+            shared + (axis === 2 ? sat * s : 0)
+        ];
+    };
+
+    return {
+        m: [
+            ...col(LUMA.r, scale.r, 0),
+            ...col(LUMA.g, scale.g, 1),
+            ...col(LUMA.b, scale.b, 2)
+        ],
+        t: offset,
+        alpha: p.transparency
+    };
+};
+
 class ColorGrade {
-    private s: RGB;
+    private m: number[];
     private offset: number;
-    private saturation: number;
     private transparency: number;
 
     readonly hasTint: boolean;
 
     constructor(p: GradeParams) {
-        const { scale, offset } = gradeTransform(p);
-        this.s = scale;
-        this.offset = offset;
-        this.saturation = p.saturation;
-        this.transparency = p.transparency;
+        const grade = gradeMatrix(p);
+        this.m = grade.m;
+        this.offset = grade.t;
+        this.transparency = grade.alpha;
 
         this.hasTint = (
             !p.tintClr.equals(Color.WHITE) ||
@@ -79,15 +126,15 @@ class ColorGrade {
         );
     }
 
+    // The DC term carries the translation; an SH term is a delta, so it gets
+    // the linear part only. Indexed column-major, matching the array the
+    // shaders are handed.
     private apply(c: RGB, offset: number) {
-        c.r = offset + c.r * this.s.r;
-        c.g = offset + c.g * this.s.g;
-        c.b = offset + c.b * this.s.b;
-
-        const grey = c.r * 0.299 + c.g * 0.587 + c.b * 0.114;
-        c.r = grey + (c.r - grey) * this.saturation;
-        c.g = grey + (c.g - grey) * this.saturation;
-        c.b = grey + (c.b - grey) * this.saturation;
+        const { m } = this;
+        const { r, g, b } = c;
+        c.r = m[0] * r + m[3] * g + m[6] * b + offset;
+        c.g = m[1] * r + m[4] * g + m[7] * b + offset;
+        c.b = m[2] * r + m[5] * g + m[8] * b + offset;
     }
 
     applyDC(c: RGB) {
@@ -107,5 +154,5 @@ class ColorGrade {
     }
 }
 
-export { ColorGrade, gradeTransform, dcDecode, dcEncode, sigmoid, invSigmoid, SH_C0 };
+export { ColorGrade, gradeTransform, gradeMatrix, dcDecode, dcEncode, sigmoid, invSigmoid, SH_C0 };
 export type { GradeParams, RGB };
