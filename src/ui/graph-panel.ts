@@ -4,7 +4,7 @@ import { EditOp, MultiOp, SelectOp, SelectStep } from '../edit-ops';
 import { Events } from '../events';
 import { describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
-import { MenuEntry, contributeMenuItems } from './context-menu';
+import { MenuEntry, contributeMenuItems, showContextMenu } from './context-menu';
 
 /**
  * The node graph.
@@ -128,6 +128,8 @@ interface NodeModel {
     select?: boolean;
     colour?: boolean;
     bypassed?: boolean;
+    /** first in its chain - an import has nothing feeding it */
+    isSource?: boolean;
     /** what to key a stored position and a selection against */
     key: object;
 }
@@ -574,6 +576,7 @@ class GraphPanel extends Container {
         [...lanes.values()].forEach((lane, row) => {
             lane.forEach((node, col) => {
                 node.y = row * (NODE_H + LANE_GAP);
+                node.isSource = col === 0;
                 // edges follow the chain, which is the history order, not
                 // wherever the node has since been dragged
                 if (col > 0) edges.push({ from: lane[col - 1], to: node });
@@ -655,15 +658,19 @@ class GraphPanel extends Container {
             el.appendChild(name);
         }
 
-        // an input port only where an edge actually arrives - the first node in
-        // a lane is a source
-        if (node.x > 0) {
+        // An input port only where an edge actually arrives. Keyed on the node's
+        // place in its chain rather than on where it sits, or dragging a node
+        // rightwards would grow it an input it has nothing to receive on.
+        if (!node.isSource) {
             const inPort = document.createElement('div');
             inPort.className = 'gn-port gn-port-in';
             el.appendChild(inPort);
         }
+
         const outPort = document.createElement('div');
         outPort.className = 'gn-port gn-port-out';
+        outPort.title = 'drag out to attach a node';
+        this.bindPortDrag(outPort, node);
         el.appendChild(outPort);
 
         if (this.selection.has(node.key)) el.classList.add('gn-selected');
@@ -713,6 +720,62 @@ class GraphPanel extends Container {
         });
 
         return el;
+    }
+
+    /**
+     * Drag out of an output port to attach something.
+     *
+     * A link is drawn to the pointer while dragging, and letting go offers the
+     * nodes that can act on this object. The chain is linear, so "connecting"
+     * means appending to that object's chain - there is nowhere else a new node
+     * could go, and no second input to choose between.
+     */
+    private bindPortDrag(port: HTMLElement, node: NodeModel) {
+        port.addEventListener('pointerdown', (e: PointerEvent) => {
+            if (e.button !== 0) return;
+            // the node's own drag handler must not also claim this press
+            e.stopPropagation();
+            e.preventDefault();
+
+            const from = { x: node.x + NODE_W, y: node.y + NODE_H / 2 };
+            const link = document.createElementNS(SVG_NS, 'path');
+            link.setAttribute('class', 'gn-link');
+            this.edges.appendChild(link);
+
+            const draw = (to: { x: number, y: number }) => {
+                const bend = Math.max(24, Math.abs(to.x - from.x) * 0.5);
+                link.setAttribute('d', `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`);
+            };
+            draw(from);
+
+            const move = (ev: PointerEvent) => draw(this.toStage(ev.clientX, ev.clientY));
+
+            const up = (ev: PointerEvent) => {
+                port.removeEventListener('pointermove', move);
+                port.removeEventListener('pointerup', up);
+                releasePointer(port, ev.pointerId);
+                link.remove();
+
+                const splat = node.splat;
+                const items: MenuEntry[] = splat ? [
+                    {
+                        label: 'select',
+                        action: () => this.events.fire('graph.addSelectNode', splat)
+                    },
+                    {
+                        label: 'colour',
+                        action: () => this.events.fire('graph.addColourNode', splat)
+                    }
+                ] : [
+                    { label: 'nothing attaches here', disabled: true, action: () => {} }
+                ];
+                showContextMenu(document, ev.clientX, ev.clientY, items);
+            };
+
+            port.addEventListener('pointermove', move);
+            port.addEventListener('pointerup', up);
+            capturePointer(port, e.pointerId);
+        });
     }
 
     /**

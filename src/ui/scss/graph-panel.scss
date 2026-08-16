@@ -207,3 +207,29 @@
     background-color: rgba(242, 242, 242, 0.06);
     pointer-events: none;
 }
+
+// The link drawn while dragging out of a port, before it has a destination.
+.gn-link {
+    fill: none;
+    stroke: $ink-5;
+    stroke-width: 1;
+    stroke-dasharray: 4 3;
+    pointer-events: none;
+}
+
+// Ports are grabbable, and big enough to hit without aiming. The dot stays
+// small; the reach around it is invisible padding.
+.gn-port-out {
+    cursor: crosshair;
+
+    &::after {
+        content: '';
+        position: absolute;
+        inset: -6px;
+    }
+
+    &:hover {
+        border-color: $ink-7;
+        background-color: $ink-7;
+    }
+}

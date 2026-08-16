@@ -514,14 +514,25 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         openInGraph(index);
     };
 
+    // The object a node is being added to. Dragging out of a node's port names
+    // it explicitly; the menu on empty canvas has only the current selection
+    // to go on.
+    const addTarget = (splat?: Splat) => {
+        if (!splat) return selectedSplats();
+        // the new node belongs to this object, so make it the current one -
+        // the node pane and the viewport tools both follow the selection
+        events.fire('selection', splat);
+        return [splat];
+    };
+
     // an empty select node, waiting for a viewport gesture to fill it
-    events.on('graph.addSelectNode', () => {
-        selectedSplats().forEach(splat => appendAndOpen(new SelectOp(splat, [])));
+    events.on('graph.addSelectNode', (target?: Splat) => {
+        addTarget(target).forEach(splat => appendAndOpen(new SelectOp(splat, [])));
     });
 
     // a colour node with no adjustment yet - the panel writes into it
-    events.on('graph.addColourNode', () => {
-        selectedSplats().forEach((splat) => {
+    events.on('graph.addColourNode', (target?: Splat) => {
+        addTarget(target).forEach((splat) => {
             const current = {
                 tintClr: splat.tintClr.clone(),
                 temperature: splat.temperature,
