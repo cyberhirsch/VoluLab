@@ -119,8 +119,6 @@ interface NodeModel {
     frozen?: boolean;
     select?: boolean;
     colour?: boolean;
-    /** how many committed changes this node stands for, when more than one */
-    folded?: number;
     bypassed?: boolean;
     /** what to key a stored position and a selection against */
     key: object;
@@ -164,6 +162,9 @@ class GraphPanel extends Container {
     /** the models behind what is currently drawn, for hit tests and framing */
     private nodes: NodeModel[] = [];
     private currentEdges: EdgeModel[] = [];
+
+    /** a history index asked for before the node existed - see graph.selectIndex */
+    private pendingSelect: number | null = null;
 
     constructor(events: Events, args = {}) {
         args = {
@@ -213,6 +214,14 @@ class GraphPanel extends Container {
 
         const refresh = () => this.rebuild();
         events.on('edit.changed', refresh);
+
+        // Something added a node and wants it open. It may not exist yet - the
+        // add is queued - so the request is held and honoured by the first
+        // rebuild that can see it.
+        events.on('graph.selectIndex', (index: number) => {
+            this.pendingSelect = index;
+            this.rebuild();
+        });
         events.on('scene.elementAdded', refresh);
         events.on('scene.elementRemoved', refresh);
         events.on('splat.name', refresh);
@@ -495,12 +504,6 @@ class GraphPanel extends Container {
             });
         });
 
-        // Colour is one node per object, not one per nudge of a slider.
-        // History still holds every committed change - undo is unaffected - but
-        // a chain of thirty colour ops is a record of typing, not a description
-        // of the object, so the lane shows the first and folds the rest into it.
-        const colourNode = new Map<Splat | null, NodeModel>();
-
         ops.forEach((op, i) => {
             const splat = opSplat(op);
             // an op with no object of its own - or whose object is gone - still
@@ -510,17 +513,11 @@ class GraphPanel extends Container {
                 add(null, { index: -1, kind: 'scene', name: '', applied: true, splat: null, key: lanes });
             }
 
+            // A colour node stands on its own. Consecutive changes are merged
+            // into one op before they ever reach here (see edit.addColour), so
+            // there is nothing left to fold - and folding would have made a
+            // second colour node impossible to see.
             if (op.name === 'setSplatColor') {
-                const existing = colourNode.get(key);
-                if (existing) {
-                    // the node stands for the latest committed value, and
-                    // jumping to it should land after that one
-                    existing.index = i;
-                    existing.applied = i < cursor;
-                    existing.folded = (existing.folded ?? 1) + 1;
-                    existing.bypassed = existing.bypassed && !!op.bypassed;
-                    return;
-                }
                 add(key, {
                     index: i,
                     kind: 'colour',
@@ -531,7 +528,6 @@ class GraphPanel extends Container {
                     bypassed: !!op.bypassed,
                     key: op
                 });
-                colourNode.set(key, laneOf(key)[laneOf(key).length - 1]);
                 return;
             }
 
@@ -583,6 +579,17 @@ class GraphPanel extends Container {
         // pointed at - an op removed from history takes its entry with it
         const live = new Set(nodes.map(n => n.key));
         [...this.selection].forEach(k => !live.has(k) && this.selection.delete(k));
+
+        if (this.pendingSelect !== null) {
+            const wanted = nodes.find(n => n.index === this.pendingSelect);
+            if (wanted) {
+                this.pendingSelect = null;
+                // straight to the field: setSelection would rebuild again, and
+                // this is already the rebuild that found it
+                this.selection = new Set([wanted.key]);
+                this.events.fire('graph.selected', wanted.index);
+            }
+        }
 
         [...this.stage.querySelectorAll('.gn-node')].forEach(n => n.remove());
         this.edges.replaceChildren();
@@ -637,14 +644,6 @@ class GraphPanel extends Container {
         const outPort = document.createElement('div');
         outPort.className = 'gn-port gn-port-out';
         el.appendChild(outPort);
-
-        if (node.folded > 1) {
-            const count = document.createElement('div');
-            count.className = 'gn-node-count';
-            count.textContent = `${node.folded}`;
-            count.title = `${node.folded} committed changes`;
-            el.appendChild(count);
-        }
 
         if (this.selection.has(node.key)) el.classList.add('gn-selected');
         if (node.bypassed) el.classList.add('gn-bypassed');

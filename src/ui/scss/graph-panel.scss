@@ -199,17 +199,6 @@
     stroke-dasharray: 2 4;
 }
 
-// how many committed changes a folded node stands for
-.gn-node-count {
-    position: absolute;
-    top: 2px;
-    right: 4px;
-    color: $ink-4;
-    font-size: $font-size-xs;
-    font-variant-numeric: tabular-nums;
-    pointer-events: none;
-}
-
 // marquee select. Drawn on the stage, so it is in graph coordinates and keeps
 // its place under the cursor at any zoom.
 .gn-marquee {

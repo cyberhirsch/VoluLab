@@ -35,6 +35,7 @@ class EditHistory {
         events.on('edit.goto', (cursor: number) => this.goto(cursor));
         events.function('edit.reselect', (index: number, query: SelectQuery) => this.reselect(index, query));
         events.function('edit.removeAt', (indices: number[]) => this.removeAt(indices));
+        events.function('edit.refresh', (index: number) => this.refresh(index));
         events.function('edit.setBypassed', (index: number, bypassed: boolean) => this.setBypassed(index, bypassed));
 
         // read access for views that draw the history rather than drive it -
@@ -150,6 +151,19 @@ class EditHistory {
                 });
             },
             resume => resume - sorted.filter(i => i < resume).length
+        ));
+    }
+
+    /**
+     * Re-apply an op whose parameters were changed in place, rebuilding what
+     * stood on it. Nothing to mutate here - the caller already has.
+     */
+    refresh(index: number) {
+        if (!this.history[index]) return Promise.resolve();
+        return this.queue(() => this.replayAround(
+            index,
+            () => {},
+            resume => Math.max(resume, index + 1)
         ));
     }
 

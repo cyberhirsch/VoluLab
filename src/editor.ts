@@ -412,40 +412,110 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         };
     };
 
-    /**
-     * The select node the graph currently has open, if any.
-     *
-     * A node added from the graph starts empty and is filled by drawing in the
-     * viewport - that is what wires it to the viewport controls. So while a
-     * select node is open, a gesture replaces its query rather than appending
-     * another node. With nothing open, a gesture appends, which is how
-     * selection has always behaved.
-     */
-    let openSelectNode: number | null = null;
+    /** The node the graph currently has open, if any. */
+    let openNode: number | null = null;
 
     events.on('graph.selected', (index: number | null) => {
-        const ops = (events.invoke('edit.history') as { ops: EditOp[] })?.ops ?? [];
-        openSelectNode = (index !== null && ops[index] instanceof SelectOp) ? index : null;
+        openNode = index;
     });
 
-    const addSelect = (splat: Splat, op: SelectMode, query: SelectQuery) => {
-        if (openSelectNode !== null) {
-            const target = openSelectNode;
-            const ops = (events.invoke('edit.history') as { ops: EditOp[] })?.ops ?? [];
-            const existing = ops[target];
-            if (existing instanceof SelectOp && existing.splat === splat) {
-                existing.setMode(op);
-                events.invoke('edit.reselect', target, query);
-                return;
-            }
+    const history = () => (events.invoke('edit.history') ?? { ops: [], cursor: 0 }) as
+        { ops: EditOp[], cursor: number };
+
+    /**
+     * The node an edit should go into, or null to start a new one.
+     *
+     * Two ways an edit lands on an existing node. The node is open in the
+     * graph, which is an explicit "edit this one". Or it is the last thing that
+     * happened, which is the ordinary case of carrying on with what you were
+     * doing - nudging a slider, redrawing a selection - and is what stops every
+     * twitch from leaving another node behind.
+     *
+     * Anything further back is left alone: reaching over a later edit to change
+     * an earlier one is a real intention, and it needs to be stated by opening
+     * that node rather than inferred from a gesture.
+     */
+    const nodeToEdit = (splat: Splat, matches: (op: EditOp) => boolean) => {
+        const { ops, cursor } = history();
+
+        if (openNode !== null && ops[openNode] && matches(ops[openNode]) &&
+            (ops[openNode] as any).splat === splat) {
+            return openNode;
         }
-        events.fire('edit.add', new SelectOp(splat, op, query));
+
+        const last = cursor - 1;
+        if (last >= 0 && ops[last] && matches(ops[last]) && (ops[last] as any).splat === splat &&
+            cursor === ops.length) {
+            return last;
+        }
+
+        return null;
+    };
+
+    /** Put the graph's cursor on a node, so the next edit continues it. */
+    const openInGraph = (index: number) => events.fire('graph.selectIndex', index);
+
+    const addSelect = (splat: Splat, mode: SelectMode, query: SelectQuery) => {
+        // Only a plain 'set' replaces an existing node, and only a node that is
+        // itself a 'set'. add/remove/intersect are compositional - they mean
+        // "and also this" - so neither folding one into the node it was
+        // composed with, nor overwriting one with a fresh selection, is right:
+        // both throw away a node that was built on purpose.
+        const target = mode === 'set' ?
+            nodeToEdit(splat, op => op instanceof SelectOp && op.mode === 'set') :
+            null;
+
+        if (target !== null) {
+            (history().ops[target] as SelectOp).setMode(mode);
+            events.invoke('edit.reselect', target, query);
+            return;
+        }
+
+        events.fire('edit.add', new SelectOp(splat, mode, query));
+    };
+
+    /**
+     * A colour change, folded into the colour node being worked on.
+     *
+     * The panel applies its change live and hands over an op describing it.
+     * Merging keeps the target's oldState - where the whole session started -
+     * and takes the new values, so one node covers the session and undo steps
+     * over all of it at once.
+     */
+    events.function('edit.addColour', (op: SetSplatColorAdjustmentOp) => {
+        const target = nodeToEdit(op.splat, o => o.name === 'setSplatColor');
+        if (target === null) {
+            events.fire('edit.add', op);
+            return;
+        }
+
+        const existing = history().ops[target] as SetSplatColorAdjustmentOp;
+        existing.newState = op.newState;
+        // the panel already applied it, so a replay is only needed when the
+        // node being edited is not the last thing applied
+        if (target === history().cursor - 1) {
+            events.fire('edit.changed');
+        } else {
+            events.invoke('edit.refresh', target);
+        }
+    });
+
+    // Adding is always a new node, never a reuse - it is the way to say "a
+    // second one of these", which is what stops the reuse above from being a
+    // limit of one node per kind.
+    const appendAndOpen = (op: EditOp) => {
+        // An add drops whatever was ahead of the cursor and pushes, so the new
+        // op's index is the cursor as it stands now. Worked out before firing,
+        // because the add is queued and has not happened yet.
+        const index = history().cursor;
+        events.fire('edit.add', op);
+        openInGraph(index);
     };
 
     // an empty select node, waiting for a viewport gesture to fill it
     events.on('graph.addSelectNode', () => {
         selectedSplats().forEach((splat) => {
-            events.fire('edit.add', new SelectOp(splat, 'set', {
+            appendAndOpen(new SelectOp(splat, 'set', {
                 kind: 'frozen',
                 source: 'empty',
                 hits: IndexRanges.fromPredicate(0, () => false)
@@ -465,7 +535,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                 whitePoint: splat.whitePoint,
                 transparency: splat.transparency
             };
-            events.fire('edit.add', new SetSplatColorAdjustmentOp({
+            appendAndOpen(new SetSplatColorAdjustmentOp({
                 splat,
                 oldState: { ...current },
                 newState: { ...current }

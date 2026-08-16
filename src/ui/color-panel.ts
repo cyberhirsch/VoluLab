@@ -270,7 +270,9 @@ class ColorPanel extends Container {
                 newState.blackPoint = blackPointSlider.value;
                 newState.whitePoint = whitePointSlider.value;
                 newState.transparency = Math.exp(transparencySlider.value);
-                events.fire('edit.add', op);
+                // merged into the colour node being worked on, rather than
+                // leaving a node behind for every slider gesture
+                events.invoke('edit.addColour', op);
                 op = null;
             }
         };
@@ -372,7 +374,9 @@ class ColorPanel extends Container {
                     }
                 });
 
-                events.fire('edit.add', op);
+                // merged into the colour node being worked on, rather than
+                // leaving a node behind for every slider gesture
+                events.invoke('edit.addColour', op);
             }
         });
 
