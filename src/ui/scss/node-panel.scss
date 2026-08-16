@@ -168,3 +168,32 @@
         color: $ink-7;
     }
 }
+
+// Numeric triples - position, rotation, scale. Equal shares of the row so the
+// three columns line up between rows rather than each sizing to its content.
+.nd-num {
+    flex: 1 1 0;
+    min-width: 0;
+    height: $h-row;
+    padding: 0 $pad-x-sm;
+    border: $border-width solid $ink-3;
+    border-radius: 0;
+    outline: none;
+    background-color: $ink-0;
+    color: $ink-6;
+    font-family: $font-mono;
+    font-size: $font-size-sm;
+    font-variant-numeric: tabular-nums;
+
+    &:focus {
+        border-color: $ink-5;
+        color: $ink-7;
+    }
+
+    // the spinners are wider than the field is worth
+    &::-webkit-outer-spin-button,
+    &::-webkit-inner-spin-button {
+        appearance: none;
+        margin: 0;
+    }
+}

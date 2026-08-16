@@ -1,6 +1,6 @@
 import { Container } from '@playcanvas/pcui';
 
-import { EditOp, SelectMode, SelectOp, SplatRenameOp } from '../edit-ops';
+import { EditOp, EntityTransformOp, SelectMode, SelectOp, SplatRenameOp, StateOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -119,7 +119,10 @@ class NodePanel extends Container {
             return;
         }
 
-        const { op, index } = current;
+        const { op: outer, index } = current;
+        // A transform arrives wrapped with the pivot placement that went with
+        // it, so the node's settings are the ones inside the bundle.
+        const op = principalOp(outer);
 
         if (op.name === 'setSplatColor') {
             const panel = this.mounts.get('colour');
@@ -136,8 +139,98 @@ class NodePanel extends Container {
             return;
         }
 
+        if (op instanceof EntityTransformOp) {
+            this.empty.hidden = true;
+            this.buildTransform(op, index);
+            return;
+        }
+
+        // The state ops - delete, hide and their inverses - have no parameters
+        // to turn. What they do have is a result, and how much of the object it
+        // touched is the thing worth knowing about one.
+        if (op instanceof StateOp) {
+            this.empty.hidden = true;
+            this.buildStateOp(op);
+            return;
+        }
+
+        if (op instanceof SplatRenameOp) {
+            this.empty.hidden = true;
+            this.stat('from', op.oldName);
+            this.stat('to', op.newName);
+            return;
+        }
+
         this.empty.hidden = false;
         this.empty.textContent = `${op.name} has no settings`;
+    }
+
+    /** What a state op did, and a note on what it means to bypass it. */
+    private buildStateOp(op: StateOp) {
+        const NOTES: Record<string, string> = {
+            deleteSelection: 'removes what was selected here. bypass to keep it',
+            reset: 'brings back what earlier nodes deleted',
+            hideSelection: 'hides what was selected here',
+            unhideAll: 'reveals everything hidden further up',
+            selectAll: 'selects every splat that is not hidden or deleted',
+            selectNone: 'clears the selection',
+            selectInvert: 'swaps selected for unselected'
+        };
+
+        const n = op.affected;
+        this.stat('splats', n < 0 ? 'not applied' : n.toLocaleString());
+
+        const note = document.createElement('div');
+        note.className = 'nd-note';
+        note.textContent = NOTES[op.name] ?? 'no settings';
+        this.body.appendChild(note);
+    }
+
+    /**
+     * The object's placement. Editing writes into the op's target transform
+     * and replays from there, so moving a node that other edits stand on
+     * rebuilds them rather than stranding them.
+     */
+    private buildTransform(op: EntityTransformOp, index: number) {
+        const euler = op.newt.rotation.getEulerAngles();
+
+        const triple = (
+            label: string,
+            values: number[],
+            apply: (v: number[]) => void
+        ) => {
+            const row = this.row(label);
+            const fields = values.map((value, i) => {
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.className = 'nd-num';
+                input.step = '0.01';
+                input.value = `${+value.toFixed(4)}`;
+                input.addEventListener('keydown', e => e.stopPropagation());
+                input.addEventListener('change', () => {
+                    const next = fields.map(f => parseFloat(f.value) || 0);
+                    apply(next);
+                    this.events.invoke('edit.refresh', index);
+                });
+                row.appendChild(input);
+                return input;
+            });
+            this.body.appendChild(row);
+        };
+
+        triple('position', [op.newt.position.x, op.newt.position.y, op.newt.position.z], (v) => {
+            op.newt.position.set(v[0], v[1], v[2]);
+        });
+
+        triple('rotation', [euler.x, euler.y, euler.z], (v) => {
+            op.newt.rotation.setFromEulerAngles(v[0], v[1], v[2]);
+        });
+
+        triple('scale', [op.newt.scale.x, op.newt.scale.y, op.newt.scale.z], (v) => {
+            // a zero scale collapses the object and cannot be undone by typing,
+            // because every later value multiplies through it
+            op.newt.scale.set(v[0] || 1e-4, v[1] || 1e-4, v[2] || 1e-4);
+        });
     }
 
     private row(label: string): HTMLElement {

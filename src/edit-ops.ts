@@ -48,6 +48,8 @@ const enum BitOp {
  * `invalidate()` drops them so the next `do()` asks again.
  */
 class StateOp {
+    /** set by each subclass; declared here so the base satisfies EditOp */
+    name: string;
     splat: Splat;
     mask: number;
     op: BitOp;
@@ -70,6 +72,19 @@ class StateOp {
         this.mask = mask;
         this.op = op;
         this.updateFlags = updateFlags;
+    }
+
+    /**
+     * How many splats this op last applied to, or -1 if it has not run.
+     *
+     * Read from what was resolved rather than recomputed, so it says what the
+     * op actually did rather than what it would do now.
+     */
+    get affected(): number {
+        if (!this.ranges) return -1;
+        let n = 0;
+        this.ranges.forEach(() => n++);
+        return n;
     }
 
     /** Resolve now and keep the answer - for callers that must know the set up front. */
@@ -675,6 +690,21 @@ class SplatRenameOp {
     }
 }
 
+/**
+ * What an entry in the history actually stands for.
+ *
+ * Some edits are committed as a bundle - a transform carries the pivot
+ * placement that went with it - and the bundle is an implementation detail of
+ * how they were recorded. Anything presenting an op to a person should name
+ * and edit it by whichever member does the work.
+ */
+const principalOp = (op: EditOp): EditOp => {
+    if (!(op instanceof MultiOp)) return op;
+    return op.ops.find(o => o instanceof EntityTransformOp) ??
+        op.ops.find(o => o instanceof StateOp) ??
+        op.ops[0] ?? op;
+};
+
 export {
     EditOp,
     SelectMode,
@@ -698,6 +728,7 @@ export {
     SetSplatColorAdjustmentOp,
     AnimTrackEditOp,
     MultiOp,
+    principalOp,
     AddSplatOp,
     SplatRenameOp
 };

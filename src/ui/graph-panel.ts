@@ -1,10 +1,11 @@
 import { Container } from '@playcanvas/pcui';
 
-import { EditOp, MultiOp, SelectOp, SelectStep } from '../edit-ops';
+import { EditOp, MultiOp, SelectOp, SelectStep, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
 import { MenuEntry, contributeMenuItems, showContextMenu } from './context-menu';
+
 
 /**
  * The node graph.
@@ -71,7 +72,12 @@ const OP_LABELS: Record<string, string> = {
     splatRename: 'rename'
 };
 
-const opLabel = (op: EditOp) => OP_LABELS[op.name] ?? op.name;
+// A bundled edit is named by the member that does the work, not by the fact
+// that it was bundled - "combined edit" tells you nothing about a transform.
+const opLabel = (op: EditOp) => {
+    const principal = principalOp(op);
+    return OP_LABELS[principal.name] ?? OP_LABELS[op.name] ?? op.name;
+};
 
 // What a select node shows on its second line: the gesture, or how many of
 // them, since a refined selection is one node holding several steps.
@@ -558,7 +564,7 @@ class GraphPanel extends Container {
             const steps = select?.steps ?? [];
             add(key, {
                 index: i,
-                kind: 'select',
+                kind: select ? 'select' : opLabel(op),
                 name: select ? describeSteps(steps) : '',
                 applied: i < cursor,
                 splat,
