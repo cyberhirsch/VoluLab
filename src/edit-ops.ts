@@ -2,9 +2,10 @@ import { Color, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { AnimTrack } from './anim-track';
 import { BoxShape } from './box-shape';
-import { IndexRanges, sortedPredicate } from './index-ranges';
+import { IndexRanges } from './index-ranges';
 import { Pivot } from './pivot';
 import { Scene } from './scene';
+import { SelectQuery, resolveHits } from './select-query';
 import { SphereShape } from './sphere-shape';
 import { Splat } from './splat';
 import { State } from './splat-state';
@@ -23,19 +24,59 @@ const enum BitOp {
     TOGGLE
 }
 
+/**
+ * Sets, clears or toggles a state bit over a set of splats.
+ *
+ * The set is resolved lazily. These ops describe themselves relative to the
+ * state they run against - "delete what is selected", "select what this sphere
+ * catches" - so resolving at construction froze an answer to a question that
+ * had not been asked yet. Deferring it to `do()` is what lets an edit earlier
+ * in the history change and everything after it still mean what it says.
+ *
+ * The resolved ranges are kept afterwards, because `undo` has to reverse
+ * exactly what `do` applied, not what the same question would answer now.
+ * `invalidate()` drops them so the next `do()` asks again.
+ */
 class StateOp {
     splat: Splat;
-    ranges: IndexRanges;
     mask: number;
     op: BitOp;
     updateFlags: number;
 
-    constructor(splat: Splat, ranges: IndexRanges, mask: number, op: BitOp, updateFlags = State.selected) {
+    // protected so a subclass whose resolver needs to read its own fields can
+    // install it after super() has run
+    protected resolver: (splat: Splat) => IndexRanges | Promise<IndexRanges>;
+    private ranges: IndexRanges = null;
+
+    constructor(
+        splat: Splat,
+        resolver: (splat: Splat) => IndexRanges | Promise<IndexRanges>,
+        mask: number,
+        op: BitOp,
+        updateFlags = State.selected
+    ) {
         this.splat = splat;
-        this.ranges = ranges;
+        this.resolver = resolver;
         this.mask = mask;
         this.op = op;
         this.updateFlags = updateFlags;
+    }
+
+    /** Resolve now and keep the answer - for callers that must know the set up front. */
+    resolveNow(): IndexRanges {
+        if (!this.ranges) {
+            const resolved = this.resolver(this.splat);
+            if (resolved instanceof Promise) {
+                throw new Error('resolveNow called on an op that resolves asynchronously');
+            }
+            this.ranges = resolved;
+        }
+        return this.ranges;
+    }
+
+    /** Forget the resolved set so the next do() recomputes it. */
+    invalidate() {
+        this.ranges = null;
     }
 
     private apply(op: BitOp) {
@@ -56,11 +97,19 @@ class StateOp {
     }
 
     async do() {
+        if (!this.ranges) {
+            this.ranges = await this.resolver(this.splat);
+        }
         this.apply(this.op);
         await this.splat.updateState(this.updateFlags);
     }
 
     async undo() {
+        // nothing resolved means nothing was applied, so there is nothing to
+        // reverse. Without this an invalidated op would hand a null set to the
+        // bit operations rather than simply doing nothing.
+        if (!this.ranges) return;
+
         const undoOp = this.op === BitOp.TOGGLE ? BitOp.TOGGLE :
             this.op === BitOp.SET ? BitOp.CLEAR : BitOp.SET;
         this.apply(undoOp);
@@ -70,15 +119,26 @@ class StateOp {
     destroy() {
         this.splat = null;
         this.ranges = null;
+        this.resolver = null;
     }
 }
+
+// Each of these is a predicate over the state as it stands when the op runs.
+// Wrapping it in a closure rather than evaluating it here is the whole point:
+// the question is asked at do() time, so it answers about the state the op
+// actually lands on.
+const overState = (pred: (state: Uint8Array, i: number) => boolean) => {
+    return (splat: Splat) => {
+        const state = splat.splatData.getProp('state') as Uint8Array;
+        return IndexRanges.fromPredicate(splat.splatData.numSplats, i => pred(state, i));
+    };
+};
 
 class SelectAllOp extends StateOp {
     name = 'selectAll';
 
     constructor(splat: Splat) {
-        const state = splat.splatData.getProp('state') as Uint8Array;
-        super(splat, IndexRanges.fromPredicate(splat.splatData.numSplats, i => state[i] === 0), State.selected, BitOp.SET);
+        super(splat, overState((state, i) => state[i] === 0), State.selected, BitOp.SET);
     }
 }
 
@@ -86,8 +146,7 @@ class SelectNoneOp extends StateOp {
     name = 'selectNone';
 
     constructor(splat: Splat) {
-        const state = splat.splatData.getProp('state') as Uint8Array;
-        super(splat, IndexRanges.fromPredicate(splat.splatData.numSplats, i => state[i] === State.selected), State.selected, BitOp.CLEAR);
+        super(splat, overState((state, i) => state[i] === State.selected), State.selected, BitOp.CLEAR);
     }
 }
 
@@ -95,54 +154,79 @@ class SelectInvertOp extends StateOp {
     name = 'selectInvert';
 
     constructor(splat: Splat) {
-        const state = splat.splatData.getProp('state') as Uint8Array;
-        super(splat, IndexRanges.fromPredicate(splat.splatData.numSplats, i => (state[i] & (State.locked | State.deleted)) === 0), State.selected, BitOp.TOGGLE);
+        super(splat, overState((state, i) => (state[i] & (State.locked | State.deleted)) === 0), State.selected, BitOp.TOGGLE);
     }
 }
 
+type SelectMode = 'add' | 'remove' | 'set' | 'intersect';
+
+// op → bit operation and op → predicate, kept as parallel lookups keyed by the
+// same union so adding a mode forces both to be updated together.
+const selectBitOps: Record<SelectMode, BitOp> = {
+    add: BitOp.SET,
+    remove: BitOp.CLEAR,
+    set: BitOp.TOGGLE,
+    intersect: BitOp.CLEAR
+};
+
+/**
+ * Combine a hit set with the current selection state.
+ *
+ * `mode` semantics:
+ *   add       — select valid splats that are hit and currently unselected
+ *   remove    — deselect valid splats that are hit and currently selected
+ *   set       — make selection match the hit set (toggle valid splats whose
+ *               current selection state differs from it). NOT a replace — the
+ *               underlying BitOp is TOGGLE on the rows where selection and hit
+ *               disagree, which leaves locked/deleted bits untouched.
+ *   intersect — keep only splats currently selected AND hit (clear the selected
+ *               bit on selected splats that are not hit).
+ */
+const combineWithState = (splat: Splat, mode: SelectMode, isHit: (i: number) => boolean) => {
+    const splatData = splat.splatData;
+    const state = splatData.getProp('state') as Uint8Array;
+
+    // single rule applied uniformly: only valid (clean or selected) splats are
+    // considered. consolidates the locked/deleted guard in one place so each
+    // producer doesn't have to remember it for the 'set' (toggle) path.
+    const valid = (i: number) => state[i] === 0 || state[i] === State.selected;
+
+    const preds: Record<SelectMode, (i: number) => boolean> = {
+        add: (i: number) => valid(i) && isHit(i) && state[i] === 0,
+        remove: (i: number) => valid(i) && isHit(i) && state[i] === State.selected,
+        set: (i: number) => valid(i) && ((state[i] === State.selected) !== isHit(i)),
+        intersect: (i: number) => valid(i) && state[i] === State.selected && !isHit(i)
+    };
+
+    return IndexRanges.fromPredicate(splatData.numSplats, preds[mode]);
+};
+
+/**
+ * A selection, stored as the query that produced it.
+ *
+ * The query is public and replaceable: `setQuery` swaps the parameters and
+ * drops the resolved set, so re-applying the op runs the new query. That is
+ * what makes a selection node in the graph something you can turn a dial on
+ * rather than only look at.
+ */
 class SelectOp extends StateOp {
     name = 'selectOp';
 
-    // `sel` is a committed snapshot of hits: either a per-splat mask
-    // (Uint8Array, 255 = hit) or a sorted Uint32Array of indices. taking a
-    // committed mask rather than a closure removes the foot-gun where a
-    // predicate captured `state[i]` at call time and was evaluated later.
-    // `op` semantics:
-    //   add       — select valid splats that are hit and currently unselected
-    //   remove    — deselect valid splats that are hit and currently selected
-    //   set       — make selection match the hit mask (toggle valid splats whose
-    //               current selection state differs from the mask). NOT a replace —
-    //               the underlying BitOp is TOGGLE on the rows where selection and
-    //               hit disagree, which leaves locked/deleted bits untouched.
-    //   intersect — keep only splats currently selected AND in the hit mask
-    //               (clear the selected bit on selected splats that are not hit).
-    constructor(splat: Splat, op: 'add' | 'remove' | 'set' | 'intersect', sel: Uint8Array | Uint32Array) {
-        const splatData = splat.splatData;
-        const state = splatData.getProp('state') as Uint8Array;
-        const isHit = sel instanceof Uint32Array ? sortedPredicate(sel) : (i: number) => sel[i] === 255;
+    mode: SelectMode;
+    query: SelectQuery;
 
-        // single rule applied uniformly: only valid (clean or selected) splats
-        // are considered. consolidates the locked/deleted guard in one place so
-        // each producer doesn't have to remember it for the 'set' (toggle) path.
-        const valid = (i: number) => state[i] === 0 || state[i] === State.selected;
+    constructor(splat: Splat, mode: SelectMode, query: SelectQuery) {
+        super(splat, null, State.selected, selectBitOps[mode]);
+        this.mode = mode;
+        this.query = query;
+        // reads this.query rather than the constructor argument, so replacing
+        // the query changes what the next resolve asks
+        this.resolver = async (s: Splat) => combineWithState(s, this.mode, await resolveHits(s, this.query));
+    }
 
-        // op → bit operation and op → predicate, kept as parallel lookups keyed
-        // by the same union so adding an op forces both to be updated together.
-        const bitOps = {
-            add: BitOp.SET,
-            remove: BitOp.CLEAR,
-            set: BitOp.TOGGLE,
-            intersect: BitOp.CLEAR
-        };
-
-        const preds = {
-            add: (i: number) => valid(i) && isHit(i) && state[i] === 0,
-            remove: (i: number) => valid(i) && isHit(i) && state[i] === State.selected,
-            set: (i: number) => valid(i) && ((state[i] === State.selected) !== isHit(i)),
-            intersect: (i: number) => valid(i) && state[i] === State.selected && !isHit(i)
-        };
-
-        super(splat, IndexRanges.fromPredicate(splatData.numSplats, preds[op]), State.selected, bitOps[op]);
+    setQuery(query: SelectQuery) {
+        this.query = query;
+        this.invalidate();
     }
 }
 
@@ -150,8 +234,7 @@ class HideSelectionOp extends StateOp {
     name = 'hideSelection';
 
     constructor(splat: Splat) {
-        const state = splat.splatData.getProp('state') as Uint8Array;
-        super(splat, IndexRanges.fromPredicate(splat.splatData.numSplats, i => state[i] === State.selected), State.locked, BitOp.SET, State.locked);
+        super(splat, overState((state, i) => state[i] === State.selected), State.locked, BitOp.SET, State.locked);
     }
 }
 
@@ -159,8 +242,7 @@ class UnhideAllOp extends StateOp {
     name = 'unhideAll';
 
     constructor(splat: Splat) {
-        const state = splat.splatData.getProp('state') as Uint8Array;
-        super(splat, IndexRanges.fromPredicate(splat.splatData.numSplats, i => (state[i] & (State.locked | State.deleted)) === State.locked), State.locked, BitOp.CLEAR, State.locked);
+        super(splat, overState((state, i) => (state[i] & (State.locked | State.deleted)) === State.locked), State.locked, BitOp.CLEAR, State.locked);
     }
 }
 
@@ -168,8 +250,7 @@ class DeleteSelectionOp extends StateOp {
     name = 'deleteSelection';
 
     constructor(splat: Splat) {
-        const state = splat.splatData.getProp('state') as Uint8Array;
-        super(splat, IndexRanges.fromPredicate(splat.splatData.numSplats, i => state[i] === State.selected), State.deleted, BitOp.SET, State.deleted);
+        super(splat, overState((state, i) => state[i] === State.selected), State.deleted, BitOp.SET, State.deleted);
     }
 }
 
@@ -177,8 +258,7 @@ class ResetOp extends StateOp {
     name = 'reset';
 
     constructor(splat: Splat) {
-        const state = splat.splatData.getProp('state') as Uint8Array;
-        super(splat, IndexRanges.fromPredicate(splat.splatData.numSplats, i => (state[i] & State.deleted) !== 0), State.deleted, BitOp.CLEAR, State.deleted);
+        super(splat, overState((state, i) => (state[i] & State.deleted) !== 0), State.deleted, BitOp.CLEAR, State.deleted);
     }
 }
 
@@ -535,6 +615,8 @@ class SplatRenameOp {
 
 export {
     EditOp,
+    SelectMode,
+    StateOp,
     SelectAllOp,
     SelectNoneOp,
     SelectInvertOp,

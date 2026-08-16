@@ -36,7 +36,14 @@ type BoxOptions = {
     box: { transform: Mat4 };
 };
 
-type IntersectOptions = MaskOptions | RectOptions | SphereOptions | BoxOptions;
+// A screen-space query means nothing without the view it was made on, so a
+// caller replaying one supplies the matrix it captured. Omitted, the live
+// camera is used, which is what an interactive gesture wants.
+type ViewOverride = {
+    viewProjection?: Mat4;
+};
+
+type IntersectOptions = (MaskOptions | RectOptions | SphereOptions | BoxOptions) & ViewOverride;
 
 const shapeInvMat = new Mat4();
 const identityMat = new Mat4();
@@ -120,8 +127,12 @@ class Intersect {
         const transformPalette = splat.transformPalette.texture;
 
         // update view projection matrix
-        const camera = splat.scene.camera.camera;
-        this.viewProjectionMat.mul2(camera.projectionMatrix, camera.viewMatrix);
+        if (options.viewProjection) {
+            this.viewProjectionMat.copy(options.viewProjection);
+        } else {
+            const camera = splat.scene.camera.camera;
+            this.viewProjectionMat.mul2(camera.projectionMatrix, camera.viewMatrix);
+        }
 
         // allocate resources
         const resources = this.getResources(transformA.width, numSplats);

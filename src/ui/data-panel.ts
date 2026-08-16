@@ -812,33 +812,19 @@ class DataPanel extends Container {
             hideStats();
             if (!splat) return;
 
-            // capture state synchronously at drag-end and enqueue the whole
-            // gpu pass + select fire on the shared command queue. queue ordering
-            // guarantees this select runs after any in-flight histogram update
-            // and that any subsequent operation runs after this select's
-            // edit.add lands in history. no defensive token / target-splat
-            // checks are needed.
-            const targetSplat = splat;
-            const mode = lastGpuMode;
-            const minValue = histogram.histogram.minValue;
-            const maxValue = histogram.histogram.maxValue;
-            const numBins = histogram.histogram.bins.length;
-            const opts = buildGpuOpts();
-
-            targetSplat.scene.commandQueue.enqueue(async () => {
-                const data = await targetSplat.scene.dataProcessor.selectByRange(targetSplat, mode, {
-                    ...opts,
-                    min: minValue,
-                    max: maxValue,
-                    numBins,
-                    rangeStart: start,
-                    rangeEnd: end
-                });
-                // SelectOp (via 'select.mask') consumes the bytes synchronously
-                // in its constructor, so the buffer is safe to release once
-                // events.fire returns.
-                events.fire('select.mask', op, data);
-                targetSplat.scene.dataProcessor.releaseMask(data);
+            // The numbers behind the drag are what gets stored - the gpu pass
+            // now happens inside the op, when it applies. That keeps the
+            // bucket range adjustable afterwards, and it drops the separate
+            // enqueue here: history already serializes on the same queue.
+            events.fire('select.byDataRange', op, {
+                kind: 'range',
+                mode: lastGpuMode,
+                min: histogram.histogram.minValue,
+                max: histogram.histogram.maxValue,
+                numBins: histogram.histogram.bins.length,
+                rangeStart: start,
+                rangeEnd: end,
+                onScreenOnly: !!inputs.onScreenOnly
             });
         });
     }

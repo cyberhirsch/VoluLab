@@ -1,7 +1,8 @@
 import { Container } from '@playcanvas/pcui';
 
-import { EditOp, MultiOp } from '../edit-ops';
+import { EditOp, MultiOp, SelectOp } from '../edit-ops';
 import { Events } from '../events';
+import { describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
 
 /**
@@ -82,6 +83,8 @@ interface NodeModel {
     y: number;
     applied: boolean;
     splat: Splat | null;
+    /** set on selections: false where the query can be run again */
+    frozen?: boolean;
 }
 
 interface EdgeModel {
@@ -143,7 +146,10 @@ class NodePanel extends Container {
         events.on('scene.elementRemoved', refresh);
         events.on('splat.name', refresh);
 
-        this.rebuild();
+        // The panel is built before main.ts has registered the scene and
+        // history accessors it reads, so the first draw waits for the current
+        // synchronous startup to finish rather than asking too early.
+        queueMicrotask(refresh);
     }
 
     /** Pan by dragging the background, zoom on the wheel, double-click to reset. */
@@ -254,12 +260,17 @@ class NodePanel extends Container {
             if (key === null && laneOf(null).length === 0) {
                 add(null, { index: -1, kind: 'scene', name: '', applied: true, splat: null });
             }
+            // a selection shows what it selects by, not merely that it selected
+            const select = op instanceof SelectOp ? op : null;
             add(key, {
                 index: i,
-                kind: opLabel(op),
-                name: '',
+                kind: select ?
+                    (select.mode === 'set' ? 'select' : `select ${select.mode}`) :
+                    opLabel(op),
+                name: select ? describeQuery(select.query) : '',
                 applied: i < cursor,
-                splat
+                splat,
+                frozen: select ? !isParametric(select.query) : undefined
             });
         });
 
@@ -314,6 +325,8 @@ class NodePanel extends Container {
         el.className = 'np-node';
         if (!node.applied) el.classList.add('np-pending');
         if (node.index === -1) el.classList.add('np-source');
+        // a stored hit set rather than a query that can be turned
+        if (node.frozen) el.classList.add('np-frozen');
         el.style.left = `${node.x}px`;
         el.style.top = `${node.y}px`;
         el.style.width = `${NODE_W}px`;

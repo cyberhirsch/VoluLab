@@ -2,14 +2,17 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Quat, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { EditHistory } from './edit-history';
-import { SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, ResetOp, MultiOp, AddSplatOp, SetLocalFrameOp } from './edit-ops';
+import { SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, ResetOp, MultiOp, AddSplatOp, SetLocalFrameOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
+import { IndexRanges } from './index-ranges';
 import type { GridPlane } from './infinite-grid';
 import { MappedReadFileSystem } from './io';
 import { Scene } from './scene';
+import { RangeQuery, SelectQuery } from './select-query';
 import { Splat } from './splat';
 import { writeSplatFile } from './splat-serialize';
+import { State } from './splat-state';
 
 const removeExtension = (filename: string) => {
     return filename.substring(0, filename.length - path.getExtension(filename).length);
@@ -389,51 +392,60 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         });
     });
 
-    events.on('select.mask', (op: 'add'|'remove'|'set'|'intersect', mask: Uint8Array | Uint32Array) => {
+    // The view a screen-space gesture was made on. A lasso or a rectangle is
+    // meaningless without it, so the query carries a copy rather than looking
+    // the camera up again when it re-runs.
+    const capturedView = () => {
+        const cam = scene.camera.camera;
+        return new Mat4().mul2(cam.projectionMatrix, cam.viewMatrix);
+    };
+
+    // A hit set with no parameters behind it. Used where the intent genuinely
+    // is "these gaussians" - see the note in select-query.ts.
+    const freeze = (source: string, sel: Uint8Array | Uint32Array, numSplats: number): SelectQuery => {
+        return {
+            kind: 'frozen',
+            source,
+            hits: sel instanceof Uint32Array ?
+                IndexRanges.fromSorted(sel) :
+                IndexRanges.fromPredicate(numSplats, i => sel[i] === 255)
+        };
+    };
+
+    const addSelect = (splat: Splat, op: SelectMode, query: SelectQuery) => {
+        events.fire('edit.add', new SelectOp(splat, op, query));
+    };
+
+    events.on('select.mask', (op: SelectMode, mask: Uint8Array | Uint32Array) => {
         selectedSplats().forEach((splat) => {
-            events.fire('edit.add', new SelectOp(splat, op, mask));
+            addSelect(splat, op, freeze('mask', mask, splat.splatData.numSplats));
         });
     });
 
-    // run the GPU intersect + the resulting SelectOp inside one queued task so the
-    // gpu readback is ordered relative to other queued history ops (rapid drag +
-    // undo, drag-while-camera-settling, etc).
-    const runSelectIntersect = (splat: Splat, op: 'add'|'remove'|'set'|'intersect', options: any) => {
-        return scene.commandQueue.enqueue(async () => {
-            const data = await scene.dataProcessor.intersect(options, splat);
-            // SelectOp consumes `data` synchronously in its constructor
-            // (IndexRanges.fromPredicate iterates immediately), so we can
-            // return the buffer to the pool as soon as the op is constructed.
-            events.fire('edit.add', new SelectOp(splat, op, data));
-            scene.dataProcessor.releaseMask(data);
-        });
-    };
+    // a bucket range from the data panel's histogram
+    events.on('select.byDataRange', (op: SelectMode, query: RangeQuery) => {
+        selectedSplats().forEach(splat => addSelect(splat, op, query));
+    });
 
     // transform maps the unit sphere (diameter 1) to world space
-    events.on('select.bySphere', async (op: 'add'|'remove'|'set'|'intersect', transform: Mat4) => {
-        for (const splat of selectedSplats()) {
-            await runSelectIntersect(splat, op, {
-                sphere: { transform }
-            });
-        }
+    events.on('select.bySphere', (op: SelectMode, transform: Mat4) => {
+        selectedSplats().forEach(splat => addSelect(splat, op, { kind: 'sphere', transform }));
     });
 
     // transform maps the unit cube (side 1) to world space
-    events.on('select.byBox', async (op: 'add'|'remove'|'set'|'intersect', transform: Mat4) => {
-        for (const splat of selectedSplats()) {
-            await runSelectIntersect(splat, op, {
-                box: { transform }
-            });
-        }
+    events.on('select.byBox', (op: SelectMode, transform: Mat4) => {
+        selectedSplats().forEach(splat => addSelect(splat, op, { kind: 'box', transform }));
     });
 
-    events.function('select.rect', async (op: 'add'|'remove'|'set'|'intersect', rect: any) => {
+    events.function('select.rect', async (op: SelectMode, rect: any) => {
         const mode = events.invoke('camera.mode');
 
         for (const splat of selectedSplats()) {
             if (mode === 'centers') {
-                await runSelectIntersect(splat, op, {
-                    rect: { x1: rect.start.x, y1: rect.start.y, x2: rect.end.x, y2: rect.end.y }
+                addSelect(splat, op, {
+                    kind: 'rect',
+                    rect: { x1: rect.start.x, y1: rect.start.y, x2: rect.end.x, y2: rect.end.y },
+                    viewProjection: capturedView()
                 });
             } else if (mode === 'rings') {
                 scene.camera.pickPrep(splat, op);
@@ -445,18 +457,39 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                 );
 
                 const sortedIds = new Uint32Array(new Set(pick)).sort();
-                events.fire('edit.add', new SelectOp(splat, op, sortedIds));
+                // ring-mode picks come off the gpu picker, which would need a
+                // re-render to reproduce, so the hit set is what gets stored
+                addSelect(splat, op, freeze('rectangle', sortedIds, splat.splatData.numSplats));
             }
         }
     });
 
     let maskTexture: Texture = null;
 
-    events.function('select.byMask', async (op: 'add'|'remove'|'set'|'intersect', canvas: HTMLCanvasElement, context: CanvasRenderingContext2D) => {
+    /**
+     * A painted mask.
+     *
+     * `poly` is the outline where the gesture had one - a lasso or a clicked
+     * polygon - and the query keeps it so the selection can be rasterized and
+     * run again. A brush stroke or a flood fill has no outline to keep, only
+     * pixels, so those resolve once here and freeze.
+     */
+    events.function('select.byMask', async (op: SelectMode, canvas: HTMLCanvasElement, context: CanvasRenderingContext2D, poly?: { x: number, y: number }[]) => {
         const mode = events.invoke('camera.mode');
 
         for (const splat of selectedSplats()) {
             if (mode === 'centers') {
+                if (poly?.length) {
+                    addSelect(splat, op, {
+                        kind: 'poly',
+                        points: poly.map(p => ({ x: p.x, y: p.y })),
+                        width: canvas.width,
+                        height: canvas.height,
+                        viewProjection: capturedView()
+                    });
+                    continue;
+                }
+
                 // create mask texture
                 if (!maskTexture || maskTexture.width !== canvas.width || maskTexture.height !== canvas.height) {
                     if (maskTexture) {
@@ -466,8 +499,13 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                 }
                 maskTexture.setSource(canvas);
 
-                await runSelectIntersect(splat, op, {
-                    mask: maskTexture
+                // pinned for the queued task: maskTexture is reused across
+                // gestures and may be replaced before this runs
+                const texture = maskTexture;
+                await scene.commandQueue.enqueue(async () => {
+                    const data = await scene.dataProcessor.intersect({ mask: texture }, splat);
+                    addSelect(splat, op, freeze('paint', data, splat.splatData.numSplats));
+                    scene.dataProcessor.releaseMask(data);
                 });
             } else if (mode === 'rings') {
                 const mask = context.getImageData(0, 0, canvas.width, canvas.height);
@@ -520,47 +558,23 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                 }
 
                 const sortedIds = new Uint32Array(selected).sort();
-                events.fire('edit.add', new SelectOp(splat, op, sortedIds));
+                addSelect(splat, op, freeze('paint', sortedIds, splat.splatData.numSplats));
             }
         }
     });
 
-    events.function('select.point', async (op: 'add'|'remove'|'set'|'intersect', point: { x: number, y: number }) => {
+    events.function('select.point', async (op: SelectMode, point: { x: number, y: number }) => {
         const { width, height } = scene.targetSize;
         const mode = events.invoke('camera.mode');
 
         for (const splat of selectedSplats()) {
-            const splatData = splat.splatData;
-
             if (mode === 'centers') {
-                const x = splatData.getProp('x');
-                const y = splatData.getProp('y');
-                const z = splatData.getProp('z');
-
-                const splatSize = events.invoke('camera.splatSize');
-                const camera = scene.camera.camera;
-                const sx = point.x * width;
-                const sy = point.y * height;
-
-                // calculate final matrix
-                mat.mul2(camera.camera._viewProjMat, splat.worldTransform);
-
-                // materialize hits into an owned mask. SelectOp consumes a
-                // committed snapshot rather than a closure so we never have to
-                // worry about state shifting between capture and apply.
-                const numSplats = splatData.numSplats;
-                const mask = new Uint8Array(numSplats);
-                for (let i = 0; i < numSplats; i++) {
-                    vec4.set(x[i], y[i], z[i], 1.0);
-                    mat.transformVec4(vec4, vec4);
-                    const px = (vec4.x / vec4.w * 0.5 + 0.5) * width;
-                    const py = (-vec4.y / vec4.w * 0.5 + 0.5) * height;
-                    if (Math.abs(px - sx) < splatSize && Math.abs(py - sy) < splatSize) {
-                        mask[i] = 255;
-                    }
-                }
-
-                events.fire('edit.add', new SelectOp(splat, op, mask));
+                addSelect(splat, op, {
+                    kind: 'point',
+                    point: { x: point.x, y: point.y },
+                    size: events.invoke('camera.splatSize'),
+                    viewProjection: capturedView()
+                });
             } else if (mode === 'rings') {
                 scene.camera.pickPrep(splat, op);
 
@@ -571,8 +585,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                     1 / width,
                     1 / height
                 );
-                const pickId = pickResult[0];
-                events.fire('edit.add', new SelectOp(splat, op, new Uint32Array([pickId])));
+                addSelect(splat, op, freeze('click', new Uint32Array([pickResult[0]]), splat.splatData.numSplats));
             }
         }
     });
@@ -582,7 +595,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // TO DO:
     // -  alternative distance metrics such as HSV.
     // -  alternative UI for threshold, two handles for min/max?
-    events.function('select.colorMatch', async (op: 'add'|'remove'|'set', point: { x: number, y: number }, threshold = 0) => {
+    events.function('select.colorMatch', async (op: SelectMode, point: { x: number, y: number }, threshold = 0) => {
         const splats = selectedSplats();
         const targetSize = scene.targetSize;
         if (!splats.length || !targetSize || !point) {
@@ -615,24 +628,18 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             if (!reds || !greens || !blues || pickId < 0 || pickId >= reds.length) {
                 continue;
             }
-            // decode color channels for the reference pixel
-            const refR = decodeColorChannel(reds[pickId]);
-            const refG = decodeColorChannel(greens[pickId]);
-            const refB = decodeColorChannel(blues[pickId]);
-
-            // materialize hits into an owned mask up front; SelectOp consumes
-            // a committed snapshot.
-            const numSplats = splat.splatData.numSplats;
-            const mask = new Uint8Array(numSplats);
-            for (let i = 0; i < numSplats; i++) {
-                if (Math.abs(decodeColorChannel(reds[i]) - refR) <= colorThreshold &&
-                    Math.abs(decodeColorChannel(greens[i]) - refG) <= colorThreshold &&
-                    Math.abs(decodeColorChannel(blues[i]) - refB) <= colorThreshold) {
-                    mask[i] = 255;
-                }
-            }
-
-            events.fire('edit.add', new SelectOp(splat, op, mask));
+            // The pick is the only part that needs the camera. Once the
+            // reference colour is read the query is pure data, so the threshold
+            // stays adjustable long after the click that set it.
+            addSelect(splat, op, {
+                kind: 'color',
+                ref: {
+                    r: decodeColorChannel(reds[pickId]),
+                    g: decodeColorChannel(greens[pickId]),
+                    b: decodeColorChannel(blues[pickId])
+                },
+                threshold: colorThreshold
+            });
         }
     });
 
@@ -642,10 +649,21 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         });
     });
 
+    // whether a splat has anything hidden that unhiding would actually reveal.
+    // checked before constructing the op rather than by resolving it, so an op
+    // that resolves at do() time is not forced to answer early.
+    const hasHidden = (splat: Splat) => {
+        const state = splat.splatData.getProp('state') as Uint8Array;
+        for (let i = 0; i < splat.splatData.numSplats; ++i) {
+            if ((state[i] & (State.locked | State.deleted)) === State.locked) return true;
+        }
+        return false;
+    };
+
     events.on('select.unhide', () => {
         const ops = (scene.getElementsByType(ElementType.splat) as Splat[])
-        .map(splat => new UnhideAllOp(splat))
-        .filter(op => !op.ranges.empty);
+        .filter(hasHidden)
+        .map(splat => new UnhideAllOp(splat));
 
         if (ops.length > 0) {
             events.fire('edit.add', ops.length === 1 ? ops[0] : new MultiOp(ops));

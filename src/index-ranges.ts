@@ -63,6 +63,42 @@ class IndexRanges {
         return new IndexRanges(new Uint32Array(ranges));
     }
 
+    /** Build ranges directly from indices already known to be sorted and unique. */
+    static fromSorted(sortedIds: Uint32Array) {
+        return IndexRanges.fromPredicate(
+            sortedIds.length ? sortedIds[sortedIds.length - 1] + 1 : 0,
+            sortedPredicate(sortedIds)
+        );
+    }
+
+    /**
+     * A cursor-based membership test, for feeding these ranges back into
+     * fromPredicate. Like sortedPredicate it must be called with strictly
+     * increasing i, which is what fromPredicate guarantees.
+     */
+    predicate(): (i: number) => boolean {
+        const { data } = this;
+        let r = 0;
+        let start = 0;
+        let end = 0;
+
+        return (i: number) => {
+            // advance past runs that end before i
+            while (i >= end && r < data.length) {
+                if (data[r] & SINGLE_BIT) {
+                    start = data[r] & INDEX_MASK;
+                    end = start + 1;
+                    r += 1;
+                } else {
+                    start = data[r];
+                    end = start + data[r + 1];
+                    r += 2;
+                }
+            }
+            return i >= start && i < end;
+        };
+    }
+
     /** Whether there are no indices. */
     get empty() {
         return this.data.length === 0;

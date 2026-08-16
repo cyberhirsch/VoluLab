@@ -78,12 +78,14 @@ class LassoSelection {
             context.closePath();
             context.fill();
 
-            // wait for selection to complete
+            // the outline goes along with the raster: it is what makes the
+            // selection re-runnable, since the canvas is cleared after this
             await events.invoke(
                 'select.byMask',
                 opFromModifiers(e),
                 canvas,
-                context
+                context,
+                points
             );
         };
 

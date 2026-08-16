@@ -1,6 +1,7 @@
 import { CommandQueue } from './command-queue';
-import { EditOp, MultiOp } from './edit-ops';
+import { EditOp, MultiOp, SelectOp, StateOp } from './edit-ops';
 import { Events } from './events';
+import { SelectQuery } from './select-query';
 import { Splat } from './splat';
 
 // Check if an operation references a specific splat
@@ -32,6 +33,7 @@ class EditHistory {
         events.on('edit.add', (editOp: EditOp, suppressOp = false) => this.add(editOp, suppressOp));
         events.on('edit.removeForShape', (shape: unknown) => this.removeForShape(shape));
         events.on('edit.goto', (cursor: number) => this.goto(cursor));
+        events.function('edit.reselect', (index: number, query: SelectQuery) => this.reselect(index, query));
 
         // read access for views that draw the history rather than drive it -
         // the node panel builds its graph from this
@@ -112,6 +114,42 @@ class EditHistory {
                 await this._undo();
             }
             while (this.cursor < target) {
+                await this._redo();
+            }
+        });
+    }
+
+    /**
+     * Change the parameters of a selection already in the history, and rebuild
+     * everything that stood on it.
+     *
+     * The travel is what makes it non-destructive: wind back to before the op,
+     * swap its query, drop the resolved sets of everything after it, then wind
+     * forward again. Each op resolves itself against the state it now lands on,
+     * so a wider sphere at step two changes what step five deleted.
+     *
+     * Ops that froze a hit set - a brush stroke, a ring-mode pick - replay that
+     * set unchanged, because there is nothing else they could mean.
+     */
+    reselect(index: number, query: SelectQuery) {
+        const op = this.history[index];
+        if (!(op instanceof SelectOp)) return Promise.resolve();
+
+        return this.queue(async () => {
+            // read inside the task, not outside it: an add or undo issued just
+            // before this one may still be queued, and winding back to a cursor
+            // that had not happened yet leaves the tail of the history undone
+            const resume = this.cursor;
+
+            while (this.cursor > index) {
+                await this._undo();
+            }
+            op.setQuery(query);
+            for (let i = index; i < this.history.length; ++i) {
+                const later = this.history[i];
+                if (later instanceof StateOp) later.invalidate();
+            }
+            while (this.cursor < Math.max(resume, index + 1)) {
                 await this._redo();
             }
         });

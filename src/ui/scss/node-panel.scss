@@ -89,6 +89,14 @@
         border-color: $ink-4;
         background-color: $ink-2;
     }
+
+    // a stored hit set with no parameters behind it. Marked with a left rule
+    // rather than a different fill, so it reads as a qualifier on the node and
+    // not as another state of it.
+    &.np-frozen {
+        border-left-width: 3px;
+        border-left-color: $ink-4;
+    }
 }
 
 .np-node-kind {
@@ -106,6 +114,16 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+// on an operation the second line is the query's parameters, which are
+// supporting detail rather than the node's identity
+.np-node:not(.np-source) .np-node-name {
+    color: $ink-5;
+}
+
+.np-node.np-pending .np-node-name {
+    color: $ink-4;
 }
 
 // the little connector studs on the left and right edges
