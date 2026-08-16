@@ -1,8 +1,8 @@
 # Node backlog
 
-**Status.** Tier A is done except for making colour selection-scoped, which
-turned out to be the largest item in the document rather than the smallest -
-see the note below for why. Tiers B and C are untouched.
+**Status.** Tier A is done. Making colour selection-scoped turned out to be
+the largest item in the document rather than the smallest - the note below
+says why, and what the shape of it is. Tiers B and C are untouched.
 
 Candidate nodes for the graph, ordered by what they cost rather than by how
 they read. A lot of the work is already done: several of these are a *face*
@@ -85,12 +85,13 @@ No parameters to turn, so they report what they did: how many splats they
 touched, read from what the op resolved rather than recomputed, plus a line
 on what bypassing one means. `StateOp.affected` is the accessor.
 
-### Still missing from Tier A
+### Transform splats — done
 
-`SplatsTransformOp` (transform the selected gaussians rather than the whole
-object) has no node face. It is **already selection-scoped**, so it is the
-cheapest possible demonstration that the graph does real per-gaussian work,
-and worth doing next.
+`SplatsTransformOp` moves the selected gaussians rather than the object, so
+it is the one node that already does real per-gaussian work. Read-only: the
+op carries its matrix alongside a map of the transform-palette slots it moved
+things between, and the two have to agree, so editing the matrix would mean
+rebuilding the map. That is the gizmo's job rather than a text field's.
 
 ---
 
@@ -173,11 +174,10 @@ The bridge to voxels and the other volumetric formats named as targets.
 
 ## Recommended order from here
 
-1. **`SplatsTransformOp` node face** — small, and selection-scoped already.
-2. **Colour selection-scoped**, in the two steps above: matrix form first as
+1. **Colour selection-scoped**, in the two steps above: matrix form first as
    a safe no-op refactor, then the palette.
-3. **Cleanup** — the operation that would make this reached for daily.
-4. **SH bands node** — the file-size lever, and cheap next to Tier C.
+2. **Cleanup** — the operation that would make this reached for daily.
+3. **SH bands node** — the file-size lever, and cheap next to Tier C.
 
 ---
 

@@ -1,6 +1,7 @@
 import { Container } from '@playcanvas/pcui';
+import { Quat, Vec3 } from 'playcanvas';
 
-import { EditOp, EntityTransformOp, OutputFileType, OutputOp, SelectMode, SelectOp, SplatRenameOp, StateOp, principalOp } from '../edit-ops';
+import { EditOp, EntityTransformOp, OutputFileType, OutputOp, SelectMode, SelectOp, SplatRenameOp, SplatsTransformOp, StateOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -154,6 +155,12 @@ class NodePanel extends Container {
             return;
         }
 
+        if (op instanceof SplatsTransformOp) {
+            this.empty.hidden = true;
+            this.buildSplatsTransform(op);
+            return;
+        }
+
         if (op instanceof OutputOp) {
             this.empty.hidden = true;
             this.buildOutput(op, index);
@@ -264,6 +271,38 @@ class NodePanel extends Container {
         const note = document.createElement('div');
         note.className = 'nd-note';
         note.textContent = 'writes the object as it stands at this point in the chain, not as it stands now';
+        this.body.appendChild(note);
+    }
+
+    /**
+     * A transform of the selected gaussians rather than of the object.
+     *
+     * Read-only. The op carries the matrix it applied along with a map of the
+     * transform-palette slots it moved things between, and those two have to
+     * agree - so changing the matrix here would mean rebuilding the map, which
+     * is the gizmo's job rather than a text field's.
+     */
+    private buildSplatsTransform(op: SplatsTransformOp) {
+        const m = op.transform;
+        const t = new Vec3();
+        const s = new Vec3();
+        const r = new Quat();
+        m.getTranslation(t);
+        m.getScale(s);
+        r.setFromMat4(m);
+        const e = r.getEulerAngles();
+
+        const trio = (label: string, v: { x: number, y: number, z: number }) => {
+            this.stat(label, `${+v.x.toFixed(3)}, ${+v.y.toFixed(3)}, ${+v.z.toFixed(3)}`);
+        };
+
+        trio('moved by', t);
+        trio('rotated by', e);
+        trio('scaled by', s);
+
+        const note = document.createElement('div');
+        note.className = 'nd-note';
+        note.textContent = 'applies to the gaussians that were selected here. drag the gizmo in the viewport to change it';
         this.body.appendChild(note);
     }
 
