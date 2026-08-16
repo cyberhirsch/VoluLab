@@ -669,6 +669,45 @@ class AddSplatOp {
     }
 }
 
+/** The formats an output node can write. Viewer exports need their own settings. */
+type OutputFileType = 'ply' | 'compressedPly' | 'splat' | 'sog' | 'spz';
+
+type OutputSettings = {
+    fileType: OutputFileType;
+    filename: string;
+    maxSHBands: number;
+    /** write only the selected gaussians as they stand at this point */
+    selectedOnly: boolean;
+};
+
+/**
+ * A point in the chain that writes a file.
+ *
+ * Not an edit - `do` and `undo` do nothing, because exporting changes nothing
+ * about the scene. What an output node has is a *position*, and that is the
+ * whole point of it being in the chain: one placed before a delete writes the
+ * object with those splats still in it, and a second one further along writes
+ * the version without them. Two deliverables, one graph.
+ */
+class OutputOp {
+    name = 'output';
+    splat: Splat;
+    settings: OutputSettings;
+
+    constructor(splat: Splat, settings: OutputSettings) {
+        this.splat = splat;
+        this.settings = settings;
+    }
+
+    do() {}
+
+    undo() {}
+
+    destroy() {
+        this.splat = null;
+    }
+}
+
 class SplatRenameOp {
     name = 'splatRename';
     splat: Splat;
@@ -729,6 +768,9 @@ export {
     AnimTrackEditOp,
     MultiOp,
     principalOp,
+    OutputOp,
+    OutputSettings,
+    OutputFileType,
     AddSplatOp,
     SplatRenameOp
 };

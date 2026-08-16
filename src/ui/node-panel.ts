@@ -1,6 +1,6 @@
 import { Container } from '@playcanvas/pcui';
 
-import { EditOp, EntityTransformOp, SelectMode, SelectOp, SplatRenameOp, StateOp, principalOp } from '../edit-ops';
+import { EditOp, EntityTransformOp, OutputFileType, OutputOp, SelectMode, SelectOp, SplatRenameOp, StateOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -154,6 +154,12 @@ class NodePanel extends Container {
             return;
         }
 
+        if (op instanceof OutputOp) {
+            this.empty.hidden = true;
+            this.buildOutput(op, index);
+            return;
+        }
+
         if (op instanceof SplatRenameOp) {
             this.empty.hidden = true;
             this.stat('from', op.oldName);
@@ -163,6 +169,102 @@ class NodePanel extends Container {
 
         this.empty.hidden = false;
         this.empty.textContent = `${op.name} has no settings`;
+    }
+
+    /**
+     * What an output node writes, and the button that writes it.
+     *
+     * Nothing here is an edit, so the settings are changed in place and the
+     * pane simply redrawn - there is no history to replay for a node that
+     * changes nothing.
+     */
+    private buildOutput(op: OutputOp, index: number) {
+        const FORMATS: { type: OutputFileType, label: string, ext: string }[] = [
+            { type: 'ply', label: 'ply', ext: '.ply' },
+            { type: 'compressedPly', label: 'ply (compressed)', ext: '.compressed.ply' },
+            { type: 'splat', label: 'splat', ext: '.splat' },
+            { type: 'sog', label: 'sog', ext: '.sog' },
+            { type: 'spz', label: 'spz', ext: '.spz' }
+        ];
+
+        const formatRow = this.row('format');
+        const formats = document.createElement('div');
+        formats.className = 'nd-choices';
+        FORMATS.forEach(({ type, label, ext }) => {
+            const b = document.createElement('button');
+            b.className = 'nd-choice';
+            b.type = 'button';
+            b.textContent = label;
+            if (op.settings.fileType === type) b.classList.add('nd-choice-active');
+            b.addEventListener('click', () => {
+                op.settings.fileType = type;
+                // carry the name across, since the extension is the format's
+                const base = op.settings.filename.replace(/(\.compressed)?\.(ply|splat|sog|spz)$/i, '');
+                op.settings.filename = base + ext;
+                this.rebuild();
+            });
+            formats.appendChild(b);
+        });
+        formatRow.appendChild(formats);
+        this.body.appendChild(formatRow);
+
+        const nameRow = this.row('file');
+        const name = document.createElement('input');
+        name.type = 'text';
+        name.className = 'nd-text';
+        name.value = op.settings.filename;
+        name.addEventListener('keydown', e => e.stopPropagation());
+        name.addEventListener('change', () => {
+            op.settings.filename = name.value.trim() || op.settings.filename;
+        });
+        nameRow.appendChild(name);
+        this.body.appendChild(nameRow);
+
+        const bandsRow = this.row('sh bands');
+        const bands = document.createElement('input');
+        bands.type = 'range';
+        bands.className = 'nd-slider';
+        bands.min = '0';
+        bands.max = '3';
+        bands.step = '1';
+        bands.value = `${op.settings.maxSHBands}`;
+        const bandsOut = document.createElement('div');
+        bandsOut.className = 'nd-value';
+        bandsOut.textContent = `${op.settings.maxSHBands}`;
+        bands.addEventListener('input', () => {
+            bandsOut.textContent = bands.value;
+        });
+        bands.addEventListener('change', () => {
+            op.settings.maxSHBands = parseInt(bands.value, 10);
+        });
+        bandsRow.appendChild(bands);
+        bandsRow.appendChild(bandsOut);
+        this.body.appendChild(bandsRow);
+
+        const scopeRow = this.row('scope');
+        const scope = document.createElement('button');
+        scope.type = 'button';
+        scope.className = 'nd-choice';
+        scope.textContent = op.settings.selectedOnly ? 'selected only' : 'everything';
+        if (op.settings.selectedOnly) scope.classList.add('nd-choice-active');
+        scope.addEventListener('click', () => {
+            op.settings.selectedOnly = !op.settings.selectedOnly;
+            this.rebuild();
+        });
+        scopeRow.appendChild(scope);
+        this.body.appendChild(scopeRow);
+
+        const write = document.createElement('button');
+        write.type = 'button';
+        write.className = 'nd-action';
+        write.textContent = 'write file';
+        write.addEventListener('click', () => this.events.invoke('output.write', index));
+        this.body.appendChild(write);
+
+        const note = document.createElement('div');
+        note.className = 'nd-note';
+        note.textContent = 'writes the object as it stands at this point in the chain, not as it stands now';
+        this.body.appendChild(note);
     }
 
     /** What a state op did, and a note on what it means to bypass it. */

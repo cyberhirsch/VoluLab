@@ -69,7 +69,8 @@ const OP_LABELS: Record<string, string> = {
     setSplatColor: 'color grade',
     multiOp: 'combined edit',
     addSplat: 'add object',
-    splatRename: 'rename'
+    splatRename: 'rename',
+    output: 'output'
 };
 
 // A bundled edit is named by the member that does the work, not by the fact
@@ -136,6 +137,8 @@ interface NodeModel {
     bypassed?: boolean;
     /** first in its chain - an import has nothing feeding it */
     isSource?: boolean;
+    /** last in its chain by nature - an output writes, it does not pass on */
+    terminal?: boolean;
     /** what to key a stored position and a selection against */
     key: object;
 }
@@ -569,6 +572,7 @@ class GraphPanel extends Container {
                 applied: i < cursor,
                 splat,
                 select: !!select,
+                terminal: op.name === 'output',
                 bypassed: !!op.bypassed,
                 // frozen only when nothing in it can be re-run
                 frozen: steps.length ? steps.every(s => !isParametric(s.query)) : undefined,
@@ -673,11 +677,14 @@ class GraphPanel extends Container {
             el.appendChild(inPort);
         }
 
-        const outPort = document.createElement('div');
-        outPort.className = 'gn-port gn-port-out';
-        outPort.title = 'drag out to attach a node';
-        this.bindPortDrag(outPort, node);
-        el.appendChild(outPort);
+        // an output writes a file; nothing hangs off the far side of it
+        if (!node.terminal) {
+            const outPort = document.createElement('div');
+            outPort.className = 'gn-port gn-port-out';
+            outPort.title = 'drag out to attach a node';
+            this.bindPortDrag(outPort, node);
+            el.appendChild(outPort);
+        }
 
         if (this.selection.has(node.key)) el.classList.add('gn-selected');
         if (node.bypassed) el.classList.add('gn-bypassed');
@@ -771,6 +778,10 @@ class GraphPanel extends Container {
                     {
                         label: 'colour',
                         action: () => this.events.fire('graph.addColourNode', splat)
+                    },
+                    {
+                        label: 'output',
+                        action: () => this.events.fire('graph.addOutputNode', splat)
                     }
                 ] : [
                     { label: 'nothing attaches here', disabled: true, action: () => {} }
@@ -916,6 +927,12 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addColourNode')
+            },
+            {
+                label: 'add output node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addOutputNode')
             }
         ];
     }

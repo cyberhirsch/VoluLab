@@ -2,7 +2,7 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Quat, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { EditHistory } from './edit-history';
-import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, ResetOp, MultiOp, AddSplatOp, SetLocalFrameOp, SetSplatColorAdjustmentOp } from './edit-ops';
+import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, OutputOp, ResetOp, MultiOp, AddSplatOp, SetLocalFrameOp, SetSplatColorAdjustmentOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -524,6 +524,46 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         events.fire('selection', splat);
         return [splat];
     };
+
+    events.on('graph.addOutputNode', (target?: Splat) => {
+        addTarget(target).forEach((splat) => {
+            appendAndOpen(new OutputOp(splat, {
+                fileType: 'ply',
+                filename: `${removeExtension(splat.name ?? 'output')}.ply`,
+                maxSHBands: 3,
+                selectedOnly: false
+            }));
+        });
+    });
+
+    /**
+     * Write an output node's file.
+     *
+     * The history is wound to the node's position first, because that is what
+     * the node means: an output before a delete writes the object with those
+     * splats still in it. The cursor goes back where it was afterwards, so
+     * exporting is not itself an edit.
+     */
+    events.function('output.write', async (index: number) => {
+        const op = history().ops[index];
+        if (!(op instanceof OutputOp)) return;
+
+        const resume = history().cursor;
+        await editHistory.goto(index + 1);
+
+        const { fileType, filename, maxSHBands, selectedOnly } = op.settings;
+        const splatIdx = (events.invoke('scene.allSplats') as Splat[]).indexOf(op.splat);
+
+        try {
+            await events.invoke('scene.write', fileType, {
+                filename,
+                splatIdx: splatIdx < 0 ? 'all' : splatIdx,
+                serializeSettings: { maxSHBands, selected: selectedOnly }
+            });
+        } finally {
+            await editHistory.goto(resume);
+        }
+    });
 
     // an empty select node, waiting for a viewport gesture to fill it
     events.on('graph.addSelectNode', (target?: Splat) => {

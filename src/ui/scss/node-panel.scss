@@ -197,3 +197,23 @@
         margin: 0;
     }
 }
+
+// A node that does something when asked, rather than when a value changes.
+.nd-action {
+    margin: $gap $pad-x;
+    height: $h-control;
+    border: $border-width solid $ink-4;
+    border-radius: 0;
+    outline: none;
+    background-color: $ink-2;
+    color: $ink-6;
+    font-family: $font-mono;
+    font-size: $font-size;
+    cursor: pointer;
+
+    &:hover {
+        border-color: $clr-hilight;
+        background-color: $clr-hilight;
+        color: $clr-active;
+    }
+}
