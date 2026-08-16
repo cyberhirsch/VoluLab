@@ -18,6 +18,7 @@ import {
 
 import { drawPointsWithShader } from './draw-points';
 import { GRID_DIM, NUM_BINS } from './histogram-config';
+import { gradeTransform } from '../color-grade';
 import {
     fullscreenVS,
     tileMinMaxFS,
@@ -192,9 +193,9 @@ class CalcHistogram {
         const cameraPos = options?.cameraPos ?? zeroVec3;
         const onScreenOnly = options?.onScreenOnly ? 1 : 0;
 
-        // ColorGrade math, kept in sync with ColorGrade in src/color-grade.ts.
-        const { tintClr, temperature, saturation, brightness, blackPoint, whitePoint, transparency } = splat;
-        const cgInvRange = 1 / (whitePoint - blackPoint);
+        // the one derivation, so this cannot drift from what is rendered
+        const { saturation, transparency } = splat;
+        const { scale: cgScale, offset: cgOffset } = gradeTransform(splat);
 
         const values: any = {
             transformA,
@@ -210,12 +211,8 @@ class CalcHistogram {
             viewProjection: viewProjection.data,
             cameraWorldPos: [cameraPos.x, cameraPos.y, cameraPos.z],
             onScreenOnly,
-            cgScale: [
-                cgInvRange * tintClr.r * (1 + temperature),
-                cgInvRange * tintClr.g,
-                cgInvRange * tintClr.b * (1 - temperature)
-            ],
-            cgOffset: -blackPoint + brightness,
+            cgScale: [cgScale.r, cgScale.g, cgScale.b],
+            cgOffset,
             cgSaturation: saturation,
             transparency
         };

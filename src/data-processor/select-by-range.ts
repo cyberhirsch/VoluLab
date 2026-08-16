@@ -15,6 +15,7 @@ import {
 } from 'playcanvas';
 
 import { BufferPool } from './buffer-pool';
+import { gradeTransform } from '../color-grade';
 import { packedMaskHeight, packedMaskWidth } from './histogram-config';
 import { vertexShader, fragmentShader } from '../shaders/select-by-range-shader';
 import { Splat } from '../splat';
@@ -141,9 +142,9 @@ class SelectByRange {
         const cameraPos = options.cameraPos ?? zeroVec3;
         const onScreenOnly = options.onScreenOnly ? 1 : 0;
 
-        // ColorGrade math, kept in sync with ColorGrade in src/color-grade.ts.
-        const { tintClr, temperature, saturation, brightness, blackPoint, whitePoint, transparency } = splat;
-        const cgInvRange = 1 / (whitePoint - blackPoint);
+        // the one derivation, so this cannot drift from what is rendered
+        const { saturation, transparency } = splat;
+        const { scale: cgScale, offset: cgOffset } = gradeTransform(splat);
 
         const values: any = {
             transformA,
@@ -159,12 +160,8 @@ class SelectByRange {
             viewProjection: viewProjection.data,
             cameraWorldPos: [cameraPos.x, cameraPos.y, cameraPos.z],
             onScreenOnly,
-            cgScale: [
-                cgInvRange * tintClr.r * (1 + temperature),
-                cgInvRange * tintClr.g,
-                cgInvRange * tintClr.b * (1 - temperature)
-            ],
-            cgOffset: -blackPoint + brightness,
+            cgScale: [cgScale.r, cgScale.g, cgScale.b],
+            cgOffset,
             cgSaturation: saturation,
             transparency,
             output_params: [resources.texture.width, resources.texture.height],

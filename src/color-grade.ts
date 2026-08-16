@@ -12,6 +12,8 @@ type GradeParams = {
     tintClr: Color,
     temperature: number,
     saturation: number,
+    /** photographic stops: +1 doubles, -1 halves */
+    exposure?: number,
     brightness: number,
     blackPoint: number,
     whitePoint: number,
@@ -19,6 +21,37 @@ type GradeParams = {
 };
 
 type RGB = { r: number, g: number, b: number };
+
+/** the smallest gap allowed between the black and white points */
+const MIN_RANGE = 1e-3;
+
+/**
+ * What the grade reduces to: a per-channel scale and a shared offset.
+ *
+ * The same two numbers are needed by the renderer, the histogram, the range
+ * selector and the cpu path, and they were worked out separately in each -
+ * four copies of one formula, which is four chances for one of them to be
+ * left behind. Exposure is applied here, so it reaches all of them.
+ *
+ * Order matters: exposure multiplies before the black point is subtracted, so
+ * it behaves like exposing the shot rather than lifting the result.
+ */
+const gradeTransform = (p: GradeParams) => {
+    const gain = Math.pow(2, p.exposure ?? 0);
+    // white and black are independent sliders with nothing stopping them
+    // meeting or crossing, which divides by zero or inverts the image
+    const range = Math.max(MIN_RANGE, p.whitePoint - p.blackPoint);
+    const scale = gain / range;
+
+    return {
+        offset: -p.blackPoint + p.brightness,
+        scale: {
+            r: scale * p.tintClr.r * (1 + p.temperature),
+            g: scale * p.tintClr.g,
+            b: scale * p.tintClr.b * (1 - p.temperature)
+        }
+    };
+};
 
 class ColorGrade {
     private s: RGB;
@@ -29,13 +62,9 @@ class ColorGrade {
     readonly hasTint: boolean;
 
     constructor(p: GradeParams) {
-        const scale = 1 / (p.whitePoint - p.blackPoint);
-        this.s = {
-            r: scale * p.tintClr.r * (1 + p.temperature),
-            g: scale * p.tintClr.g,
-            b: scale * p.tintClr.b * (1 - p.temperature)
-        };
-        this.offset = -p.blackPoint + p.brightness;
+        const { scale, offset } = gradeTransform(p);
+        this.s = scale;
+        this.offset = offset;
         this.saturation = p.saturation;
         this.transparency = p.transparency;
 
@@ -43,6 +72,7 @@ class ColorGrade {
             !p.tintClr.equals(Color.WHITE) ||
             p.temperature !== 0 ||
             p.saturation !== 1 ||
+            (p.exposure ?? 0) !== 0 ||
             p.brightness !== 0 ||
             p.blackPoint !== 0 ||
             p.whitePoint !== 1
@@ -77,5 +107,5 @@ class ColorGrade {
     }
 }
 
-export { ColorGrade, dcDecode, dcEncode, sigmoid, invSigmoid, SH_C0 };
+export { ColorGrade, gradeTransform, dcDecode, dcEncode, sigmoid, invSigmoid, SH_C0 };
 export type { GradeParams, RGB };

@@ -57,6 +57,7 @@
     "panel.colors.tint": "色合い",
     "panel.colors.temperature": "温度",
     "panel.colors.saturation": "彩度",
+    "panel.colors.exposure": "露出",
     "panel.colors.brightness": "明るさ",
     "panel.colors.black-point": "黒点",
     "panel.colors.white-point": "白点",

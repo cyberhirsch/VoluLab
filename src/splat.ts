@@ -15,6 +15,7 @@ import {
     Vec3
 } from 'playcanvas';
 
+import { gradeTransform } from './color-grade';
 import { Element, ElementType } from './element';
 import { Serializer } from './serializer';
 import { vertexShader, fragmentShader, gsplatCenter } from './shaders/splat-shader';
@@ -67,6 +68,7 @@ class Splat extends Element {
     _tintClr = new Color(1, 1, 1);
     _temperature = 0;
     _saturation = 1;
+    _exposure = 0;
     _brightness = 0;
     _blackPoint = 0;
     _whitePoint = 1;
@@ -431,7 +433,7 @@ class Splat extends Element {
         serializer.pack(this.changedCounter);
         serializer.pack(this.visible);
         serializer.pack(this.tintClr.r, this.tintClr.g, this.tintClr.b);
-        serializer.pack(this.temperature, this.saturation, this.brightness, this.blackPoint, this.whitePoint, this.transparency);
+        serializer.pack(this.temperature, this.saturation, this.exposure, this.brightness, this.blackPoint, this.whitePoint, this.transparency);
     }
 
     onPreRender() {
@@ -460,17 +462,13 @@ class Splat extends Element {
         material.setParameter('unselectedClr', [unselectedClr.r, unselectedClr.g, unselectedClr.b, unselectedClr.a]);
         material.setParameter('lockedClr', [lockedClr.r, lockedClr.g, lockedClr.b, lockedClr.a]);
 
-        // combine black pointer, white point and brightness
-        const offset = -this.blackPoint + this.brightness;
-        const scale = 1 / (this.whitePoint - this.blackPoint);
+        // exposure, levels, tint and temperature all collapse into one scale
+        // and one offset - worked out in color-grade.ts so the renderer, the
+        // histogram and the cpu path cannot drift apart
+        const { offset, scale } = gradeTransform(this);
 
         material.setParameter('clrOffset', [offset, offset, offset]);
-        material.setParameter('clrScale', [
-            scale * this.tintClr.r * (1 + this.temperature),
-            scale * this.tintClr.g,
-            scale * this.tintClr.b * (1 - this.temperature),
-            this.transparency
-        ]);
+        material.setParameter('clrScale', [scale.r, scale.g, scale.b, this.transparency]);
 
         material.setParameter('saturation', this.saturation);
         material.setParameter('transformPalette', this.transformPalette.texture);
@@ -590,6 +588,18 @@ class Splat extends Element {
         return this._saturation;
     }
 
+    /** stops, not a factor: +1 doubles the light, -1 halves it */
+    set exposure(value: number) {
+        if (value !== this._exposure) {
+            this._exposure = value;
+            this.scene.events.fire('splat.exposure', this);
+        }
+    }
+
+    get exposure() {
+        return this._exposure;
+    }
+
     set brightness(value: number) {
         if (value !== this._brightness) {
             this._brightness = value;
@@ -670,6 +680,7 @@ class Splat extends Element {
             tintClr: packC(this.tintClr),
             temperature: this.temperature,
             saturation: this.saturation,
+            exposure: this.exposure,
             brightness: this.brightness,
             blackPoint: this.blackPoint,
             whitePoint: this.whitePoint,
@@ -689,6 +700,8 @@ class Splat extends Element {
         this.tintClr = new Color(tintClr[0], tintClr[1], tintClr[2], tintClr[3]);
         this.temperature = temperature ?? 0;
         this.saturation = saturation ?? 1;
+        // older documents predate exposure
+        this.exposure = doc.exposure ?? 0;
         this.brightness = brightness;
         this.blackPoint = blackPoint;
         this.whitePoint = whitePoint;

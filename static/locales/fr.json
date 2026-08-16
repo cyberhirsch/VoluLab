@@ -57,6 +57,7 @@
     "panel.colors.tint": "Teinte",
     "panel.colors.temperature": "Température",
     "panel.colors.saturation": "Saturation",
+    "panel.colors.exposure": "Exposition",
     "panel.colors.brightness": "Luminosité",
     "panel.colors.black-point": "Point noir",
     "panel.colors.white-point": "Point blanc",

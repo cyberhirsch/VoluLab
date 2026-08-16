@@ -102,6 +102,32 @@ class ColorPanel extends Container {
         saturationRow.append(saturationLabel);
         saturationRow.append(saturationSlider);
 
+        // exposure, in stops
+
+        const exposureRow = new Container({
+            class: 'color-panel-row'
+        });
+
+        const exposureLabel = new Label({
+            class: 'color-panel-row-label'
+        });
+        i18n.bindText(exposureLabel, 'panel.colors.exposure');
+
+        // A multiply, where brightness is an add. Stops rather than a factor,
+        // because that is the unit the change is actually thought in, and it
+        // makes the ends of the range useful instead of crowded at one side.
+        const exposureSlider = new MyFancySliderInput({
+            class: 'color-panel-row-slider',
+            min: -10,
+            max: 10,
+            step: 0.1,
+            precision: 2,
+            value: 0
+        });
+
+        exposureRow.append(exposureLabel);
+        exposureRow.append(exposureSlider);
+
         // brightness
 
         const brightnessRow = new Container({
@@ -113,12 +139,16 @@ class ColorPanel extends Container {
         });
         i18n.bindText(brightnessLabel, 'panel.colors.brightness');
 
+        // Brightness is a lift, added after the levels have scaled the signal
+        // up - so on a narrow white point the old +/-1 could not reach. Large
+        // changes belong to exposure; this is the fine adjustment, with room.
         const brightnessSlider = new MyFancySliderInput({
             class: 'color-panel-row-slider',
-            min: -1,
-            max: 1,
-            step: 0.1,
-            value: 1
+            min: -2,
+            max: 2,
+            step: 0.01,
+            precision: 3,
+            value: 0
         });
 
         brightnessRow.append(brightnessLabel);
@@ -208,6 +238,7 @@ class ColorPanel extends Container {
         this.append(tintRow);
         this.append(temperatureRow);
         this.append(saturationRow);
+        this.append(exposureRow);
         this.append(brightnessRow);
         this.append(blackPointRow);
         this.append(whitePointRow);
@@ -227,6 +258,7 @@ class ColorPanel extends Container {
             tintPicker.value = splat ? [splat.tintClr.r, splat.tintClr.g, splat.tintClr.b] : [1, 1, 1];
             temperatureSlider.value = splat ? splat.temperature : 0;
             saturationSlider.value = splat ? splat.saturation : 0;
+            exposureSlider.value = splat ? splat.exposure : 0;
             brightnessSlider.value = splat ? splat.brightness : 0;
             blackPointSlider.value = splat ? splat.blackPoint : 0;
             whitePointSlider.value = splat ? splat.whitePoint : 1;
@@ -242,6 +274,7 @@ class ColorPanel extends Container {
                         tintClr: selected.tintClr.clone(),
                         temperature: selected.temperature,
                         saturation: selected.saturation,
+                        exposure: selected.exposure,
                         brightness: selected.brightness,
                         blackPoint: selected.blackPoint,
                         whitePoint: selected.whitePoint,
@@ -251,6 +284,7 @@ class ColorPanel extends Container {
                         tintClr: selected.tintClr.clone(),
                         temperature: selected.temperature,
                         saturation: selected.saturation,
+                        exposure: selected.exposure,
                         brightness: selected.brightness,
                         blackPoint: selected.blackPoint,
                         whitePoint: selected.whitePoint,
@@ -266,6 +300,7 @@ class ColorPanel extends Container {
                 newState.tintClr.set(tintPicker.value[0], tintPicker.value[1], tintPicker.value[2]);
                 newState.temperature = temperatureSlider.value;
                 newState.saturation = saturationSlider.value;
+                newState.exposure = exposureSlider.value;
                 newState.brightness = brightnessSlider.value;
                 newState.blackPoint = blackPointSlider.value;
                 newState.whitePoint = whitePointSlider.value;
@@ -293,7 +328,7 @@ class ColorPanel extends Container {
             }
         };
 
-        [temperatureSlider, saturationSlider, brightnessSlider, blackPointSlider, whitePointSlider, transparencySlider].forEach((slider) => {
+        [temperatureSlider, saturationSlider, exposureSlider, brightnessSlider, blackPointSlider, whitePointSlider, transparencySlider].forEach((slider) => {
             slider.on('slide:start', start);
             slider.on('slide:end', end);
         });
@@ -315,6 +350,12 @@ class ColorPanel extends Container {
         saturationSlider.on('change', (value: number) => {
             updateOp((op) => {
                 op.newState.saturation = value;
+            });
+        });
+
+        exposureSlider.on('change', (value: number) => {
+            updateOp((op) => {
+                op.newState.exposure = value;
             });
         });
 
@@ -367,6 +408,7 @@ class ColorPanel extends Container {
                         tintClr: selected.tintClr.clone(),
                         temperature: selected.temperature,
                         saturation: selected.saturation,
+                        exposure: selected.exposure,
                         brightness: selected.brightness,
                         blackPoint: selected.blackPoint,
                         whitePoint: selected.whitePoint,

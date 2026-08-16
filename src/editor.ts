@@ -537,6 +537,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                 tintClr: splat.tintClr.clone(),
                 temperature: splat.temperature,
                 saturation: splat.saturation,
+                exposure: splat.exposure,
                 brightness: splat.brightness,
                 blackPoint: splat.blackPoint,
                 whitePoint: splat.whitePoint,

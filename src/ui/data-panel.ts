@@ -594,7 +594,7 @@ class DataPanel extends Container {
 
         const colorEvents = [
             'splat.tintClr', 'splat.temperature', 'splat.saturation',
-            'splat.brightness', 'splat.blackPoint', 'splat.whitePoint',
+            'splat.exposure', 'splat.brightness', 'splat.blackPoint', 'splat.whitePoint',
             'splat.transparency'
         ];
         colorEvents.forEach((name) => {

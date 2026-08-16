@@ -57,6 +57,7 @@
     "panel.colors.tint": "색조",
     "panel.colors.temperature": "온도",
     "panel.colors.saturation": "채도",
+    "panel.colors.exposure": "노출",
     "panel.colors.brightness": "밝기",
     "panel.colors.black-point": "검은 점",
     "panel.colors.white-point": "흰 점",
