@@ -106,29 +106,48 @@ puts every surface gaussian on the boundary.
 Only ever adds to what is deleted — widening it does not resurrect what an
 earlier node removed. Bypassing that node does.
 
-### Merge node
+### Merge node — decided, not started
 
-Two objects into one.
+Two objects into one. **Decided: build the DAG.**
 
-- Needed: **a second input**, which is the real cost. The chain is linear
-  today — one lane per object, order fixed by history — so a node with two
-  inputs is the point at which the graph has to become a genuine DAG. That
-  is an architectural change, not a computational one, and it should be
-  taken deliberately rather than as a side effect of wanting merge.
-- Exists: `AddSplatOp` and the duplicate/separate machinery in
-  `performSelectionFunc` (`src/editor.ts`).
+The real cost is the second input. The chain is linear today - one lane per
+object, order fixed by history - so a node with two inputs is the point at
+which the graph becomes a genuine DAG.
 
-### Frame / time node
+What that touches, all of it in service of one node:
 
-Where the 4D direction actually starts. Makes "grade this shot" mean
-something across a sequence rather than on one frame.
+- `src/workspace.ts` has nothing to do with this, but `src/ui/graph-panel.ts`
+  lays out lanes from `listPanes`-style tree walks and draws edges from the
+  chain order. Both assume one predecessor.
+- `EditHistory` replays a flat array. A DAG needs a topological order, and
+  `replayAround` needs to know what is downstream of a node rather than
+  assuming everything after it in the array is.
+- Undo currently means "walk the array backwards". With branches that is no
+  longer the same as reversing the last thing done.
 
-- Exists: `src/sequence.ts` (per-frame PLY loading,
-  `plysequence.setFrameAsync`), `src/anim-track.ts`, `src/timeline.ts`,
-  `AnimTrackEditOp`.
-- Needed: a node fixing which frame or frame range a branch applies to, and
-  a decision about what an edit means on a frame that has not been loaded
-  yet.
+`AddSplatOp` and the duplicate/separate machinery in `performSelectionFunc`
+(`src/editor.ts`) already do the data half.
+
+### Frame / time node — decided, not started
+
+Where the 4D direction actually starts. **Decided: one edit, all frames.**
+
+A node re-resolves per frame as frames load, so a sphere selection catches
+whatever is inside it on each frame and a grade follows the shot rather than
+the still.
+
+The consequence to design around: **freehand and frozen selections cannot
+follow.** A stored hit set is a list of indices into one frame's data and
+means nothing on another's. Those stay bound to the frame they were made on,
+and the node has to say so rather than silently applying nonsense - the graph
+already marks frozen selections, so the vocabulary exists.
+
+Decimate has the same problem in a quieter form: its ranking is not stable
+between frames, so a decimated sequence may shimmer. Worth fixing when this
+lands, not before.
+
+Exists: `src/sequence.ts` (per-frame PLY loading, `plysequence.setFrameAsync`),
+`src/anim-track.ts`, `src/timeline.ts`, `AnimTrackEditOp`.
 
 ---
 
@@ -154,29 +173,29 @@ until a fraction remains. Ranking rather than thresholding, because "keep
 Open: the ordering is not yet stable across the frames of a sequence, so a
 decimated sequence may shimmer. That matters only once the frame node exists.
 
-### Voxelise
+### Voxelise — decided, not started
 
 The bridge to voxels and the other volumetric formats named as targets.
+**Decided: a new element type**, not grid-aligned splats.
 
-- Resample gaussians onto a regular grid.
-- Needed: essentially all of it, plus a decision about what the output *is*
-  — a splat object that happens to be grid-aligned, or a genuinely different
-  element type the rest of the app has to understand.
+That means the rest of the app has to learn about a second kind of element:
+its own renderer, its own export path, its own selection behaviour, and a
+decision at every point that currently says `ElementType.splat`.
+
+Worth doing last for that reason - it is far easier to design a node whose
+output differs in kind from its input once the graph can express such a thing
+at all, which is the DAG.
 
 ---
 
 ## What is left
 
-Three, all decided (see below) and none started:
+Three, all decided and none started. Each has its own section above with what
+the decision implies:
 
-1. **Merge** — needs a second input, which means the chain stops being linear.
-   That is the moment this becomes a real DAG, and it should be chosen rather
-   than backed into.
-3. **Frame / time** — needs a decision about what an edit means on a frame
-   that has not been loaded yet.
-4. **Voxelise** — needs a decision about what the output *is*: a splat object
-   that happens to be grid-aligned, or a different element type the rest of
-   the app has to understand.
+1. **The DAG**, for merge. The largest and the hardest to walk back.
+2. **Frame / time** — one edit, all frames.
+3. **Voxelise** — a new element type.
 
 ---
 
