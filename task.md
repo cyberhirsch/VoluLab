@@ -1,6 +1,6 @@
 # What's next
 
-Everything outstanding, ordered by difficulty in the table below and then
+Everything outstanding, phased and ranked in the table below and then
 described in full: two pieces of work decided and not started, then the
 places where something built works and could work better. What is already
 built is in [CHANGELOG.md](CHANGELOG.md), with the reasoning kept.
@@ -14,55 +14,88 @@ Terms used below:
 
 ---
 
-## By difficulty, and who should take it
+## Phases, difficulty, and who should take it
 
-Hardest first. The model column is a starting point rather than a rule -
-what makes something hard here is rarely the amount of code.
+Most of this list is genuinely parallel. Five ordering constraints are not,
+and each one costs rework if ignored - they are what the phases are for. The
+model column is a starting point rather than a rule; what makes something
+hard here is rarely the amount of code.
 
-| # | Work | Model |
-|---|---|---|
-| 1 | WebGPU viewport | Fable 5 |
-| 2 | Node reordering | Fable 5 |
-| 3 | Colour beyond affine (gamma, contrast, curves) | Fable 5 |
-| 4 | COLMAP bridge | Opus 5 |
-| 5 | Precise replay invalidation | Opus 5 |
-| 6 | Frame-stable decimate ranking | Opus 5 |
-| 7 | A real temperature model | Opus 5 |
-| 8 | TGH frames off the main thread | Sonnet 5 |
-| 9 | Voxel renderer by instancing | Sonnet 5 |
-| 10 | Cleanup in a worker | Sonnet 5 |
-| 11 | Verify a training run end to end | Sonnet 5 |
-| 12 | Merge by dragging output onto input | Sonnet 5 |
-| 13 | A voxel export path | Sonnet 5 |
-| 14 | Seed training from an edited scene | Haiku 4.5 |
-| 15 | Rec.709 luma coefficients | Haiku 4.5 |
+| Phase | # | Work | Model |
+|---|---|---|---|
+| 0 | 11 | Verify a training run end to end | Sonnet 5 |
+| 1 | 4 | COLMAP bridge | Opus 5 |
+| 1 | 14 | Seed training from an edited scene | Haiku 4.5 |
+| 2 | 1 | WebGPU viewport | Fable 5 |
+| 2 | 9 | Voxel renderer by instancing | Sonnet 5 |
+| 2 | 8 | TGH frames off the main thread | Sonnet 5 |
+| 3 | 5 | Precise replay invalidation | Opus 5 |
+| 3 | 2 | Node reordering | Fable 5 |
+| 4 | 3 | Colour beyond affine (gamma, contrast, curves) | Fable 5 |
+| 4 | 7 | A real temperature model | Opus 5 |
+| 4 | 15 | Rec.709 luma coefficients | Haiku 4.5 |
+| — | 10 | Cleanup in a worker | Sonnet 5 |
+| — | 12 | Merge by dragging output onto input | Sonnet 5 |
+| — | 13 | A voxel export path | Sonnet 5 |
+| — | 6 | Frame-stable decimate ranking | Opus 5 |
 
-The top three are Fable work for the same reason in each case: they are not
-large, they are *load-bearing*. The WebGPU move has a genuine unknown at its
-centre and touches every shader in the app at once. Node reordering makes
-history stop being append-only, which is the assumption every op's undo is
-written against. And colour beyond affine breaks the property the whole grade
-palette rests on - grades compose by matrix multiply, and a gamma curve does
-not multiply. Each is a change to something other code already assumes.
+**Phase 0 gates everything else about training.** A training run has never
+been watched from dataset to committed node. Building the COLMAP bridge on
+top of a pipeline nobody has seen finish would mean debugging two unproven
+things through each other.
 
-The Opus four are substantial engineering with real decisions inside them,
-but no assumption gets overturned. The COLMAP bridge is the biggest by volume
-- a process, a protocol, two platforms - and the least likely to surprise
-anyone. Precise invalidation is the opposite shape: a small diff in
-`EditHistory` where being wrong corrupts state silently rather than throwing,
-which is what earns it the tier rather than its size.
+**Phase 1 finishes the training story** - video in, poses found, gaussians
+out, and a cleaned-up result usable as the seed for the next run. Seeding
+comes after verification because it is the same pipeline pointed at its own
+output; there is no sense building the loop before the line works.
 
-The Sonnet six are bounded work in patterns the codebase already contains -
-a worker like the ones discussed, a shader like the ones written, a drop
-target next to a drag source. Verifying the training run sits here because
-diagnosis is the job: the code is written, and what it needs is someone to
-drive it and read what breaks.
+**Phase 2 is the device move, and it must come before any new shader.** Voxel
+instancing needs a shader written, and writing it against WebGL2 weeks before
+the viewport moves to WebGPU means writing it twice. The TGH item is in this
+phase for a different reason: WebGPU changes what the right answer *is*.
+Today the fix is a worker and a frame cache; on one device the better fix is
+conditioning the 4D gaussians in the shader, and the CPU stops being involved
+at all. Doing the worker first is not wrong, but it is work that a later
+decision may throw away - so decide the device first and then pick.
 
-Two things at the bottom, and worth naming honestly: there is not much
-genuinely trivial work left in this project. Rec.709 is one constant and a
-decision someone else has to make; seeding from an edited scene is a zip
-writer and some wiring. Padding that tier with items from the one above would
-just move the surprise later.
+**Phase 3 is two changes to the same subsystem, in this order.** Precise
+invalidation means walking a node's `inputs` backwards to find what actually
+depends on it. Node reordering needs exactly that answer to know whether a
+proposed reorder is even legal - you cannot move a node above something it
+consumes. Building the dependency walk first as a small, testable change, and
+only then letting the graph be rearranged, is much safer than discovering the
+traversal was wrong while also having made history mutable.
+
+**Phase 4 is the colour pipeline, and the point is doing it at once.** All
+three change how every existing grade looks. Landing them separately means
+three rounds of everything shifting under the user; landing them together
+means one deliberate break with one explanation. Rec.709 in particular is a
+one-constant change that has been left alone precisely because it is not
+worth spending a visual regression on by itself.
+
+**The last four have no dependencies at all** and can be picked up whenever
+someone wants a clean, self-contained piece of work. Frame-stable decimate
+sits there rather than in a phase because it only starts to matter once
+someone is actually decimating sequences.
+
+On the tiers themselves: the Fable items are grouped not by size - all three
+are small diffs - but because each overturns an assumption other code relies
+on. WebGPU has a genuine unknown at its centre and touches every shader at
+once. Node reordering makes history stop being append-only, which is what
+every op's undo is written against. Colour beyond affine breaks the property
+the grade palette rests on, since grades compose by matrix multiply and a
+gamma curve does not.
+
+The Opus items are substantial work that overturns nothing. Two of them sit
+at opposite extremes of shape: the COLMAP bridge is the largest by volume and
+the least likely to surprise anyone, while precise invalidation is a small
+diff in `EditHistory` that earns its tier because being wrong there corrupts
+state silently rather than throwing.
+
+And worth naming honestly: there is not much genuinely trivial work left.
+Rec.709 is one constant plus a decision someone else has to make; seeding
+from an edited scene is a zip writer and some wiring. Padding that tier from
+the one above would only move the surprise later.
 
 ---
 
