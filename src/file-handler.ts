@@ -7,6 +7,8 @@ import { BrowserFileSystem, MappedReadFileSystem } from './io';
 import { Scene } from './scene';
 import { Splat } from './splat';
 import { SerializeSettings, serializeSog, serializeSpz, serializeViewer, SogSettings, SpzSettings, ViewerExportSettings, WebGPUUnavailableError, writeSplatFile } from './splat-serialize';
+import { TghFrameSource } from './tgh/tgh-frame-source';
+import { TghModel } from './tgh/tgh-model';
 import { i18n } from './ui/localization';
 
 // ts compiler and vscode find this type, but eslint does not
@@ -78,6 +80,12 @@ const filePickerTypes: { [key: string]: FilePickerAcceptType } = {
             'application/x-gaussian-splat': ['.spz']
         }
     },
+    'npz': {
+        description: 'TGH Checkpoint (Volumetric Video)',
+        accept: {
+            'application/x-numpy': ['.npz']
+        }
+    },
     'indexTxt': {
         description: 'Colmap Poses (Images.txt)',
         accept: {
@@ -105,6 +113,7 @@ const allImportTypes = {
         'application/x-gaussian-splat': ['.json', '.sog', '.splat', '.ksplat', '.spz'],
         'image/webp': ['.webp'],
         'application/x-lcc': ['.lcc', '.lcc2', '.bin'],
+        'application/x-numpy': ['.npz'],
         'text/plain': ['.txt']
     }
 };
@@ -265,6 +274,45 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         });
     };
 
+    // import a TGH volumetric video checkpoint: the model is held in memory
+    // and evaluated per frame by a TghFrameSource, so the whole sequence
+    // plays from this one file
+    const importTghModel = async (file: ImportFile) => {
+        events.fire('startSpinner');
+        try {
+            const blob: Blob = file.contents ?? await (await fetch(file.url)).blob();
+            const model = await TghModel.fromNpz(blob);
+
+            let frames = model.meta.frames;
+            if (!frames) {
+                // the checkpoint stores no timeline: ask
+                events.fire('stopSpinner');
+                const result = await events.invoke('showPopup', {
+                    type: 'okcancel',
+                    header: i18n.t('popup.tgh-frames-header'),
+                    message: i18n.t('popup.tgh-frames-message'),
+                    input: { value: '300' }
+                });
+                events.fire('startSpinner');
+                if (result.action !== 'ok') {
+                    return;
+                }
+                frames = Math.max(1, Math.floor(parseFloat(result.inputValue))) || 300;
+            }
+
+            const name = file.filename.replace(/\.npz$/i, '');
+            events.fire('sequence.setSource', new TghFrameSource(model, frames, scene, name));
+            if (model.meta.fps) {
+                events.fire('timeline.setFrameRate', model.meta.fps);
+            }
+            events.fire('timeline.frame', 0);
+        } catch (error) {
+            await showLoadError(error.message ?? error, file.filename);
+        } finally {
+            events.fire('stopSpinner');
+        }
+    };
+
     // import splat model(s) - handles single files, SOG, and LCC formats
     const importSplatModel = async (files: ImportFile[], animationFrame: boolean) => {
         try {
@@ -330,7 +378,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             // check for unrecognized file types
             for (let i = 0; i < filenames.length; i++) {
                 const filename = filenames[i].toLowerCase();
-                if (['.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz'].every(ext => !filename.endsWith(ext))) {
+                if (['.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz', '.npz'].every(ext => !filename.endsWith(ext))) {
                     await showLoadError('Unrecognized file type', filename);
                     return;
                 }
@@ -353,6 +401,9 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 } else if (filename.endsWith('.json')) {
                     // load inria camera poses
                     await loadCameraPoses(files[i], events);
+                } else if (filename.endsWith('.npz')) {
+                    // load a TGH volumetric video checkpoint
+                    await importTghModel(files[i]);
                 }
             }
         }
@@ -370,7 +421,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         fileSelector = document.createElement('input');
         fileSelector.setAttribute('id', 'file-selector');
         fileSelector.setAttribute('type', 'file');
-        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz');
+        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz,.npz');
         fileSelector.setAttribute('multiple', 'true');
 
         fileSelector.onchange = () => {
@@ -436,6 +487,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                         filePickerTypes.lcc,
                         filePickerTypes.ksplat,
                         filePickerTypes.spz,
+                        filePickerTypes.npz,
                         filePickerTypes.indexTxt
                     ]
                 });

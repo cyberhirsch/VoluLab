@@ -159,6 +159,11 @@ const registerSequenceEvents = (events: Events, scene: Scene) => {
         setSource(new PlyFrameSource(files, scene));
     });
 
+    // a caller-built source (e.g. a TGH model evaluated per frame)
+    events.on('sequence.setSource', (newSource: FrameSource) => {
+        setSource(newSource);
+    });
+
     events.on('timeline.frame', async (frame: number) => {
         await setFrame(frame);
     });
@@ -216,4 +221,4 @@ const registerSequenceEvents = (events: Events, scene: Scene) => {
     });
 };
 
-export { registerSequenceEvents };
+export { registerSequenceEvents, type FrameData, type FrameSource };

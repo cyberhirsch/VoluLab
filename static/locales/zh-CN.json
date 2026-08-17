@@ -139,6 +139,8 @@
     "popup.no": "否",
     "popup.error": "错误",
     "popup.error-loading": "加载文件错误",
+    "popup.tgh-frames-header": "体积视频时间轴",
+    "popup.tgh-frames-message": "此检查点未说明其跨越的帧数。请输入所捕捉序列的帧数:",
     "popup.webgpu-unavailable": "此导出需要 WebGPU，但当前浏览器不支持。请尝试使用最新版本的 Chrome、Edge 或 Safari。",
     "popup.load-options-header": "加载选项",
     "popup.lod-select-message": "此文件包含多个细节层级。请选择要加载的层级。",

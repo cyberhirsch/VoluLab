@@ -139,6 +139,8 @@
     "popup.no": "Não",
     "popup.error": "Erro",
     "popup.error-loading": "Erro ao Carregar Arquivo",
+    "popup.tgh-frames-header": "Linha do Tempo do Vídeo Volumétrico",
+    "popup.tgh-frames-message": "Este checkpoint não informa quantos quadros ele abrange. Insira o número de quadros da sequência capturada:",
     "popup.webgpu-unavailable": "Esta exportação requer WebGPU, que não está disponível neste navegador. Tente uma versão recente do Chrome, Edge ou Safari.",
     "popup.load-options-header": "Opções de Carregamento",
     "popup.lod-select-message": "Este arquivo contém vários níveis de detalhe. Selecione qual carregar.",

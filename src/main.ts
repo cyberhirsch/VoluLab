@@ -17,6 +17,7 @@ import { getSceneConfig } from './scene-config';
 import { registerSelectionEvents } from './selection';
 import { registerSequenceEvents } from './sequence';
 import { ShortcutManager } from './shortcut-manager';
+import { registerTghParityEvents } from './tgh/tgh-parity';
 import { registerTimelineEvents } from './timeline';
 import { BoxSelection } from './tools/box-selection';
 import { BrushSelection } from './tools/brush-selection';
@@ -266,6 +267,7 @@ const main = async () => {
     registerEditorEvents(events, editHistory, scene);
     registerSelectionEvents(events, scene);
     registerSequenceEvents(events, scene);
+    registerTghParityEvents(events);
     registerDocEvents(scene, events);
     registerRenderEvents(scene, events);
     initFileHandler(scene, events, editorUI.appContainer.dom);

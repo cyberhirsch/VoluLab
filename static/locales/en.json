@@ -139,6 +139,8 @@
     "popup.no": "No",
     "popup.error": "Error",
     "popup.error-loading": "Error Loading File",
+    "popup.tgh-frames-header": "Volumetric Video Timeline",
+    "popup.tgh-frames-message": "This checkpoint does not say how many frames it spans. Enter the frame count of the captured sequence:",
     "popup.webgpu-unavailable": "This export requires WebGPU, which is not available in this browser. Please try a recent version of Chrome, Edge or Safari.",
     "popup.load-options-header": "Load Options",
     "popup.lod-select-message": "This file contains multiple levels of detail. Select which one to load.",

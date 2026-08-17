@@ -139,6 +139,8 @@
     "popup.no": "Nein",
     "popup.error": "Fehler",
     "popup.error-loading": "Fehler beim Laden der Datei",
+    "popup.tgh-frames-header": "Volumetrische Video-Zeitleiste",
+    "popup.tgh-frames-message": "Dieser Checkpoint enthält keine Angabe zur Frame-Anzahl. Anzahl der Frames der aufgenommenen Sequenz eingeben:",
     "popup.webgpu-unavailable": "Dieser Export erfordert WebGPU, das in diesem Browser nicht verfügbar ist. Bitte verwenden Sie eine aktuelle Version von Chrome, Edge oder Safari.",
     "popup.load-options-header": "Ladeoptionen",
     "popup.lod-select-message": "Diese Datei enthält mehrere Detailstufen. Wählen Sie aus, welche geladen werden soll.",

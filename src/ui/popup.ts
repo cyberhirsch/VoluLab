@@ -13,6 +13,10 @@ interface ShowOptions {
         options: { v: string, t: string }[];
         value: string;
     };
+    input?: {           // free text entry, returned as ShowResult.inputValue
+        value: string;
+        placeholder?: string;
+    };
     warning?: {         // secondary note below the select
         text: string;
         link?: string;  // optional link rendered inline after the text
@@ -22,6 +26,7 @@ interface ShowOptions {
 type ShowResult = {
     action: string;
     value?: string;
+    inputValue?: string;
 };
 
 class Popup extends Container {
@@ -78,6 +83,16 @@ class Popup extends Container {
 
         selectRow.append(selectInput);
 
+        const textInput = new TextInput({
+            id: 'popup-input'
+        });
+
+        const inputRow = new Container({
+            id: 'popup-input-row'
+        });
+
+        inputRow.append(textInput);
+
         const warningText = new Label({
             id: 'popup-warning-text'
         });
@@ -114,6 +129,7 @@ class Popup extends Container {
         dialog.append(header);
         dialog.append(text);
         dialog.append(selectRow);
+        dialog.append(inputRow);
         dialog.append(warningText);
         dialog.append(linkRow);
         dialog.append(buttons);
@@ -159,7 +175,7 @@ class Popup extends Container {
             header.text = options.header;
             text.text = options.message;
 
-            const { type, link, select, warning } = options;
+            const { type, link, select, input, warning } = options;
 
             ['error', 'info', 'yesno', 'okcancel'].forEach((t) => {
                 text.class[t === type && options.icon !== false ? 'add' : 'remove'](t);
@@ -186,6 +202,12 @@ class Popup extends Container {
                 selectInput.value = select.value;
             }
 
+            inputRow.hidden = input === undefined;
+            if (input !== undefined) {
+                textInput.value = input.value;
+                textInput.placeholder = input.placeholder ?? '';
+            }
+
             warningText.hidden = warning === undefined;
             warningText.dom.textContent = warning?.text ?? '';
             if (warning?.link) {
@@ -205,7 +227,8 @@ class Popup extends Container {
                     this.hide();
                     resolve({
                         action: 'ok',
-                        value: select ? selectInput.value : undefined
+                        value: select ? selectInput.value : undefined,
+                        inputValue: input ? textInput.value : undefined
                     });
                 };
                 cancelFn = () => {

@@ -139,6 +139,8 @@
     "popup.no": "아니요",
     "popup.error": "오류",
     "popup.error-loading": "파일 로드 오류",
+    "popup.tgh-frames-header": "볼류메트릭 비디오 타임라인",
+    "popup.tgh-frames-message": "이 체크포인트에는 프레임 수 정보가 없습니다. 캡처된 시퀀스의 프레임 수를 입력하세요:",
     "popup.webgpu-unavailable": "이 내보내기에는 WebGPU가 필요하지만 이 브라우저에서는 사용할 수 없습니다. 최신 버전의 Chrome, Edge 또는 Safari를 사용해 보세요.",
     "popup.load-options-header": "불러오기 옵션",
     "popup.lod-select-message": "이 파일에는 여러 세부 수준이 포함되어 있습니다. 불러올 수준을 선택하세요.",
