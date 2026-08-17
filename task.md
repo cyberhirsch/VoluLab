@@ -211,3 +211,44 @@ Four things, each blocked on a decision rather than on effort:
 - **Node reordering is impossible.** Node positions are free, but the chain
   order is history order. Reordering means reordering history, which is a
   real feature and not a drawing change.
+
+---
+
+## Decisions taken
+
+These four were open questions in earlier drafts of this file. They are
+settled now, and the answers are the maximal option in each case - worth
+knowing, because each one costs more than its alternative and the cheaper
+paths were deliberately turned down rather than overlooked.
+
+**Colour on overlapping regions: stack.** A second colour node over gaussians
+an earlier one already graded composes with it rather than replacing it. This
+is why grades are stored as matrices - two of them multiply. The alternative,
+one grade per gaussian with the newest winning, would have been a plain index
+and no composition.
+
+**The graph becomes a real DAG.** Nodes get multiple inputs; the chain stops
+being one lane per object with order fixed by history. This is the largest
+change on the list and the hardest to walk back, and it is a prerequisite for
+merge and for anything whose output is a different kind of thing than its
+input.
+
+**Sequences: one edit, all frames.** A node re-resolves per frame as frames
+load - a sphere selection catches whatever is inside it on each frame. The
+consequence to keep in mind: freehand and frozen selections cannot follow,
+because a stored hit set means nothing on a different frame's data. Those
+stay bound to the frame they were made on, and the UI has to say so.
+
+**Voxelise produces a new element type.** Not grid-aligned splats. The rest
+of the app has to learn about a second kind of element - its own renderer,
+its own export path, its own selection behaviour.
+
+### Order of work
+
+1. **Colour palette** - finishes what the matrix refactor started, and is
+   independent of the DAG since it is about per-gaussian data rather than
+   graph topology.
+2. **The DAG** - foundational, and both of the remaining items sit inside it.
+3. **Frames.**
+4. **Voxelise** - last, because a new element type is easiest to design once
+   the graph can express a node whose output differs from its input.
