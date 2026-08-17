@@ -124,17 +124,24 @@ const main = async () => {
     // editor ui
     const editorUI = new EditorUI(events);
 
-    // create the graphics device
+    const urlArgs = getURLArgs();
+
+    // The viewport runs on WebGPU, falling back to WebGL2 when the browser
+    // has no WebGPU - and `?device=webgl2` forces the fallback, which is the
+    // escape hatch while the WebGPU path beds in. The custom GLSL shaders are
+    // transpiled at load by glslang + twgsl, served alongside the app.
+    const deviceTypes = (urlArgs as any).device === 'webgl2' ? ['webgl2'] : ['webgpu', 'webgl2'];
     const graphicsDevice = await createGraphicsDevice(editorUI.canvas, {
-        deviceTypes: ['webgl2'],
+        deviceTypes,
+        glslangUrl: new URL('static/lib/glslang/glslang.js', document.baseURI).toString(),
+        twgslUrl: new URL('static/lib/twgsl/twgsl.js', document.baseURI).toString(),
         antialias: false,
         depth: false,
         stencil: false,
         xrCompatible: false,
         powerPreference: 'high-performance'
     });
-
-    const urlArgs = getURLArgs();
+    console.info(`graphics device: ${graphicsDevice.deviceType}`);
 
     const overrides = [
         urlArgs
