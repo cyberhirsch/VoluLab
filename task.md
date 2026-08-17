@@ -1,8 +1,9 @@
 # What's next
 
-Two pieces of work are decided and not started, and below them the places
-where something built works and could work better. What is already built is
-in [CHANGELOG.md](CHANGELOG.md), with the reasoning kept.
+Everything outstanding, ordered by difficulty in the table below and then
+described in full: two pieces of work decided and not started, then the
+places where something built works and could work better. What is already
+built is in [CHANGELOG.md](CHANGELOG.md), with the reasoning kept.
 
 Terms used below:
 
@@ -10,6 +11,58 @@ Terms used below:
 - **selection-scoped** — acts on the selected gaussians rather than the whole
   object. This is the property that makes a node belong in a graph whose
   premise is *select, then operate*.
+
+---
+
+## By difficulty, and who should take it
+
+Hardest first. The model column is a starting point rather than a rule -
+what makes something hard here is rarely the amount of code.
+
+| # | Work | Model |
+|---|---|---|
+| 1 | WebGPU viewport | Fable 5 |
+| 2 | Node reordering | Fable 5 |
+| 3 | Colour beyond affine (gamma, contrast, curves) | Fable 5 |
+| 4 | COLMAP bridge | Opus 5 |
+| 5 | Precise replay invalidation | Opus 5 |
+| 6 | Frame-stable decimate ranking | Opus 5 |
+| 7 | A real temperature model | Opus 5 |
+| 8 | TGH frames off the main thread | Sonnet 5 |
+| 9 | Voxel renderer by instancing | Sonnet 5 |
+| 10 | Cleanup in a worker | Sonnet 5 |
+| 11 | Verify a training run end to end | Sonnet 5 |
+| 12 | Merge by dragging output onto input | Sonnet 5 |
+| 13 | A voxel export path | Sonnet 5 |
+| 14 | Seed training from an edited scene | Haiku 4.5 |
+| 15 | Rec.709 luma coefficients | Haiku 4.5 |
+
+The top three are Fable work for the same reason in each case: they are not
+large, they are *load-bearing*. The WebGPU move has a genuine unknown at its
+centre and touches every shader in the app at once. Node reordering makes
+history stop being append-only, which is the assumption every op's undo is
+written against. And colour beyond affine breaks the property the whole grade
+palette rests on - grades compose by matrix multiply, and a gamma curve does
+not multiply. Each is a change to something other code already assumes.
+
+The Opus four are substantial engineering with real decisions inside them,
+but no assumption gets overturned. The COLMAP bridge is the biggest by volume
+- a process, a protocol, two platforms - and the least likely to surprise
+anyone. Precise invalidation is the opposite shape: a small diff in
+`EditHistory` where being wrong corrupts state silently rather than throwing,
+which is what earns it the tier rather than its size.
+
+The Sonnet six are bounded work in patterns the codebase already contains -
+a worker like the ones discussed, a shader like the ones written, a drop
+target next to a drag source. Verifying the training run sits here because
+diagnosis is the job: the code is written, and what it needs is someone to
+drive it and read what breaks.
+
+Two things at the bottom, and worth naming honestly: there is not much
+genuinely trivial work left in this project. Rec.709 is one constant and a
+decision someone else has to make; seeding from an edited scene is a zip
+writer and some wiring. Padding that tier with items from the one above would
+just move the surprise later.
 
 ---
 
