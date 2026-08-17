@@ -108,27 +108,32 @@ puts every surface gaussian on the boundary.
 Only ever adds to what is deleted — widening it does not resurrect what an
 earlier node removed. Bypassing that node does.
 
-### Merge node — decided, not started
+### Merge node — done
 
-Two objects into one. **Decided: build the DAG.**
+Two objects into one, and the first node with more than one input.
 
-The real cost is the second input. The chain is linear today - one lane per
-object, order fixed by history - so a node with two inputs is the point at
-which the graph becomes a genuine DAG.
+The realisation that made this small: **a linear history is already a
+topological order of a DAG.** The array says when things ran; a node's
+`inputs` say what fed what. `EditHistory` did not need rewriting.
 
-What that touches, all of it in service of one node:
+Replay still invalidates everything after a node, which with branches is
+conservative rather than exact - it may re-resolve a node no path reaches.
+That is correct, and cheaper than maintaining a second ordering that has to
+stay consistent with the first. If it ever becomes slow, the fix is to walk
+`inputs` backwards from the changed node rather than to restructure history.
 
-- `src/workspace.ts` has nothing to do with this, but `src/ui/graph-panel.ts`
-  lays out lanes from `listPanes`-style tree walks and draws edges from the
-  chain order. Both assume one predecessor.
-- `EditHistory` replays a flat array. A DAG needs a topological order, and
-  `replayAround` needs to know what is downstream of a node rather than
-  assuming everything after it in the array is.
-- Undo currently means "walk the array backwards". With branches that is no
-  longer the same as reversing the last thing done.
+In the graph: an object produced by a node gets no import node, since its lane
+starts at the node that made it. Edges now come from two places and mean
+different things - the chain edges say "then", the input edges say "from".
 
-`AddSplatOp` and the duplicate/separate machinery in `performSelectionFunc`
-(`src/editor.ts`) already do the data half.
+`MergeOp` builds its output before the op exists, because building it means
+writing both objects out and reading them back, and `do` has to be repeatable.
+So `do` adds an object that already exists, and hides the two that fed it,
+reversibly.
+
+Open: merging is offered by name in the context menu. The gesture it wants is
+dragging one node's output onto another's input, which needs ports that can
+*accept* a drop as well as start one.
 
 ### Frame / time node — decided, not started
 
@@ -192,12 +197,11 @@ at all, which is the DAG.
 
 ## What is left
 
-Three, all decided and none started. Each has its own section above with what
-the decision implies:
+Two, both decided. Each has its own section above with what the decision
+implies:
 
-1. **The DAG**, for merge. The largest and the hardest to walk back.
-2. **Frame / time** — one edit, all frames.
-3. **Voxelise** — a new element type.
+1. **Frame / time** — one edit, all frames.
+2. **Voxelise** — a new element type.
 
 ---
 
@@ -251,7 +255,7 @@ its own export path, its own selection behaviour.
 ### Order of work
 
 1. ~~Colour palette~~ - done, export included.
-2. **The DAG** - foundational, and both of the remaining items sit inside it.
+2. ~~The DAG~~ - done, with merge.
 3. **Frames.**
 4. **Voxelise** - last, because a new element type is easiest to design once
    the graph can express a node whose output differs from its input.
