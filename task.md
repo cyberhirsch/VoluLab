@@ -1,9 +1,8 @@
 # Node backlog
 
-**Status.** Tier A is done. Tier B is done bar the two that need a second
-input or a sequence model. Tier C is done bar voxelise. What remains is
-listed at the bottom, and every one of those is open because of a real
-architectural question rather than because it was skipped.
+**Status: every node on this list is built.** What is left is written at the
+bottom under *Known limits* - not missing nodes, but places where a node works
+and could work better, each with what it would take.
 
 Candidate nodes for the graph, ordered by what they cost rather than by how
 they read. A lot of the work is already done: several of these are a *face*
@@ -90,7 +89,7 @@ rebuilding the map. That is the gizmo's job rather than a text field's.
 
 ---
 
-## Tier B — modest new work
+## Tier B — done
 
 ### SH bands node — done
 
@@ -135,30 +134,30 @@ Open: merging is offered by name in the context menu. The gesture it wants is
 dragging one node's output onto another's input, which needs ports that can
 *accept* a drop as well as start one.
 
-### Frame / time node — decided, not started
+### Frames — done
 
-Where the 4D direction actually starts. **Decided: one edit, all frames.**
+**One edit, all frames.** When a sequence advances, `EditHistory.reapplyAll`
+re-runs the history against the frame that just arrived, so a selection
+catches whatever is inside it on this frame and a grade follows the shot.
 
-A node re-resolves per frame as frames load, so a sphere selection catches
-whatever is inside it on each frame and a grade follows the shot rather than
-the still.
+It does not undo first, and that is the important part. Undo reverses an op
+using what it resolved against the *old* data, and that data is gone - the
+indices it holds now point at different gaussians or at none. So the cursor
+resets without reversing, every op forgets what it resolved, and the history
+is applied forward onto the new frame from clean.
 
-The consequence to design around: **freehand and frozen selections cannot
-follow.** A stored hit set is a list of indices into one frame's data and
-means nothing on another's. Those stay bound to the frame they were made on,
-and the node has to say so rather than silently applying nonsense - the graph
-already marks frozen selections, so the vocabulary exists.
+A frozen selection cannot follow. Its positions belong to one particular
+array, so it records the gaussian count it was captured at and resolves to
+nothing when that no longer matches - visibly nothing, rather than the wrong
+gaussians, which is what it did before the check existed.
 
-Decimate has the same problem in a quieter form: its ranking is not stable
-between frames, so a decimated sequence may shimmer. Worth fixing when this
-lands, not before.
-
-Exists: `src/sequence.ts` (per-frame PLY loading, `plysequence.setFrameAsync`),
-`src/anim-track.ts`, `src/timeline.ts`, `AnimTrackEditOp`.
+There is no separate "frame node": the decision made one unnecessary. Every
+node applies to every frame, so a node naming a frame range would be a
+different feature (grading one shot differently from another), not this one.
 
 ---
 
-## Tier C — real new machinery, and the ones people want daily
+## Tier C — done
 
 ### Cleanup / floater removal — done
 
@@ -180,28 +179,53 @@ until a fraction remains. Ranking rather than thresholding, because "keep
 Open: the ordering is not yet stable across the frames of a sequence, so a
 decimated sequence may shimmer. That matters only once the frame node exists.
 
-### Voxelise — decided, not started
+### Voxelise — done
 
-The bridge to voxels and the other volumetric formats named as targets.
-**Decided: a new element type**, not grid-aligned splats.
+**A new element type**, not grid-aligned splats. `src/voxels.ts` holds a grid
+of filled cells: a cell index and a colour, and nothing else. No covariance,
+no view-dependent shading, no per-gaussian state - those are what a voxel
+format does not want, and carrying them would mean discarding them at export.
 
-That means the rest of the app has to learn about a second kind of element:
-its own renderer, its own export path, its own selection behaviour, and a
-decision at every point that currently says `ElementType.splat`.
+Resampling takes the opacity-weighted mean colour of whatever lands in a cell.
+Weighted rather than counted evenly, because a capture is mostly faint
+gaussians and an unweighted mean lets a cloud of near-invisible points outvote
+the few solid ones that describe the surface. Empty cells are absent rather
+than stored, since a capture fills a shell.
 
-Worth doing last for that reason - it is far easier to design a node whose
-output differs in kind from its input once the graph can express such a thing
-at all, which is the DAG.
+This is the node that needed the DAG: its output is not the same kind of thing
+as its input, so it cannot be another link in that object's chain.
 
 ---
 
-## What is left
+## Known limits
 
-Two, both decided. Each has its own section above with what the decision
-implies:
+Every node works. These are the places where one could work better, and what
+each would take:
 
-1. **Frame / time** — one edit, all frames.
-2. **Voxelise** — a new element type.
+**The voxel renderer is a box entity per cell.** Certainly correct, no custom
+shader, and slow once the count runs to thousands. Fast means instancing with
+a per-instance colour stream - a vertex format and a shader.
+
+**Voxels have no export path.** They render and they are an element the scene
+holds, but nothing writes them out. That wants a target format chosen first,
+since the format decides what the writer looks like.
+
+**Merging is offered by name**, in the context menu, rather than by dragging
+one node's output onto another's input. Ports can start a drag but cannot
+accept a drop - that is the gesture it wants.
+
+**Cleanup runs on the CPU inside the op's resolver.** Fine at the counts
+tested; a million-point capture wants it in a worker. That is a change of
+where it runs, not of what it does.
+
+**Decimate's ranking is not stable between frames**, so a decimated sequence
+may shimmer. It ranks by importance within one frame; keeping a sequence
+steady means ranking against something that does not move frame to frame.
+
+**Replay after a change is conservative.** It invalidates everything after a
+node rather than everything reachable from it, so it may re-resolve a node no
+path touches. Correct, and cheaper than a second ordering to keep consistent.
+If it becomes slow, walk `inputs` backwards from the changed node.
 
 ---
 
@@ -254,8 +278,7 @@ its own export path, its own selection behaviour.
 
 ### Order of work
 
-1. ~~Colour palette~~ - done, export included.
-2. ~~The DAG~~ - done, with merge.
-3. **Frames.**
-4. **Voxelise** - last, because a new element type is easiest to design once
-   the graph can express a node whose output differs from its input.
+All four are done, in the order they were listed: the colour palette, then the
+DAG with merge, then frames, then voxelise. The order held up - each one was
+easier for the ones before it having landed, and voxelise in particular would
+have been much harder to shape without the DAG.
