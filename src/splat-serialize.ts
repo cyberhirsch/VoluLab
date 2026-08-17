@@ -32,8 +32,9 @@ import {
 } from 'playcanvas';
 
 import { version } from '../package.json';
-import { ColorGrade, dcDecode, dcEncode, sigmoid } from './color-grade';
+import { ColorGrade, dcDecode, dcEncode, gradeMatrix, sigmoid } from './color-grade';
 import { Events } from './events';
+import { composeGrades, identityGrade, toGrade } from './grade-palette';
 import { SHRotation } from './sh-utils';
 import { Splat } from './splat';
 import { State } from './splat-state';
@@ -366,7 +367,8 @@ class SingleSplat {
             splat: Splat;
             transformCache: SplatTransformCache;
             srcProps: { [name: string]: Float32Array };
-            grade: ColorGrade;
+            /** the grade for a gaussian, by its palette slot */
+            gradeFor: (index: number) => ColorGrade;
         };
 
         const cacheMap = new Map<Splat, CacheEntry>();
@@ -396,9 +398,28 @@ class SingleSplat {
                         }
                     });
 
-                    const grade = new ColorGrade(splat);
+                    // Colour is per-gaussian now: a gaussian carries a palette
+                    // slot holding whatever colour nodes put on it, and the
+                    // object's own grade applies after that - the same order
+                    // the shader uses. Slots are few, so one ColorGrade per
+                    // slot is built as it is first met rather than per gaussian.
+                    const objectGrade = toGrade(gradeMatrix(splat));
+                    const slots = new Uint16Array(splat.gradeTexture.lock() as Uint16Array);
+                    splat.gradeTexture.unlock();
 
-                    cacheEntry = { splat, transformCache, srcProps, grade };
+                    const bySlot = new Map<number, ColorGrade>();
+                    const gradeFor = (index: number) => {
+                        const slot = slots[index] ?? 0;
+                        let grade = bySlot.get(slot);
+                        if (!grade) {
+                            const node = slot === 0 ? identityGrade() : splat.gradePalette.getGrade(slot);
+                            grade = ColorGrade.fromGrade(composeGrades(node, objectGrade));
+                            bySlot.set(slot, grade);
+                        }
+                        return grade;
+                    };
+
+                    cacheEntry = { splat, transformCache, srcProps, gradeFor };
 
                     cacheMap.set(splat, cacheEntry);
                 } else {
@@ -406,7 +427,9 @@ class SingleSplat {
                 }
             }
 
-            const { transformCache, srcProps, grade } = cacheEntry;
+            const { transformCache, srcProps, gradeFor } = cacheEntry;
+            // the grade this particular gaussian carries
+            const grade = gradeFor(i);
 
             // copy members
             members.forEach((name) => {
@@ -475,7 +498,7 @@ class SingleSplat {
                 }
             }
 
-            if (!serializeSettings.keepColorTint && hasOpacity && splat.transparency !== 1) {
+            if (!serializeSettings.keepColorTint && hasOpacity && grade.hasAlpha) {
                 data.opacity = grade.applyOpacity(data.opacity);
             }
         };

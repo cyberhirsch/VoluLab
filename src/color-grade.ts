@@ -104,15 +104,34 @@ const gradeMatrix = (p: GradeParams) => {
 
 class ColorGrade {
     private m: number[];
-    private offset: number;
+    private t: [number, number, number];
     private transparency: number;
 
     readonly hasTint: boolean;
 
+    /**
+     * Build one from a palette slot rather than from parameters.
+     *
+     * A slot holds a grade that may be several composed, which no set of
+     * parameters describes - so this takes the matrix directly, and decides
+     * `hasTint` by whether it does anything rather than by inspecting values
+     * that no longer exist.
+     */
+    static fromGrade(grade: { m: number[], t: [number, number, number], alpha: number }): ColorGrade {
+        const cg = Object.create(ColorGrade.prototype) as any;
+        cg.m = grade.m;
+        cg.t = grade.t;
+        cg.transparency = grade.alpha;
+
+        const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+        cg.hasTint = grade.m.some((v, i) => v !== identity[i]) || grade.t.some(v => v !== 0);
+        return cg as ColorGrade;
+    }
+
     constructor(p: GradeParams) {
         const grade = gradeMatrix(p);
         this.m = grade.m;
-        this.offset = grade.t;
+        this.t = [grade.t, grade.t, grade.t];
         this.transparency = grade.alpha;
 
         this.hasTint = (
@@ -129,20 +148,25 @@ class ColorGrade {
     // The DC term carries the translation; an SH term is a delta, so it gets
     // the linear part only. Indexed column-major, matching the array the
     // shaders are handed.
-    private apply(c: RGB, offset: number) {
-        const { m } = this;
+    private apply(c: RGB, withOffset: boolean) {
+        const { m, t } = this;
         const { r, g, b } = c;
-        c.r = m[0] * r + m[3] * g + m[6] * b + offset;
-        c.g = m[1] * r + m[4] * g + m[7] * b + offset;
-        c.b = m[2] * r + m[5] * g + m[8] * b + offset;
+        c.r = m[0] * r + m[3] * g + m[6] * b + (withOffset ? t[0] : 0);
+        c.g = m[1] * r + m[4] * g + m[7] * b + (withOffset ? t[1] : 0);
+        c.b = m[2] * r + m[5] * g + m[8] * b + (withOffset ? t[2] : 0);
     }
 
     applyDC(c: RGB) {
-        this.apply(c, this.offset);
+        this.apply(c, true);
     }
 
     applySH(c: RGB) {
-        this.apply(c, 0);
+        this.apply(c, false);
+    }
+
+    /** Whether the alpha multiplier does anything. */
+    get hasAlpha(): boolean {
+        return this.transparency !== 1;
     }
 
     applyOpacity(o: number): number {
