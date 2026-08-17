@@ -1,7 +1,7 @@
 import { Container } from '@playcanvas/pcui';
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { CleanupOp, CropOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, principalOp } from '../edit-ops';
+import { CleanupOp, CropOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -125,11 +125,17 @@ class NodePanel extends Container {
         // it, so the node's settings are the ones inside the bundle.
         const op = principalOp(outer);
 
-        if (op.name === 'setSplatColor') {
+        // Both colour nodes show the same panel; what differs is whether it
+        // edits the object's grade or the node's own.
+        if (op.name === 'setSplatColor' || op instanceof ScopedColorOp) {
             const panel = this.mounts.get('colour');
             if (panel) {
                 this.empty.hidden = true;
+                (panel as any).bindNode?.(op instanceof ScopedColorOp ? op : null, index);
                 this.body.appendChild(panel);
+                if (op instanceof ScopedColorOp) {
+                    this.stat('scope', `${op.affected < 0 ? 'not applied' : op.affected.toLocaleString()} selected`);
+                }
                 return;
             }
         }

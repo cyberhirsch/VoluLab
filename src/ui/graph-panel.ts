@@ -66,7 +66,8 @@ const OP_LABELS: Record<string, string> = {
     setPivot: 'place pivot',
     setLocalFrame: 'local frame',
     shapeTransform: 'selection volume',
-    setSplatColor: 'color grade',
+    setSplatColor: 'colour',
+    scopedColor: 'colour',
     multiOp: 'combined edit',
     addSplat: 'add object',
     splatRename: 'rename',
@@ -552,11 +553,11 @@ class GraphPanel extends Container {
             // into one op before they ever reach here (see edit.addColour), so
             // there is nothing left to fold - and folding would have made a
             // second colour node impossible to see.
-            if (op.name === 'setSplatColor') {
+            if (op.name === 'setSplatColor' || op.name === 'scopedColor') {
                 add(key, {
                     index: i,
                     kind: 'colour',
-                    name: 'grade',
+                    name: op.name === 'scopedColor' ? 'selection' : 'object',
                     applied: i < cursor,
                     splat,
                     colour: true,

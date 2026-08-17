@@ -4,7 +4,7 @@ import { Color } from 'playcanvas';
 import { Events } from '../events';
 import { i18n } from './localization';
 import { Tooltips } from './tooltips';
-import { SetSplatColorAdjustmentOp } from '../edit-ops';
+import { ScopedColorOp, SetSplatColorAdjustmentOp } from '../edit-ops';
 import { Splat } from '../splat';
 
 // pcui slider doesn't include start and end events
@@ -257,7 +257,67 @@ class ColorPanel extends Container {
         let selected: Splat = null;
         let op: SetSplatColorAdjustmentOp = null;
 
+        /**
+         * A scoped colour node the panel is editing instead of the object.
+         *
+         * The controls are the same either way; what changes is where the
+         * numbers live. An object grade is a property of the splat and applies
+         * live; a node's grade belongs to the op, and changing it has to go
+         * through the history so everything downstream rebuilds.
+         */
+        let boundOp: ScopedColorOp = null;
+        let boundIndex = -1;
+        let dragging = false;
+
+        // assigned once updateUIFromState exists, which is defined further down
+        let refreshFromObject: (splat: Splat) => void = () => {};
+
+        const readBound = () => {
+            const g = boundOp.grade;
+            suppress = true;
+            tintPicker.value = [g.tintClr.r, g.tintClr.g, g.tintClr.b];
+            temperatureSlider.value = g.temperature;
+            saturationSlider.value = g.saturation;
+            exposureSlider.value = g.exposure ?? 0;
+            brightnessSlider.value = g.brightness;
+            blackPointSlider.value = g.blackPoint;
+            whitePointSlider.value = g.whitePoint;
+            transparencySlider.value = Math.log(g.transparency);
+            suppress = false;
+        };
+
+        // gather the controls into a grade, which is what a node stores
+        const readControls = () => ({
+            tintClr: new Color(tintPicker.value[0], tintPicker.value[1], tintPicker.value[2]),
+            temperature: temperatureSlider.value,
+            saturation: saturationSlider.value,
+            exposure: exposureSlider.value,
+            brightness: brightnessSlider.value,
+            blackPoint: blackPointSlider.value,
+            whitePoint: whitePointSlider.value,
+            transparency: Math.exp(transparencySlider.value)
+        });
+
+        const commitBound = () => {
+            const next = readControls();
+            events.invoke('edit.refresh', boundIndex, () => boundOp.setGrade(next));
+        };
+
+        // Reachable from the element, because that is what the node pane holds:
+        // panels are mounted by their dom rather than by their instance.
+        (this.dom as any).bindNode = (node: ScopedColorOp | null, index = -1) => {
+            boundOp = node;
+            boundIndex = index;
+            if (node) {
+                readBound();
+            } else if (selected) {
+                // rebound to the object, so the controls show its own grade
+                refreshFromObject(selected);
+            }
+        };
+
         const updateUIFromState = (splat: Splat) => {
+            if (boundOp) return;
             if (suppress) return;
             suppress = true;
             tintPicker.value = splat ? [splat.tintClr.r, splat.tintClr.g, splat.tintClr.b] : [1, 1, 1];
@@ -270,6 +330,8 @@ class ColorPanel extends Container {
             transparencySlider.value = splat ? Math.log(splat.transparency) : 0;
             suppress = false;
         };
+
+        refreshFromObject = updateUIFromState;
 
         const start = () => {
             if (selected) {
@@ -318,27 +380,45 @@ class ColorPanel extends Container {
         };
 
         const updateOp = (setFunc: (op: SetSplatColorAdjustmentOp) => void) => {
-            if (!suppress) {
-                suppress = true;
-                if (op) {
-                    setFunc(op);
-                    op.do();
-                } else if (selected) {
-                    start();
-                    setFunc(op);
-                    op.do();
-                    end();
-                }
-                suppress = false;
+            if (suppress) return;
+
+            // Editing a node: the controls already hold the new value, so the
+            // setter has nothing to add. Committing waits for the end of a drag,
+            // because each commit replays the history from that node down.
+            if (boundOp) {
+                if (!dragging) commitBound();
+                return;
             }
+
+            suppress = true;
+            if (op) {
+                setFunc(op);
+                op.do();
+            } else if (selected) {
+                start();
+                setFunc(op);
+                op.do();
+                end();
+            }
+            suppress = false;
+        };
+
+        const gestureStart = () => {
+            dragging = true;
+            if (!boundOp) start();
+        };
+
+        const gestureEnd = () => {
+            dragging = false;
+            if (boundOp) commitBound(); else end();
         };
 
         [temperatureSlider, saturationSlider, exposureSlider, brightnessSlider, blackPointSlider, whitePointSlider, transparencySlider].forEach((slider) => {
-            slider.on('slide:start', start);
-            slider.on('slide:end', end);
+            slider.on('slide:start', gestureStart);
+            slider.on('slide:end', gestureEnd);
         });
-        tintPicker.on('picker:color:start', start);
-        tintPicker.on('picker:color:end', end);
+        tintPicker.on('picker:color:start', gestureStart);
+        tintPicker.on('picker:color:end', gestureEnd);
 
         tintPicker.on('change', (value: number[]) => {
             updateOp((op) => {
