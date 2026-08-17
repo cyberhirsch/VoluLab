@@ -19,50 +19,37 @@ Terms used below:
 
 ---
 
-## Still open: make colour selection-scoped
+## Colour selection-scoped — done
 
-`SetSplatColorAdjustmentOp` grades the whole object. Every other node is
-selection-scoped, so this is the odd one out.
+A colour node added with a selection grades those gaussians; added with
+nothing selected it grades the object, which is still the right thing for
+"make this whole thing warmer".
 
-The grade lives in per-splat uniforms (`clrScale`, `clrOffset`, see
-`Splat.onPreRender` and `gradeTransform` in `src/color-grade.ts`), which is
-why it cannot vary per gaussian.
+How it works, in the order the pieces were built:
 
-**Baking it into the colour data is the wrong answer.** The grade is
-currently a live view transform, which is exactly why a colour node stays
-re-editable for nothing. Baking would mean re-grading already-graded data.
+1. `gradeMatrix` in `src/color-grade.ts` folds the eight parameters into a
+   3x3 matrix and a translation. Saturation is a linear map and the levels are
+   affine, so nothing is lost - and two grades compose by multiplying, which
+   the parameter form cannot express.
+2. `src/grade-palette.ts` holds grades in a texture, one slot each, following
+   the contract `TransformPalette` sets. Grades store a translation *vector*,
+   because composing two does not keep the offset grey.
+3. `Splat.gradeTexture` carries a per-gaussian slot index. Index 0 means no
+   node has touched it, which is every gaussian until one does.
+4. The shader applies the node grade first, then the object's. Keeping the
+   object grade out of the palette is what lets it stay live rather than
+   being frozen into each slot at the moment a node ran.
+5. `ScopedColorOp` allocates one new slot per distinct slot the selection
+   already sits on, each holding that slot's grade composed with the node's.
+   Undo runs the map backwards, reversing by slot rather than by selection.
+6. The colour panel binds to a node and commits at the end of a gesture.
 
-The right answer is a **grade palette**, following the precedent
-`transformPalette` sets for per-gaussian transforms:
+Two traps worth keeping in mind if this is touched again:
 
-- A per-gaussian `R16U` index texture alongside `splatTransform`.
-- A palette of grades. Store each as a **3x4 matrix plus an alpha scale**,
-  not as the eight parameters: saturation is a linear map and the levels are
-  affine, so a grade *is* a matrix — and two of them compose by multiplying,
-  which the eight-parameter form cannot represent. Composition is what lets a
-  second colour node stack on a region an earlier one already touched.
-- The op keeps its parameters, as now, so the panel still edits meaning
-  rather than matrix entries. The slot is recomputed from them on replay.
-
-The cost is not the palette, it is that **four paths read the grade** and all
-four would need the per-gaussian lookup: the render shader
-(`src/shaders/splat-shader.ts`), the histogram and range-select shaders
-(`src/shaders/splat-value-shader.ts`), and the CPU export path
-(`src/splat-serialize.ts`, which builds one `ColorGrade` per splat). Doing
-only the renderer would leave export and the histogram quietly disagreeing
-with what is on screen, which is worse than the current honest limitation.
-
-**The first step is done.** `gradeMatrix` in `src/color-grade.ts` returns the
-matrix, and all four paths use it with a single per-object grade -
-behaviour-identical, verified against the original formula over 5000 random
-parameter sets and against the GPU through the histogram. What remains is the
-per-gaussian half: the index texture, the palette, and the lookup in the
-three shaders plus the export path.
-
-Note for whoever does it: GLSL reads a mat3 column-major and this matrix is
-not symmetric. Getting that backwards grades plausibly and wrongly.
-
----
+- **GLSL reads a mat3 column-major** and this matrix is not symmetric.
+  Emitting it row-major grades plausibly and wrongly.
+- **The translation must be a vector.** One number is enough for a single
+  grade and not enough for two composed.
 
 ## Tier A — done
 
@@ -178,14 +165,11 @@ The bridge to voxels and the other volumetric formats named as targets.
 
 ---
 
-## What is left, and why
+## What is left
 
-Four things, each blocked on a decision rather than on effort:
+Three, all decided (see below) and none started:
 
-1. **Colour selection-scoped** — needs the grade palette described above, and
-   the per-gaussian lookup added to four separate paths. The largest item
-   here. Start with the matrix refactor, which is safe on its own.
-2. **Merge** — needs a second input, which means the chain stops being linear.
+1. **Merge** — needs a second input, which means the chain stops being linear.
    That is the moment this becomes a real DAG, and it should be chosen rather
    than backed into.
 3. **Frame / time** — needs a decision about what an edit means on a frame
@@ -245,9 +229,7 @@ its own export path, its own selection behaviour.
 
 ### Order of work
 
-1. **Colour palette** - finishes what the matrix refactor started, and is
-   independent of the DAG since it is about per-gaussian data rather than
-   graph topology.
+1. ~~Colour palette~~ - done, bar the export path.
 2. **The DAG** - foundational, and both of the remaining items sit inside it.
 3. **Frames.**
 4. **Voxelise** - last, because a new element type is easiest to design once
