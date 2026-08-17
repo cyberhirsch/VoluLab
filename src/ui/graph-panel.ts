@@ -71,6 +71,7 @@ const OP_LABELS: Record<string, string> = {
     multiOp: 'combined edit',
     addSplat: 'add object',
     splatRename: 'rename',
+    merge: 'merge',
     crop: 'crop',
     cleanup: 'cleanup',
     decimate: 'decimate',
@@ -529,7 +530,17 @@ class GraphPanel extends Container {
             lane.push({ ...node, x: lane.length * (NODE_W + COL_GAP), y: 0 });
         };
 
+        // An object produced by a node is not an import - its lane starts at
+        // the node that made it, and the inputs to that node are where it came
+        // from. Without this a merged object would show a source it never had.
+        const produced = new Set<Splat>();
+        ops.forEach((op) => {
+            const out = (op as any).output as Splat;
+            if (out) produced.add(out);
+        });
+
         splats.forEach((splat) => {
+            if (produced.has(splat)) return;
             add(splat, {
                 index: -1,
                 kind: 'import',
@@ -540,7 +551,26 @@ class GraphPanel extends Container {
             });
         });
 
+        // nodes that consume more than the object they sit on
+        const crossLinks: { op: EditOp, node: NodeModel }[] = [];
+
         ops.forEach((op, i) => {
+            const produces = (op as any).output as Splat;
+            if (produces) {
+                add(produces, {
+                    index: i,
+                    kind: opLabel(op),
+                    name: `${((op as any).inputs?.length ?? 0)} inputs`,
+                    applied: i < cursor,
+                    splat: produces,
+                    bypassed: !!op.bypassed,
+                    key: op
+                });
+                const lane = laneOf(produces);
+                crossLinks.push({ op, node: lane[lane.length - 1] });
+                return;
+            }
+
             const splat = opSplat(op);
             // an op with no object of its own - or whose object is gone - still
             // belongs somewhere; the scene lane is where those collect
@@ -591,7 +621,8 @@ class GraphPanel extends Container {
         [...lanes.values()].forEach((lane, row) => {
             lane.forEach((node, col) => {
                 node.y = row * (NODE_H + LANE_GAP);
-                node.isSource = col === 0;
+                // a node fed from elsewhere is not a source, whatever its column
+                node.isSource = col === 0 && !crossLinks.some(l => l.node === node);
                 // edges follow the chain, which is the history order, not
                 // wherever the node has since been dragged
                 if (col > 0) edges.push({ from: lane[col - 1], to: node });
@@ -603,6 +634,19 @@ class GraphPanel extends Container {
                     node.y = placed.y;
                 }
                 nodes.push(node);
+            });
+        });
+
+        // The DAG proper: an edge from the last node of each input's lane into
+        // the node that consumes it. The chain edges above say "then"; these
+        // say "from", which is the distinction that makes this a graph rather
+        // than a set of parallel lists.
+        crossLinks.forEach(({ op, node }) => {
+            const inputs = ((op as any).inputs ?? []) as Splat[];
+            inputs.forEach((input) => {
+                const lane = lanes.get(input);
+                if (!lane?.length) return;
+                edges.push({ from: lane[lane.length - 1], to: node });
             });
         });
 
@@ -926,6 +970,29 @@ class GraphPanel extends Container {
         });
     }
 
+    /**
+     * Merging needs a second object, and there is no wire to drop on yet - so
+     * the other objects are offered by name. One entry each rather than a
+     * submenu, because a scene with enough objects to need one is not the case
+     * this is for.
+     */
+    private mergeItems(splat: Splat | null): MenuEntry[] {
+        if (!splat) return [];
+        const others = ((this.events.invoke('scene.allSplats') ?? []) as Splat[])
+        .filter(s => s !== splat && s.visible);
+        if (!others.length) return [];
+
+        return [
+            'separator',
+            ...others.map(other => ({
+                label: `merge with ${other.name ?? 'object'}`,
+                action: () => {
+                    this.events.invoke('graph.merge', splat, other);
+                }
+            }))
+        ];
+    }
+
     /** The "add" half of the graph's context menu, shared by node and canvas. */
     private addItems(): MenuEntry[] {
         const splat = this.events.invoke('selection') as Splat;
@@ -978,7 +1045,8 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addOutputNode')
-            }
+            },
+            ...this.mergeItems(splat)
         ];
     }
 }

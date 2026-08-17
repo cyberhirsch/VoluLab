@@ -1120,6 +1120,64 @@ class OutputOp {
     }
 }
 
+/**
+ * Two objects into one.
+ *
+ * The first node with more than one input, and the reason the graph is a DAG
+ * rather than a set of parallel chains. Worth being precise about what that
+ * did and did not change:
+ *
+ * The history stays a flat array, because a linear order *is* a topological
+ * order of a DAG - the array says when things ran, and `inputs` says what fed
+ * what. Replay still invalidates everything after a node, which is now
+ * conservative rather than exact: it may re-resolve a node that no path
+ * reaches. Correct, and cheap enough to be worth the simplicity.
+ *
+ * The merged object is built before the op exists, because building it means
+ * writing both objects out and reading them back, and an op's `do` has to be
+ * repeatable. So `do` adds an object that already exists, the way AddSplatOp
+ * does, and hides the two that fed it - reversibly, since hiding is a property
+ * rather than an edit.
+ */
+class MergeOp {
+    name = 'merge';
+
+    scene: Scene;
+    /** what this node consumes - the graph draws an edge from each */
+    inputs: Splat[];
+    /** what it produces */
+    output: Splat;
+
+    private wasVisible: boolean[] = [];
+
+    constructor(scene: Scene, inputs: Splat[], output: Splat) {
+        this.scene = scene;
+        this.inputs = inputs;
+        this.output = output;
+    }
+
+    async do() {
+        this.wasVisible = this.inputs.map(s => s.visible);
+        this.inputs.forEach((s) => {
+            s.visible = false;
+        });
+        await this.scene.add(this.output);
+    }
+
+    undo() {
+        this.scene.remove(this.output);
+        this.inputs.forEach((s, i) => {
+            s.visible = this.wasVisible[i] ?? true;
+        });
+    }
+
+    destroy() {
+        this.output?.destroy();
+        this.inputs = null;
+        this.output = null;
+    }
+}
+
 class SplatRenameOp {
     name = 'splatRename';
     splat: Splat;
@@ -1180,6 +1238,7 @@ export {
     ScopedColorOp,
     AnimTrackEditOp,
     MultiOp,
+    MergeOp,
     principalOp,
     CropOp,
     DecimateOp,

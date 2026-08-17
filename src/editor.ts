@@ -2,7 +2,7 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Quat, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { EditHistory } from './edit-history';
-import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
+import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, MergeOp, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -940,6 +940,33 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             }
         }
     };
+
+    /**
+     * Merge two objects into one.
+     *
+     * The merged data is produced the way duplicate produces its copy - write
+     * both out and read the result back - and only then does the op exist, so
+     * applying it is just adding an object that is already built.
+     */
+    events.function('graph.merge', async (a: Splat, b: Splat) => {
+        if (!a || !b || a === b) return;
+
+        const memFs = new MemoryFileSystem();
+        await writeSplatFile([a, b], { maxSHBands: 3 }, 'ply', 'output.ply', {}, memFs);
+        const data = memFs.results.get('output.ply');
+        if (!data) return;
+
+        const blob = new Blob([data as BlobPart], { type: 'application/octet-stream' });
+        const filename = `${removeExtension(a.filename)}-merged.ply`;
+        const fileSystem = new MappedReadFileSystem();
+        fileSystem.addFile(filename, blob);
+        const merged = await scene.assetLoader.load(filename, fileSystem);
+        if (!merged) return;
+
+        const index = history().cursor;
+        events.fire('edit.add', new MergeOp(scene, [a, b], merged));
+        openInGraph(index);
+    });
 
     // duplicate the current selection
     events.on('edit.duplicate', async () => {
