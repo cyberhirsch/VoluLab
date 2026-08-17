@@ -1,8 +1,9 @@
 # Node backlog
 
-**Status: every node on this list is built.** What is left is written at the
-bottom under *Known limits* - not missing nodes, but places where a node works
-and could work better, each with what it would take.
+**Status: every node on this list is built, and one piece of plumbing is
+not** - the COLMAP bridge under *Next* at the bottom. Everything else left is
+under *Known limits*: not missing nodes, but places where a node works and
+could work better, each with what it would take.
 
 Candidate nodes for the graph, ordered by what they cost rather than by how
 they read. A lot of the work is already done: several of these are a *face*
@@ -197,10 +198,79 @@ as its input, so it cannot be another link in that object's chain.
 
 ---
 
+## Train — done
+
+Gaussians are made in VoluLab now, not only edited. **Brush**
+(github.com/cyberhirsch/brush, Apache-2.0) is a 3DGS trainer in Rust on
+wgpu; compiled to WASM it trains on a WebGPU device inside the app. No
+server, no CUDA, and the same code path on Mac and PC - which is what ruled
+out the CUDA trainers, whose kernels cannot cross into a browser at all.
+
+`TrainOp` is the record: dataset name, the config the run used, iterations,
+final splat count, PSNR. Like merge and voxelise the output exists before the
+op does - training is a long job driven from the pane, and the node is
+committed with its product. Its *retrain* button reopens the pane with those
+settings, and everything downstream replays onto the new output.
+
+Pieces: `src/training/brush-engine.ts` (device, pump loop, pause by not
+pumping), `preview-renderer.ts` (point sprites off Brush's own GPU buffers -
+watching a reconstruction appear does not need gaussian rendering),
+`src/ui/training-panel.ts`, and `scripts/build-brush.mjs` producing the wasm
+under `static/brush/pkg`. The fork adds three entry points brush-js lacked:
+start from bytes, start from a URL, and read the result back as a PLY.
+
+Worth knowing: training runs on its *own* WebGPU device, separate from the
+WebGL2 device the rest of the app renders with. The finished splats cross
+that boundary as PLY bytes, which is why the preview lives in the pane rather
+than in the viewport.
+
+---
+
+## Next
+
+### COLMAP bridge — decided, not started
+
+Training needs posed images. Today a video is ingested to frames and VoluLab
+writes a `run-colmap` script for the user to run - honest, but it leaves the
+app, and dropping raw frames into the pane just answers *format not
+recognized*.
+
+**A local bridge, not a port.** COLMAP will not compile to WASM in any form
+worth having: it wants Ceres, SuiteSparse and CUDA SIFT, and a browser build
+means CPU-only feature extraction plus threads, which means SharedArrayBuffer
+and COOP/COEP headers - the exact requirement avoiding which is why Brush was
+chosen. So COLMAP stays native and fast, and a small local helper process
+drives it, with the training pane talking to it over localhost.
+
+The shape: drop a video or a folder of frames, VoluLab extracts and posts
+them, the bridge runs feature extraction, matching and mapping, and hands
+back a dataset the pane starts training on. Progress streams back so the
+pane can show which stage is running.
+
+The cost, stated plainly: this is the first piece of VoluLab that is not
+client-side. It has to stay strictly optional - everything already built
+must keep working with no bridge running, and a posed dataset must still be
+loadable by hand.
+
+---
+
 ## Known limits
 
 Every node works. These are the places where one could work better, and what
 each would take:
+
+**Training is Chromium-only, and unproven end to end.** Brush's backward
+kernels need WebGPU subgroups, which Firefox and Safari do not expose yet;
+the pane says so rather than failing obscurely. And no full run has been
+watched from dataset to committed node - the pieces typecheck, build and
+load, but a real training run is the next thing to sit down and verify.
+
+**The viewport is still WebGL2 while training is WebGPU.** Two devices, so
+splats cross between them as PLY bytes and the live preview has to live in
+the training pane. Moving the viewport to WebGPU would let the trainer's
+buffers be rendered directly, with no copy and no second canvas - it means
+porting sixteen shaders and the render-target readbacks in
+`src/data-processor`, which is its own project.
 
 **The voxel renderer is a box entity per cell.** Certainly correct, no custom
 shader, and slow once the count runs to thousands. Fast means instancing with
@@ -249,10 +319,10 @@ If it becomes slow, walk `inputs` backwards from the changed node.
 
 ## Decisions taken
 
-These four were open questions in earlier drafts of this file. They are
-settled now, and the answers are the maximal option in each case - worth
-knowing, because each one costs more than its alternative and the cheaper
-paths were deliberately turned down rather than overlooked.
+These were open questions in earlier drafts of this file. They are settled
+now, and the answers are the maximal option in each case - worth knowing,
+because each one costs more than its alternative and the cheaper paths were
+deliberately turned down rather than overlooked.
 
 **Colour on overlapping regions: stack.** A second colour node over gaussians
 an earlier one already graded composes with it rather than replacing it. This
@@ -276,9 +346,23 @@ stay bound to the frame they were made on, and the UI has to say so.
 of the app has to learn about a second kind of element - its own renderer,
 its own export path, its own selection behaviour.
 
+**Training happens in VoluLab, on WebGPU.** Not a launcher driving an
+external trainer, and not a port of anyone's CUDA kernels - those cannot run
+in a browser at all, and would have cost the Mac. Brush is embedded rather
+than reimplemented: writing a differentiable rasteriser, its backward pass
+and Adam in WGSL is weeks of work that already exists, done well, under a
+licence that allows it.
+
+**COLMAP gets a local bridge, not a port.** The one decision here that is
+*not* the maximal option, and deliberately: a WASM COLMAP would be weeks of
+work likely ending too slow to use, so the pose step stays a native process
+and gains a thin local server instead. It costs VoluLab its
+purely-client-side property, which is why the bridge must stay optional.
+
 ### Order of work
 
-All four are done, in the order they were listed: the colour palette, then the
-DAG with merge, then frames, then voxelise. The order held up - each one was
-easier for the ones before it having landed, and voxelise in particular would
-have been much harder to shape without the DAG.
+The first four are done, in the order they were listed: the colour palette,
+then the DAG with merge, then frames, then voxelise. The order held up - each
+one was easier for the ones before it having landed, and voxelise in
+particular would have been much harder to shape without the DAG. Training
+followed, and needed none of them; the COLMAP bridge is what it wants next.
