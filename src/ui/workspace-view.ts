@@ -91,6 +91,8 @@ const createIconIn = (doc: Document, name: keyof typeof ICON_PATHS, size = 14) =
 class WorkspaceView extends Container {
     private state: WorkspaceState;
     private content = new Map<PaneKind, HTMLElement>();
+
+    private viewportBadge = '';
     private parked: HTMLElement;
     private onChange?: () => void;
 
@@ -144,6 +146,19 @@ class WorkspaceView extends Container {
     register(kind: PaneKind, element: HTMLElement) {
         this.content.set(kind, element);
         this.parked.appendChild(element);
+    }
+
+    /**
+     * The graphics backend shown in the viewport pane's header - "webgpu" or
+     * "webgl2". Set once at boot, after the device exists; the header may
+     * have been built before that, so existing badges update in place.
+     * The viewport never leaves the main window, so only this.dom is searched.
+     */
+    setViewportBadge(text: string) {
+        this.viewportBadge = text;
+        this.dom.querySelectorAll('.ws-pane-badge').forEach((el) => {
+            el.textContent = text;
+        });
     }
 
     /**
@@ -540,6 +555,13 @@ class WorkspaceView extends Container {
         };
 
         header.appendChild(select);
+        if (node.kind === 'viewport') {
+            const badge = doc.createElement('span');
+            badge.className = 'ws-pane-badge';
+            badge.title = 'graphics backend';
+            badge.textContent = this.viewportBadge;
+            header.appendChild(badge);
+        }
         header.appendChild(spacer);
         header.appendChild(button('ws-split-row', 'split side by side', 'split-row', () => split('row')));
         header.appendChild(button('ws-split-col', 'split stacked', 'split-col', () => split('col')));

@@ -142,6 +142,7 @@ const main = async () => {
         powerPreference: 'high-performance'
     });
     console.info(`graphics device: ${graphicsDevice.deviceType}`);
+    events.fire('graphicsDevice.created', graphicsDevice.deviceType);
 
     const overrides = [
         urlArgs

@@ -85,6 +85,17 @@
     flex: 1 1 auto;
 }
 
+// the graphics backend, worn quietly on the viewport's header
+.ws-pane-badge {
+    flex: 0 0 auto;
+    padding: 1px 6px;
+    border: $border-width solid $ink-3;
+    color: $ink-4;
+    font-family: $font-mono;
+    font-size: 10px;
+    line-height: 14px;
+}
+
 // the kind selector - reads as a label until you touch it
 .ws-pane-kind {
     height: $h-row;

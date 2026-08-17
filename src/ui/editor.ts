@@ -161,6 +161,12 @@ class EditorUI {
             workspace.reveal(kind);
         });
 
+        // the viewport header says which backend is drawing it. Fired from
+        // main.ts once the device exists, which is after this UI is built.
+        events.on('graphicsDevice.created', (deviceType: string) => {
+            workspace.setViewportBadge(deviceType);
+        });
+
         // the menu bar is global chrome, above the pane tree
         mainContainer.append(menu);
         mainContainer.append(workspace);
