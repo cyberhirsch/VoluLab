@@ -17,6 +17,7 @@ import {
 
 import { gradeMatrix } from './color-grade';
 import { Element, ElementType } from './element';
+import { GradePalette } from './grade-palette';
 import { Serializer } from './serializer';
 import { vertexShader, fragmentShader, gsplatCenter } from './shaders/splat-shader';
 import { State, SplatState } from './splat-state';
@@ -55,12 +56,15 @@ class Splat extends Element {
     // all writes go through state.setBits/clearBits/toggleBits, then flush().
     state: SplatState;
     transformTexture: Texture;
+    /** per-gaussian index into gradePalette; 0 means no colour node has touched it */
+    gradeTexture: Texture;
     selectionBoundStorage: BoundingBox;
     localBoundStorage: BoundingBox;
     worldBoundStorage: BoundingBox;
 
     _visible = true;
     transformPalette: TransformPalette;
+    gradePalette: GradePalette;
 
     selectionAlpha = 1;
 
@@ -106,6 +110,9 @@ class Splat extends Element {
         // create the transform palette (reused across frame swaps; index 0 is identity)
         this.transformPalette = new TransformPalette(device);
 
+        // and the colour grade palette, on the same contract
+        this.gradePalette = new GradePalette(device);
+
         // rebuilds material chunks/params. reads the *current* gsplat instance and
         // state/transform textures so it remains valid after a replaceData swap
         // (the 'view.bands' listener registered in add() keeps pointing at it).
@@ -123,6 +130,7 @@ class Splat extends Element {
             material.setDefine('SH_BANDS', `${Math.min(bands, this._shBandLimit, available)}`);
             material.setParameter('splatState', this.stateTexture);
             material.setParameter('splatTransform', this.transformTexture);
+            material.setParameter('splatGrade', this.gradeTexture);
             material.update();
         };
 
@@ -202,6 +210,7 @@ class Splat extends Element {
         this.stateTexture = createTexture('splatState', PIXELFORMAT_R8);
         this.state = new SplatState(splatData.getProp('state') as Uint8Array, this.stateTexture);
         this.transformTexture = createTexture('splatTransform', PIXELFORMAT_R16U);
+        this.gradeTexture = createTexture('splatGrade', PIXELFORMAT_R16U);
 
         this.localBoundStorage = instance.resource.aabb;
         // @ts-ignore
@@ -476,6 +485,8 @@ class Splat extends Element {
         material.setParameter('clrAlpha', grade.alpha);
 
         material.setParameter('transformPalette', this.transformPalette.texture);
+        material.setParameter('gradePalette', this.gradePalette.texture);
+        material.setParameter('splatGrade', this.gradeTexture);
 
         if (this.visible && selected) {
             // render bounding box

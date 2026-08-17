@@ -10,6 +10,38 @@ uniform mat3 clrMatrix;     // tint, temperature, levels and saturation, folded
 uniform vec3 clrOffset;
 uniform float clrAlpha;
 
+uniform highp usampler2D splatGrade;    // per-gaussian index into the grade palette
+uniform sampler2D gradePalette;         // palette of colour grades
+
+// Two grades, in order: whatever colour nodes have put on this gaussian, then
+// the object's own.
+//
+// Keeping the object's grade out of the palette is what lets it stay live -
+// the panel edits it and every gaussian follows, including ones a node has
+// already moved to a slot. Baking it into each slot instead would freeze it at
+// the moment the node ran.
+//
+// Index 0 means no node has touched this gaussian, which is the common case
+// and costs one branch and no texture reads.
+vec4 applyGrade(vec4 color) {
+    uint gradeIndex = texelFetch(splatGrade, splat.uv, 0).r;
+
+    if (gradeIndex != 0u) {
+        int u = int(gradeIndex % 512u) * 4;
+        int v = int(gradeIndex / 512u);
+
+        vec4 c0 = texelFetch(gradePalette, ivec2(u, v), 0);
+        vec4 c1 = texelFetch(gradePalette, ivec2(u + 1, v), 0);
+        vec4 c2 = texelFetch(gradePalette, ivec2(u + 2, v), 0);
+        float alpha = texelFetch(gradePalette, ivec2(u + 3, v), 0).x;
+
+        mat3 m = mat3(c0.xyz, c1.xyz, c2.xyz);
+        color = vec4(m * color.xyz + vec3(c0.w, c1.w, c2.w), color.a * alpha);
+    }
+
+    return vec4(clrMatrix * color.xyz + clrOffset, color.a * clrAlpha);
+}
+
 varying mediump vec4 texCoord_flags;            // xy: texCoord, z: selected, w: locked
 varying mediump vec4 color;
 
@@ -118,7 +150,7 @@ void main(void) {
 
         // the whole grade is one matrix and one translation - saturation is a
         // linear map, so it folds in rather than following on afterwards
-        color = vec4(clrMatrix * color.xyz + clrOffset, color.a * clrAlpha);
+        color = applyGrade(color);
 
         // don't allow out-of-range alpha
         color.a = clamp(color.a, 0.0, 1.0);
