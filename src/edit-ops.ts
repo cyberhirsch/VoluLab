@@ -2,6 +2,8 @@ import { Color, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { AnimTrack } from './anim-track';
 import { BoxShape } from './box-shape';
+import { GradeParams, gradeMatrix } from './color-grade';
+import { composeGrades, toGrade } from './grade-palette';
 import { IndexRanges } from './index-ranges';
 import { Pivot } from './pivot';
 import { Scene } from './scene';
@@ -601,6 +603,109 @@ class SetSplatColorAdjustmentOp {
     }
 }
 
+/**
+ * A colour grade over the selected gaussians rather than the whole object.
+ *
+ * Works the way SplatsTransformOp does, and for the same reason. The gaussians
+ * being graded may already sit on different palette slots - an earlier colour
+ * node put some of them there - so rather than one new slot there is one per
+ * distinct slot found, each holding that slot's grade composed with this
+ * node's. The map from old slot to new is what undo runs backwards.
+ *
+ * The selection is read when the op applies, not when it was made, so a
+ * selection node above this one can change and the grade follows.
+ */
+class ScopedColorOp {
+    name = 'scopedColor';
+
+    splat: Splat;
+    grade: GradeParams;
+
+    /** old palette slot -> the slot holding it composed with this grade */
+    private paletteMap: Map<number, number> = null;
+
+    constructor(splat: Splat, grade: GradeParams) {
+        this.splat = splat;
+        this.grade = grade;
+    }
+
+    setGrade(grade: GradeParams) {
+        this.grade = grade;
+    }
+
+    /** How many gaussians the last application covered, or -1. */
+    get affected(): number {
+        if (!this.paletteMap) return -1;
+        const state = this.splat.splatData.getProp('state') as Uint8Array;
+        let n = 0;
+        for (let i = 0; i < state.length; ++i) {
+            if ((state[i] & State.selected) !== 0) n++;
+        }
+        return n;
+    }
+
+    do() {
+        const { splat } = this;
+        const state = splat.splatData.getProp('state') as Uint8Array;
+        const numSplats = splat.splatData.numSplats;
+        const indices = splat.gradeTexture.lock() as Uint16Array;
+        const palette = splat.gradePalette;
+
+        const mine = toGrade(gradeMatrix(this.grade));
+        const map = new Map<number, number>();
+
+        // which slots the selection currently sits on
+        for (let i = 0; i < numSplats; ++i) {
+            if ((state[i] & State.selected) === 0) continue;
+            if (!map.has(indices[i])) map.set(indices[i], -1);
+        }
+
+        // one new slot per old one, holding the two grades composed
+        [...map.keys()].forEach((old) => {
+            const slot = palette.alloc();
+            palette.setGrade(slot, composeGrades(palette.getGrade(old), mine));
+            map.set(old, slot);
+        });
+
+        for (let i = 0; i < numSplats; ++i) {
+            if ((state[i] & State.selected) === 0) continue;
+            indices[i] = map.get(indices[i]);
+        }
+
+        splat.gradeTexture.unlock();
+        this.paletteMap = map;
+        splat.scene.forceRender = true;
+    }
+
+    undo() {
+        if (!this.paletteMap) return;
+
+        const { splat } = this;
+        const indices = splat.gradeTexture.lock() as Uint16Array;
+
+        // Reverse by slot rather than by selection: what has to be put back is
+        // exactly what was moved, and the selection may have changed since.
+        const inverse = new Map<number, number>();
+        this.paletteMap.forEach((slot, old) => inverse.set(slot, old));
+
+        for (let i = 0; i < indices.length; ++i) {
+            const back = inverse.get(indices[i]);
+            if (back !== undefined) indices[i] = back;
+        }
+
+        splat.gradeTexture.unlock();
+        // the slots were the most recent allocations, so this is a plain pop
+        splat.gradePalette.free(this.paletteMap.size);
+        this.paletteMap = null;
+        splat.scene.forceRender = true;
+    }
+
+    destroy() {
+        this.splat = null;
+        this.paletteMap = null;
+    }
+}
+
 // Snapshot-based undo/redo for animation track edits.
 // Captures the full track state before and after a mutation.
 class AnimTrackEditOp {
@@ -1072,6 +1177,7 @@ export {
     ShapeTransformState,
     ColorAdjustment,
     SetSplatColorAdjustmentOp,
+    ScopedColorOp,
     AnimTrackEditOp,
     MultiOp,
     principalOp,

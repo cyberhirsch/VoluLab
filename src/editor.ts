@@ -2,7 +2,7 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Quat, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { EditHistory } from './edit-history';
-import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
+import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -597,9 +597,30 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         addTarget(target).forEach(splat => appendAndOpen(new SelectOp(splat, [])));
     });
 
-    // a colour node with no adjustment yet - the panel writes into it
+    /**
+     * A colour node.
+     *
+     * With a selection it is scoped to those gaussians and stacks on whatever
+     * an earlier colour node put there; with nothing selected it grades the
+     * object, which is the older behaviour and still the right one for "make
+     * this whole thing warmer".
+     */
     events.on('graph.addColourNode', (target?: Splat) => {
         addTarget(target).forEach((splat) => {
+            if (splat.numSelected > 0) {
+                appendAndOpen(new ScopedColorOp(splat, {
+                    tintClr: splat.tintClr.clone(),
+                    temperature: 0,
+                    saturation: 1,
+                    exposure: 0,
+                    brightness: 0,
+                    blackPoint: 0,
+                    whitePoint: 1,
+                    transparency: 1
+                }));
+                return;
+            }
+
             const current = {
                 tintClr: splat.tintClr.clone(),
                 temperature: splat.temperature,

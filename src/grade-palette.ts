@@ -57,6 +57,17 @@ export const identityGrade = (): Grade => ({
     alpha: 1
 });
 
+/**
+ * A freshly built grade offsets all three channels by the same amount, so
+ * `gradeMatrix` hands back one number. Composition does not preserve that, so
+ * the palette carries three - this is where the one becomes three.
+ */
+export const toGrade = (g: { m: number[], t: number, alpha: number }): Grade => ({
+    m: g.m,
+    t: [g.t, g.t, g.t],
+    alpha: g.alpha
+});
+
 /** Multiply a column-major 3x3 by a vector. */
 const mulVec = (m: number[], v: [number, number, number]): [number, number, number] => [
     m[0] * v[0] + m[3] * v[1] + m[6] * v[2],
