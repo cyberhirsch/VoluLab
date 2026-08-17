@@ -22,7 +22,7 @@ import { Spinner } from './spinner';
 import { StatusBar } from './status-bar';
 import { TimelinePanel } from './timeline-panel';
 import { Tooltips } from './tooltips';
-import { TrainingPanel } from './training-panel';
+import { TrainingFace } from './training-face';
 import { TransformPanel } from './transform-panel';
 import { VideoSettingsDialog } from './video-settings-dialog';
 import { ViewCube } from './view-cube';
@@ -122,7 +122,10 @@ class EditorUI {
         const dataPanel = new DataPanel(events, tooltips);
         const graphPanel = new GraphPanel(events);
         const nodePanel = new NodePanel(events);
-        const trainingPanel = new TrainingPanel(events);
+        // training is a node now: its controls are the train node's face,
+        // mounted in the node pane the way the colour panel is
+        const trainingFace = new TrainingFace(events);
+        nodePanel.mount('train', trainingFace.dom);
         // the colour controls are a node's parameters now, so they live inside
         // the node pane rather than in a pane of their own
         nodePanel.mount('colour', colorPanel.dom);
@@ -138,7 +141,6 @@ class EditorUI {
         transformPanel.hidden = false;
         nodePanel.hidden = false;
         graphPanel.hidden = false;
-        trainingPanel.hidden = false;
 
         const workspace = new WorkspaceView({
             onChange: () => events.fire('workspace.changed')
@@ -151,7 +153,6 @@ class EditorUI {
         workspace.register('transform', transformPanel.dom);
         workspace.register('timeline', timelinePanel.dom);
         workspace.register('data', dataPanel.dom);
-        workspace.register('training', trainingPanel.dom);
         workspace.register('settings', settingsPanel.dom);
         workspace.rebuild();
 

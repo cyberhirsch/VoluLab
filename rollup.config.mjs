@@ -77,7 +77,9 @@ const application = {
         typescript({
             tsconfig: './tsconfig.json'
         }),
-        resolve(),
+        // browser:true so packages with split node/web builds (laz-perf)
+        // resolve to the web one
+        resolve({ browser: true }),
         image({ dom: false }),
         json(),
         scss({

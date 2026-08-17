@@ -43,6 +43,40 @@ const writeFile = async (dir: FileSystemDirectoryHandle, name: string, data: Blo
     await writable.close();
 };
 
+/** The run-me scripts and readme that turn an images folder into poses. */
+const writeColmapKit = async (dir: FileSystemDirectoryHandle) => {
+    const script = COLMAP_STEPS.join('\n');
+    await writeFile(dir, 'run-colmap.sh', `#!/usr/bin/env bash\nset -e\ncd "$(dirname "$0")"\nmkdir -p sparse\n${script}\n`);
+    await writeFile(dir, 'run-colmap.bat', `@echo off\ncd /d "%~dp0"\nif not exist sparse mkdir sparse\n${COLMAP_STEPS.join('\r\n')}\r\n`);
+    await writeFile(dir, 'README.txt', README);
+};
+
+/**
+ * Copy a set of dropped images into a user-picked directory along with the
+ * COLMAP scripts - the same shape ingestVideo produces, minus the
+ * extraction. Returns true when the dataset directory was written.
+ */
+const ingestImages = async (files: File[], events: Events): Promise<boolean> => {
+    let dir: FileSystemDirectoryHandle;
+    try {
+        dir = await window.showDirectoryPicker({ mode: 'readwrite' } as any);
+    } catch (e) {
+        return false; // cancelled
+    }
+
+    events.fire('startSpinner');
+    try {
+        const images = await dir.getDirectoryHandle('images', { create: true });
+        for (const file of files) {
+            await writeFile(images, file.name, file);
+        }
+        await writeColmapKit(dir);
+        return true;
+    } finally {
+        events.fire('stopSpinner');
+    }
+};
+
 /**
  * Extract frames from `file` into a user-picked directory along with the
  * COLMAP scripts. Returns true when the dataset directory was written.
@@ -90,10 +124,7 @@ const ingestVideo = async (file: File, events: Events): Promise<boolean> => {
 
         URL.revokeObjectURL(video.src);
 
-        const script = COLMAP_STEPS.join('\n');
-        await writeFile(dir, 'run-colmap.sh', `#!/usr/bin/env bash\nset -e\ncd "$(dirname "$0")"\nmkdir -p sparse\n${script}\n`);
-        await writeFile(dir, 'run-colmap.bat', `@echo off\ncd /d "%~dp0"\nif not exist sparse mkdir sparse\n${COLMAP_STEPS.join('\r\n')}\r\n`);
-        await writeFile(dir, 'README.txt', README);
+        await writeColmapKit(dir);
 
         return true;
     } finally {
@@ -101,4 +132,4 @@ const ingestVideo = async (file: File, events: Events): Promise<boolean> => {
     }
 };
 
-export { ingestVideo };
+export { ingestImages, ingestVideo };

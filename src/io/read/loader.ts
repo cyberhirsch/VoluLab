@@ -20,6 +20,8 @@ import {
 } from '@playcanvas/splat-transform';
 import { GSplatData } from 'playcanvas';
 
+import { isPointCloudFile, readPointCloud, synthesizeGaussianProps } from './point-cloud';
+
 type LoadResult = {
     gsplatData: GSplatData;
     transform: Transform;
@@ -140,6 +142,24 @@ const materializeFirst = async (sources: ChunkSource[], pickLod?: PickLod): Prom
  * @param pickLod - Invoked when the file contains multiple LODs to choose which to load
  */
 const loadGSplatData = async (filename: string, fileSystem: ReadFileSystem, skipReorder?: boolean, pickLod?: PickLod): Promise<LoadResult | null> => {
+    // point-cloud formats are parsed here rather than by splat-transform
+    // (which throws on unknown extensions), then flow through the same
+    // reorder/convert/synthesise pipeline as a point-cloud PLY
+    if (isPointCloudFile(filename)) {
+        const dataTable = await readPointCloud(filename, fileSystem);
+        if (!skipReorder && dataTable.numRows > 0) {
+            const indices = new Uint32Array(dataTable.numRows);
+            for (let i = 0; i < indices.length; i++) {
+                indices[i] = i;
+            }
+            sortMortonOrder(dataTable, indices);
+            dataTable.permuteRowsInPlace(indices);
+        }
+        const gsplatData = dataTableToGSplatData(dataTable);
+        synthesizeGaussianProps(gsplatData);
+        return { gsplatData, transform: dataTable.transform };
+    }
+
     const inputFormat = getInputFormat(filename);
     const lowerFilename = filename.toLowerCase();
 
@@ -194,8 +214,13 @@ const loadGSplatData = async (filename: string, fileSystem: ReadFileSystem, skip
         dataTable.permuteRowsInPlace(indices);
     }
 
-    // Convert to GSplatData
-    return { gsplatData: dataTableToGSplatData(dataTable), transform: dataTable.transform };
+    // Convert to GSplatData. A container holding a plain point cloud (a
+    // photogrammetry PLY, say) parses fine but has no gaussian fields -
+    // synthesise them so the cloud imports as tiny gaussians instead of
+    // being rejected downstream
+    const gsplatData = dataTableToGSplatData(dataTable);
+    synthesizeGaussianProps(gsplatData);
+    return { gsplatData, transform: dataTable.transform };
 };
 
 /**

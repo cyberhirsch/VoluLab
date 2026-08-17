@@ -1,7 +1,7 @@
 import { Container } from '@playcanvas/pcui';
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { CleanupOp, CropOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { AddVoxelsOp, CleanupOp, CropOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -205,37 +205,24 @@ class NodePanel extends Container {
             return;
         }
 
-        if (op instanceof TrainOp) {
+        if (op instanceof AddVoxelsOp) {
             this.empty.hidden = true;
-            const s = op.settings;
-            this.stat('dataset', s.datasetName);
-            this.stat('iterations', s.iterations.toLocaleString());
-            this.stat('splats', s.finalSplats.toLocaleString());
-            if (s.psnr !== undefined) {
-                this.stat('psnr', `${s.psnr.toFixed(2)} dB`);
-            }
-            ['max-splats', 'sh-degree', 'max-resolution'].forEach((key) => {
-                if (s.config[key] !== undefined) {
-                    this.stat(key.replace(/-/g, ' '), String(s.config[key]));
-                }
-            });
-
-            const retrainRow = this.row('');
-            const retrain = document.createElement('button');
-            retrain.type = 'button';
-            retrain.className = 'nd-choice';
-            retrain.textContent = 'retrain';
-            retrain.addEventListener('click', () => {
-                this.events.fire('training.retrain', op);
-            });
-            retrainRow.appendChild(retrain);
-            this.body.appendChild(retrainRow);
-
-            const note = document.createElement('div');
-            note.className = 'nd-note';
-            note.textContent = 'the record of a training run. retrain opens the training pane with these settings; the new result replaces this output';
-            this.body.appendChild(note);
+            const grid = op.output.grid;
+            this.stat('file', op.sourceName);
+            this.stat('grid', grid.dims.join(' × '));
+            this.stat('cell size', grid.cellSize.toFixed(4));
+            this.stat('filled', op.output.filled.toLocaleString());
             return;
+        }
+
+        if (op instanceof TrainOp) {
+            const panel = this.mounts.get('train');
+            if (panel) {
+                this.empty.hidden = true;
+                (panel as any).bindNode?.(op, index);
+                this.body.appendChild(panel);
+                return;
+            }
         }
 
         if (op instanceof OutputOp) {

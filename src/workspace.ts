@@ -24,7 +24,6 @@ export type PaneKind =
     | 'transform'
     | 'timeline'
     | 'data'
-    | 'training'
     | 'settings';
 
 export const PANE_KINDS: { kind: PaneKind; label: string }[] = [
@@ -35,7 +34,6 @@ export const PANE_KINDS: { kind: PaneKind; label: string }[] = [
     { kind: 'transform', label: 'transform' },
     { kind: 'timeline', label: 'timeline' },
     { kind: 'data', label: 'splat data' },
-    { kind: 'training', label: 'training' },
     { kind: 'settings', label: 'settings' }
 ];
 
@@ -44,7 +42,9 @@ export const PANE_KINDS: { kind: PaneKind; label: string }[] = [
 const RENAMED_KINDS: Record<string, PaneKind> = {
     nodes: 'graph',
     // the colour panel is a node's parameters now, shown in the node pane
-    color: 'node'
+    color: 'node',
+    // training is a node's parameters too - its pane died the same death
+    training: 'node'
 };
 
 // there is only one canvas, so only one pane can host it

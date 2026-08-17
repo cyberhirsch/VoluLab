@@ -4,11 +4,14 @@ import { CreateDropHandler } from './drop-handler';
 import { ElementType } from './element';
 import { Events } from './events';
 import { BrowserFileSystem, MappedReadFileSystem } from './io';
+import { readVox } from './io/read/vox';
 import { Scene } from './scene';
 import { Splat } from './splat';
 import { SerializeSettings, serializeSog, serializeSpz, serializeViewer, SogSettings, SpzSettings, ViewerExportSettings, WebGPUUnavailableError, writeSplatFile } from './splat-serialize';
 import { TghFrameSource } from './tgh/tgh-frame-source';
 import { TghModel } from './tgh/tgh-model';
+import { looksLikeDataset, packDataset } from './training/dataset';
+import { ingestImages, ingestVideo } from './training/video-ingest';
 import { i18n } from './ui/localization';
 
 // ts compiler and vscode find this type, but eslint does not
@@ -86,6 +89,27 @@ const filePickerTypes: { [key: string]: FilePickerAcceptType } = {
             'application/x-numpy': ['.npz']
         }
     },
+    'pointCloud': {
+        description: 'Point Cloud',
+        accept: {
+            'application/octet-stream': ['.las', '.laz', '.pcd', '.xyz', '.pts']
+        }
+    },
+    'vox': {
+        description: 'MagicaVoxel Model',
+        accept: {
+            'application/octet-stream': ['.vox']
+        }
+    },
+    'dataset': {
+        description: 'Capture Dataset (zip / video / images)',
+        accept: {
+            'application/zip': ['.zip'],
+            'video/*': ['.mp4', '.mov', '.webm', '.mkv'],
+            'image/*': ['.jpg', '.jpeg', '.png'],
+            'text/csv': ['.csv']
+        }
+    },
     'indexTxt': {
         description: 'Colmap Poses (Images.txt)',
         accept: {
@@ -114,6 +138,11 @@ const allImportTypes = {
         'image/webp': ['.webp'],
         'application/x-lcc': ['.lcc', '.lcc2', '.bin'],
         'application/x-numpy': ['.npz'],
+        'application/octet-stream': ['.las', '.laz', '.pcd', '.xyz', '.pts', '.vox'],
+        'application/zip': ['.zip'],
+        'video/mp4': ['.mp4', '.mov', '.webm', '.mkv'],
+        'image/jpeg': ['.jpg', '.jpeg', '.png'],
+        'text/csv': ['.csv'],
         'text/plain': ['.txt']
     }
 };
@@ -374,14 +403,40 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         } else if (isSog(filenames) || isLcc(filenames)) {
             const model = await importSplatModel(files, animationFrame);
             if (model) result.push(model);
+        } else if (looksLikeDataset(filenames)) {
+            // a capture dataset - posed cameras plus images - becomes a
+            // pending train node, packed as one zip for the trainer
+            events.fire('startSpinner');
+            try {
+                const { bytes, name } = await packDataset(files);
+                events.invoke('training.addNode', { kind: 'bytes', bytes, name: `${name}.zip` }, name);
+            } finally {
+                events.fire('stopSpinner');
+            }
         } else {
             // check for unrecognized file types
+            const known = [
+                '.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz', '.npz',
+                '.zip', '.csv', '.mp4', '.mov', '.webm', '.mkv', '.jpg', '.jpeg', '.png',
+                '.las', '.laz', '.pcd', '.xyz', '.pts', '.vox'
+            ];
             for (let i = 0; i < filenames.length; i++) {
                 const filename = filenames[i].toLowerCase();
-                if (['.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz', '.npz'].every(ext => !filename.endsWith(ext))) {
+                if (known.every(ext => !filename.endsWith(ext))) {
                     await showLoadError('Unrecognized file type', filename);
                     return;
                 }
+            }
+
+            // a set of bare photos is a dataset waiting for poses: copy them
+            // out with the COLMAP kit and leave a train node waiting
+            const imageFiles = files.filter((f, i) => /\.(?:jpg|jpeg|png)$/.test(filenames[i]));
+            if (imageFiles.length > 1 && imageFiles.length === files.length) {
+                const wrote = await ingestImages(imageFiles.map(f => f.contents), events);
+                if (wrote) {
+                    events.invoke('training.addNode', null, i18n.t('training.awaiting-poses'));
+                }
+                return result;
             }
 
             // handle multiple files as independent imports
@@ -391,19 +446,56 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 if (filename.endsWith('.ssproj')) {
                     // load ssproj document
                     await events.invoke('doc.load', files[i].contents ?? (await fetch(files[i].url)).arrayBuffer(), files[i].handle);
-                } else if (['.ply', '.splat', '.sog', '.ksplat', '.spz'].some(ext => filename.endsWith(ext))) {
-                    // load gaussian splat model
+                } else if (['.ply', '.splat', '.sog', '.ksplat', '.spz', '.las', '.laz', '.pcd', '.xyz', '.pts'].some(ext => filename.endsWith(ext))) {
+                    // gaussian splats, and point clouds arriving as tiny gaussians
                     const model = await importSplatModel([files[i]], animationFrame);
                     if (model) result.push(model);
                 } else if (filename.endsWith('images.txt')) {
                     // load colmap frames
                     await loadImagesTxt(files[i], events);
+                } else if (filename.endsWith('transforms.json') || filename.endsWith('.csv')) {
+                    // a pose file without its images cannot train
+                    await events.invoke('showPopup', {
+                        type: 'info',
+                        header: i18n.t('training.dataset'),
+                        message: i18n.t('import.dataset-needs-images')
+                    });
                 } else if (filename.endsWith('.json')) {
                     // load inria camera poses
                     await loadCameraPoses(files[i], events);
                 } else if (filename.endsWith('.npz')) {
                     // load a TGH volumetric video checkpoint
                     await importTghModel(files[i]);
+                } else if (filename.endsWith('.zip')) {
+                    // a zip is a dataset for training - Brush sniffs the contents
+                    const contents = files[i].contents ?? await (await fetch(files[i].url)).blob();
+                    const bytes = new Uint8Array(await contents.arrayBuffer());
+                    events.invoke('training.addNode', { kind: 'bytes', bytes, name: files[i].filename }, files[i].filename);
+                } else if (['.mp4', '.mov', '.webm', '.mkv'].some(ext => filename.endsWith(ext))) {
+                    // video: extract frames + write the COLMAP kit, and leave
+                    // a train node waiting for the processed folder
+                    const contents = files[i].contents ?? new File([await (await fetch(files[i].url)).blob()], files[i].filename);
+                    const wrote = await ingestVideo(contents, events);
+                    if (wrote) {
+                        events.invoke('training.addNode', null, i18n.t('training.awaiting-poses'));
+                    }
+                } else if (filename.endsWith('.vox')) {
+                    // a voxel model onto the voxel element
+                    const contents = files[i].contents ?? await (await fetch(files[i].url)).blob();
+                    const bytes = new Uint8Array(await contents.arrayBuffer());
+                    try {
+                        const grid = readVox(bytes);
+                        if (grid.cells.length > 50000) {
+                            await events.invoke('showPopup', {
+                                type: 'info',
+                                header: files[i].filename,
+                                message: i18n.t('import.vox-large-warning')
+                            });
+                        }
+                        events.invoke('vox.import', grid, files[i].filename);
+                    } catch (error) {
+                        await showLoadError(error.message ?? error, files[i].filename);
+                    }
                 }
             }
         }
@@ -421,7 +513,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         fileSelector = document.createElement('input');
         fileSelector.setAttribute('id', 'file-selector');
         fileSelector.setAttribute('type', 'file');
-        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz,.npz');
+        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz,.npz,.zip,.csv,.mp4,.mov,.webm,.mkv,.jpg,.jpeg,.png,.las,.laz,.pcd,.xyz,.pts,.vox');
         fileSelector.setAttribute('multiple', 'true');
 
         fileSelector.onchange = () => {
@@ -488,6 +580,9 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                         filePickerTypes.ksplat,
                         filePickerTypes.spz,
                         filePickerTypes.npz,
+                        filePickerTypes.pointCloud,
+                        filePickerTypes.vox,
+                        filePickerTypes.dataset,
                         filePickerTypes.indexTxt
                     ]
                 });

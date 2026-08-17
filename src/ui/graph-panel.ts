@@ -73,6 +73,7 @@ const OP_LABELS: Record<string, string> = {
     splatRename: 'rename',
     merge: 'merge',
     voxelise: 'voxelise',
+    addVoxels: 'import voxels',
     train: 'train',
     crop: 'crop',
     cleanup: 'cleanup',
@@ -607,7 +608,9 @@ class GraphPanel extends Container {
             add(key, {
                 index: i,
                 kind: select ? 'select' : opLabel(op),
-                name: select ? describeSteps(steps) : '',
+                // a pending producer (a train node before its first run) sits
+                // here too, and names its dataset rather than nothing
+                name: select ? describeSteps(steps) : ((op as any).sourceLabel ?? ''),
                 applied: i < cursor,
                 splat,
                 select: !!select,
@@ -1013,10 +1016,10 @@ class GraphPanel extends Container {
                 action: () => this.events.invoke('scene.import')
             },
             {
-                // training is the other way an object enters the graph - the
-                // pane drives the run and commits the node when it finishes
+                // training is the other way an object enters the graph: the
+                // node arrives pending, and its face in the node pane runs it
                 label: 'add training node',
-                action: () => this.events.fire('training.open')
+                action: () => this.events.invoke('training.addNode')
             },
             {
                 label: 'add select node',

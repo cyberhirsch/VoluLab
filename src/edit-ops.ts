@@ -1223,6 +1223,44 @@ class VoxeliseOp {
     }
 }
 
+/**
+ * An imported voxel model. Import nodes for splats are synthesised by the
+ * graph from the scene, but voxels only enter the graph through history -
+ * so an imported .vox arrives as an op, built like every other producer:
+ * output first, then an op whose do/undo add and remove it.
+ */
+class AddVoxelsOp {
+    name = 'addVoxels';
+
+    scene: Scene;
+    inputs: Splat[] = [];
+    output: Voxels;
+    sourceName: string;
+
+    constructor(scene: Scene, output: Voxels, sourceName: string) {
+        this.scene = scene;
+        this.output = output;
+        this.sourceName = sourceName;
+    }
+
+    get sourceLabel() {
+        return this.sourceName;
+    }
+
+    async do() {
+        await this.scene.add(this.output);
+    }
+
+    undo() {
+        this.scene.remove(this.output);
+    }
+
+    destroy() {
+        this.output?.destroy();
+        this.output = null;
+    }
+}
+
 /** The record a train node keeps: what was trained, how, and what came out. */
 type TrainSettings = {
     datasetName: string;
@@ -1234,13 +1272,14 @@ type TrainSettings = {
 };
 
 /**
- * A training run, recorded in the graph.
+ * A training run, recorded in the graph - and unlike every other producing
+ * node, it starts life *pending*: the node exists before any gaussians do.
  *
- * Like merge and voxelise, the output exists before the op does - training
- * is a long job driven from the training pane, and this op is committed
- * with its product. The node is the record: dataset, settings, result.
- * Editing the settings and retraining replaces the output, and everything
- * downstream replays onto it.
+ * The node IS training. It is created with a dataset and settings and no
+ * output; the run controller (src/training/train-run.ts) drives the
+ * trainer and hands the op its output at the first snapshot, then refines
+ * that same object in place through replaceData as the run proceeds. The
+ * viewport is the live view.
  *
  * The dataset itself is session state, not history: a directory handle or
  * a dropped file cannot be serialised, so retrain re-attaches it when the
@@ -1252,28 +1291,30 @@ class TrainOp {
     scene: Scene;
     /** trained from a dataset, not from scene objects */
     inputs: Splat[] = [];
-    output: Splat;
+    /** null until the first snapshot of the first run */
+    output: Splat | null;
     settings: TrainSettings;
     /** held so retrain can reuse the dataset within this session */
     dataset?: unknown;
+    bypassed?: boolean;
 
-    constructor(scene: Scene, output: Splat, settings: TrainSettings) {
+    constructor(scene: Scene, output: Splat | null, settings: TrainSettings) {
         this.scene = scene;
         this.output = output;
         this.settings = settings;
     }
 
-    /** what the graph labels the produced object's lane with */
+    /** what the graph labels this node with */
     get sourceLabel() {
         return this.settings.datasetName;
     }
 
     async do() {
-        await this.scene.add(this.output);
+        if (this.output) await this.scene.add(this.output);
     }
 
     undo() {
-        this.scene.remove(this.output);
+        if (this.output) this.scene.remove(this.output);
     }
 
     destroy() {
@@ -1345,6 +1386,7 @@ export {
     MultiOp,
     MergeOp,
     VoxeliseOp,
+    AddVoxelsOp,
     TrainOp,
     type TrainSettings,
     principalOp,

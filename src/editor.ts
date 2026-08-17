@@ -2,7 +2,7 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Quat, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { EditHistory } from './edit-history';
-import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
+import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -13,7 +13,8 @@ import { RangeQuery, SelectQuery } from './select-query';
 import { Splat } from './splat';
 import { writeSplatFile } from './splat-serialize';
 import { State } from './splat-state';
-import { Voxels, voxelise } from './voxels';
+import { registerTraining } from './training/train-run';
+import { VoxelGrid, Voxels, voxelise } from './voxels';
 
 const removeExtension = (filename: string) => {
     return filename.substring(0, filename.length - path.getExtension(filename).length);
@@ -971,29 +972,35 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     /**
-     * Commit a finished training run to the scene.
-     *
-     * Training happens in the training pane; the node enters history here,
-     * carrying the dataset name, the settings used and the trained result -
-     * built before the op exists, exactly as merge builds its output.
+     * Import a parsed voxel model. Unlike splats, whose import nodes the
+     * graph synthesises from the scene, voxels enter the graph through
+     * history - so the import is an op like any other producer.
      */
-    events.function('training.commit', async (args: {
-        plyBytes: Uint8Array, name: string, settings: TrainSettings, dataset?: unknown
-    }) => {
-        const blob = new Blob([args.plyBytes as BlobPart], { type: 'application/octet-stream' });
-        const filename = `${args.name}.ply`;
-        const fileSystem = new MappedReadFileSystem();
-        fileSystem.addFile(filename, blob);
-        const trained = await scene.assetLoader.load(filename, fileSystem);
-        if (!trained) return null;
-
+    events.function('vox.import', (grid: VoxelGrid, name: string) => {
+        const voxels = new Voxels(grid, removeExtension(name));
         const index = history().cursor;
-        const op = new TrainOp(scene, trained, args.settings);
-        op.dataset = args.dataset;
+        events.fire('edit.add', new AddVoxelsOp(scene, voxels, name));
+        openInGraph(index);
+        return voxels;
+    });
+
+    /**
+     * Add a pending train node: the node exists before any gaussians do.
+     * The run controller (train-run.ts) fills in its output when a run
+     * produces one; here is only the record entering history.
+     */
+    events.function('training.addNode', (dataset: unknown = null, datasetName = 'no dataset', config: Record<string, unknown> = {}) => {
+        const settings: TrainSettings = { datasetName, config, iterations: 0, finalSplats: 0 };
+        const op = new TrainOp(scene, null, settings);
+        op.dataset = dataset ?? undefined;
+        const index = history().cursor;
         events.fire('edit.add', op);
         openInGraph(index);
-        return trained;
+        events.fire('workspace.reveal', 'node');
+        return op;
     });
+
+    registerTraining(events, scene);
 
     /**
      * Resample an object onto a grid.
