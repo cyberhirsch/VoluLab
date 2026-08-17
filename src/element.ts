@@ -7,6 +7,7 @@ enum ElementType {
     camera = 'camera',
     model = 'model',
     splat = 'splat',
+    voxel = 'voxel',
     shadow = 'shadow',
     debug = 'debug',
     other = 'other'
@@ -16,6 +17,7 @@ const ElementTypeList = [
     ElementType.camera,
     ElementType.model,
     ElementType.splat,
+    ElementType.voxel,
     ElementType.shadow,
     ElementType.debug,
     ElementType.other

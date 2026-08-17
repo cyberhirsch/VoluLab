@@ -1,7 +1,7 @@
 import { Container } from '@playcanvas/pcui';
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { CleanupOp, CropOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, principalOp } from '../edit-ops';
+import { CleanupOp, CropOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -189,6 +189,19 @@ class NodePanel extends Container {
         if (op instanceof StateOp) {
             this.empty.hidden = true;
             this.buildStateOp(op);
+            return;
+        }
+
+        if (op instanceof VoxeliseOp) {
+            this.empty.hidden = true;
+            const grid = op.output.grid;
+            this.stat('grid', grid.dims.join(' × '));
+            this.stat('cell size', grid.cellSize.toFixed(4));
+            this.stat('filled', op.output.filled.toLocaleString());
+            const note = document.createElement('div');
+            note.className = 'nd-note';
+            note.textContent = 'a grid of cells, not gaussians on a lattice. the source is hidden rather than removed - bypass to bring it back';
+            this.body.appendChild(note);
             return;
         }
 

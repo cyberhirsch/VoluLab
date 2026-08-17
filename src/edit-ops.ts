@@ -12,6 +12,7 @@ import { SphereShape } from './sphere-shape';
 import { Splat } from './splat';
 import { State } from './splat-state';
 import { Transform } from './transform';
+import { Voxels } from './voxels';
 
 interface EditOp {
     name: string;
@@ -1178,6 +1179,50 @@ class MergeOp {
     }
 }
 
+/**
+ * Turn an object into a grid of voxels.
+ *
+ * Like merge, this produces a new element rather than changing one - and
+ * unlike merge, what it produces is not the same kind of thing that went in.
+ * That is the node the graph gained a DAG for: its output type differs from
+ * its input's, so it cannot simply be another link in that object's chain.
+ *
+ * The source is hidden rather than removed, so bypassing the node brings it
+ * back and the original data is never lost.
+ */
+class VoxeliseOp {
+    name = 'voxelise';
+
+    scene: Scene;
+    inputs: Splat[];
+    output: Voxels;
+
+    private wasVisible = true;
+
+    constructor(scene: Scene, source: Splat, output: Voxels) {
+        this.scene = scene;
+        this.inputs = [source];
+        this.output = output;
+    }
+
+    async do() {
+        this.wasVisible = this.inputs[0].visible;
+        this.inputs[0].visible = false;
+        await this.scene.add(this.output);
+    }
+
+    undo() {
+        this.scene.remove(this.output);
+        this.inputs[0].visible = this.wasVisible;
+    }
+
+    destroy() {
+        this.output?.destroy();
+        this.inputs = null;
+        this.output = null;
+    }
+}
+
 class SplatRenameOp {
     name = 'splatRename';
     splat: Splat;
@@ -1239,6 +1284,7 @@ export {
     AnimTrackEditOp,
     MultiOp,
     MergeOp,
+    VoxeliseOp,
     principalOp,
     CropOp,
     DecimateOp,

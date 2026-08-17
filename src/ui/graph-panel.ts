@@ -72,6 +72,7 @@ const OP_LABELS: Record<string, string> = {
     addSplat: 'add object',
     splatRename: 'rename',
     merge: 'merge',
+    voxelise: 'voxelise',
     crop: 'crop',
     cleanup: 'cleanup',
     decimate: 'decimate',
@@ -845,6 +846,10 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addShBandsNode', splat)
                     },
                     {
+                        label: 'voxelise',
+                        action: () => this.events.invoke('graph.voxelise', splat)
+                    },
+                    {
                         label: 'output',
                         action: () => this.events.fire('graph.addOutputNode', splat)
                     }
@@ -1045,6 +1050,12 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addOutputNode')
+            },
+            {
+                label: 'add voxelise node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.invoke('graph.voxelise')
             },
             ...this.mergeItems(splat)
         ];

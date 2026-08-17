@@ -2,7 +2,7 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Quat, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { EditHistory } from './edit-history';
-import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, MergeOp, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
+import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, MergeOp, VoxeliseOp, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -13,6 +13,7 @@ import { RangeQuery, SelectQuery } from './select-query';
 import { Splat } from './splat';
 import { writeSplatFile } from './splat-serialize';
 import { State } from './splat-state';
+import { Voxels, voxelise } from './voxels';
 
 const removeExtension = (filename: string) => {
     return filename.substring(0, filename.length - path.getExtension(filename).length);
@@ -967,6 +968,57 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         const index = history().cursor;
         events.fire('edit.add', new MergeOp(scene, [a, b], merged));
         openInGraph(index);
+    });
+
+    /**
+     * Resample an object onto a grid.
+     *
+     * Scoped to the selection when there is one, so a voxel node can take a
+     * region rather than the whole object - the same rule colour follows.
+     */
+    const decodedColors = (data: any) => {
+        const n = data.numSplats;
+        const src = ['f_dc_0', 'f_dc_1', 'f_dc_2'].map(k => data.getProp(k) as Float32Array);
+        const opacity = data.getProp('opacity') as Float32Array;
+        const out = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+        const alpha = new Float32Array(n);
+        for (let i = 0; i < n; ++i) {
+            for (let c = 0; c < 3; ++c) out[c][i] = decodeColorChannel(src[c]?.[i] ?? 0);
+            alpha[i] = opacity ? 1 / (1 + Math.exp(-opacity[i])) : 1;
+        }
+        return { r: out[0], g: out[1], b: out[2], a: alpha };
+    };
+
+    events.function('graph.voxelise', (target?: Splat, resolution = 32) => {
+        const splats = target ? [target] : selectedSplats();
+        splats.forEach((splat) => {
+            const data = splat.splatData;
+            const state = data.getProp('state') as Uint8Array;
+            const anySelected = splat.numSelected > 0;
+
+            const grid = voxelise(
+                {
+                    x: data.getProp('x') as Float32Array,
+                    y: data.getProp('y') as Float32Array,
+                    z: data.getProp('z') as Float32Array
+                },
+                // a voxel holds a colour, not the coefficients a gaussian
+                // stores it as, so the conversion happens here rather than
+                // being carried into the grid and undone at export
+                decodedColors(data),
+                (i) => {
+                    if ((state[i] & State.deleted) !== 0) return false;
+                    return !anySelected || (state[i] & State.selected) !== 0;
+                },
+                data.numSplats,
+                resolution
+            );
+
+            const voxels = new Voxels(grid, `${removeExtension(splat.name ?? 'object')}-voxels`);
+            const index = history().cursor;
+            events.fire('edit.add', new VoxeliseOp(scene, splat, voxels));
+            openInGraph(index);
+        });
     });
 
     // duplicate the current selection
