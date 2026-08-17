@@ -73,6 +73,7 @@ const OP_LABELS: Record<string, string> = {
     splatRename: 'rename',
     merge: 'merge',
     voxelise: 'voxelise',
+    train: 'train',
     crop: 'crop',
     cleanup: 'cleanup',
     decimate: 'decimate',
@@ -561,7 +562,9 @@ class GraphPanel extends Container {
                 add(produces, {
                     index: i,
                     kind: opLabel(op),
-                    name: `${((op as any).inputs?.length ?? 0)} inputs`,
+                    // a node fed by something outside the graph (a training
+                    // dataset) says what that was; otherwise count its inputs
+                    name: (op as any).sourceLabel ?? `${((op as any).inputs?.length ?? 0)} inputs`,
                     applied: i < cursor,
                     splat: produces,
                     bypassed: !!op.bypassed,
@@ -1008,6 +1011,12 @@ class GraphPanel extends Container {
                 // and everything else needs one to hang off.
                 label: 'add import node',
                 action: () => this.events.invoke('scene.import')
+            },
+            {
+                // training is the other way an object enters the graph - the
+                // pane drives the run and commits the node when it finishes
+                label: 'add training node',
+                action: () => this.events.fire('training.open')
             },
             {
                 label: 'add select node',

@@ -1,52 +1,35 @@
 @use 'colors.scss' as *;
 
+// A slim indeterminate bar pinned to the bottom of the screen, not a
+// full-screen block - background work should not stop the editor.
 #spinner-container {
+    position: fixed;
     left: 0;
-    top: 0;
+    bottom: 0;
     width: 100%;
-    height: 100%;
-    background-color: $bcg-darken;
-    pointer-events: all;
-    cursor: progress;
+    height: 3px;
+    background-color: transparent;
+    pointer-events: none;
+    overflow: hidden;
+    z-index: 1000;
 
-    .spinner::before, .spinner::after {
-        border: 2px solid;
-        border-left: none;
-        box-sizing: border-box;
-        content: '';
-        display: block;
+    .spinner-bar {
         position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translateY(-50%);
-        transform-origin: 0% 50%;
-        animation: spinner-spin 1s linear 0s infinite;
-        border-width: 3px;
-        border-color: $ink-5;
+        top: 0;
+        left: 0;
+        height: 100%;
+        width: 40%;
+        background-color: $ink-6;
+        animation: spinner-sweep 1.1s ease-in-out infinite;
     }
 
-    .spinner::before {
-        width: 15px;
-        height: 24px;
-        border-radius: 0;
-    }
-
-    .spinner::after {
-        width: 8px;
-        height: 16px;
-        border-radius: 0;
-        animation-direction: reverse;
-    }
-
-    @keyframes spinner-spin {
+    @keyframes spinner-sweep {
         0% {
-            -webkit-transform: translateY(-50%) rotate(0deg);
-            transform: translateY(-50%) rotate(0deg);
+            left: -40%;
         }
 
         100% {
-            -webkit-transform: translateY(-50%) rotate(360deg);
-            transform: translateY(-50%) rotate(360deg);
+            left: 100%;
         }
     }
 }

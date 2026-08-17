@@ -22,10 +22,12 @@ import { Spinner } from './spinner';
 import { StatusBar } from './status-bar';
 import { TimelinePanel } from './timeline-panel';
 import { Tooltips } from './tooltips';
+import { TrainingPanel } from './training-panel';
 import { TransformPanel } from './transform-panel';
 import { VideoSettingsDialog } from './video-settings-dialog';
 import { ViewCube } from './view-cube';
 import logo from './volulab-logo.png';
+import { PaneKind } from '../workspace';
 import { WorkspaceView } from './workspace-view';
 
 // ts compiler and vscode find this type, but eslint does not
@@ -120,6 +122,7 @@ class EditorUI {
         const dataPanel = new DataPanel(events, tooltips);
         const graphPanel = new GraphPanel(events);
         const nodePanel = new NodePanel(events);
+        const trainingPanel = new TrainingPanel(events);
         // the colour controls are a node's parameters now, so they live inside
         // the node pane rather than in a pane of their own
         nodePanel.mount('colour', colorPanel.dom);
@@ -135,6 +138,7 @@ class EditorUI {
         transformPanel.hidden = false;
         nodePanel.hidden = false;
         graphPanel.hidden = false;
+        trainingPanel.hidden = false;
 
         const workspace = new WorkspaceView({
             onChange: () => events.fire('workspace.changed')
@@ -147,8 +151,15 @@ class EditorUI {
         workspace.register('transform', transformPanel.dom);
         workspace.register('timeline', timelinePanel.dom);
         workspace.register('data', dataPanel.dom);
+        workspace.register('training', trainingPanel.dom);
         workspace.register('settings', settingsPanel.dom);
         workspace.rebuild();
+
+        // flows that need a pane on screen (retrain, the graph's add-training
+        // entry) route through here rather than touching the workspace directly
+        events.on('workspace.reveal', (kind: PaneKind) => {
+            workspace.reveal(kind);
+        });
 
         // the menu bar is global chrome, above the pane tree
         mainContainer.append(menu);

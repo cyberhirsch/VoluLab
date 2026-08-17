@@ -2,7 +2,7 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Quat, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { EditHistory } from './edit-history';
-import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, MergeOp, VoxeliseOp, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
+import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -968,6 +968,31 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         const index = history().cursor;
         events.fire('edit.add', new MergeOp(scene, [a, b], merged));
         openInGraph(index);
+    });
+
+    /**
+     * Commit a finished training run to the scene.
+     *
+     * Training happens in the training pane; the node enters history here,
+     * carrying the dataset name, the settings used and the trained result -
+     * built before the op exists, exactly as merge builds its output.
+     */
+    events.function('training.commit', async (args: {
+        plyBytes: Uint8Array, name: string, settings: TrainSettings, dataset?: unknown
+    }) => {
+        const blob = new Blob([args.plyBytes as BlobPart], { type: 'application/octet-stream' });
+        const filename = `${args.name}.ply`;
+        const fileSystem = new MappedReadFileSystem();
+        fileSystem.addFile(filename, blob);
+        const trained = await scene.assetLoader.load(filename, fileSystem);
+        if (!trained) return null;
+
+        const index = history().cursor;
+        const op = new TrainOp(scene, trained, args.settings);
+        op.dataset = args.dataset;
+        events.fire('edit.add', op);
+        openInGraph(index);
+        return trained;
     });
 
     /**

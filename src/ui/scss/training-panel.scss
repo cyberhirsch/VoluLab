@@ -1,0 +1,124 @@
+@use 'colors.scss' as *;
+
+// The training pane: dataset in at the top, live preview at the bottom,
+// the run's numbers in between. Same grey ladder as every other pane.
+
+#training-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow-y: auto;
+    background-color: $ink-1;
+    font-family: $font-mono;
+    color: $ink-5;
+
+    .tp-section {
+        padding: 8px 10px;
+        border-bottom: 1px solid $ink-3;
+    }
+
+    .tp-heading {
+        color: $ink-4;
+        font-size: 11px;
+        text-transform: lowercase;
+        margin-bottom: 6px;
+    }
+
+    .tp-row {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+
+    .tp-button {
+        background-color: $ink-2;
+        border: 1px solid $ink-3;
+        color: $ink-6;
+        font-family: $font-mono;
+        font-size: 11px;
+        padding: 4px 10px;
+        cursor: pointer;
+
+        &:hover:not(:disabled) {
+            color: $ink-7;
+            border-color: $ink-4;
+        }
+
+        &:disabled {
+            color: $ink-4;
+            cursor: default;
+            opacity: 0.6;
+        }
+    }
+
+    .tp-source {
+        margin-top: 6px;
+        color: $ink-6;
+        font-size: 11px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .tp-field {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 11px;
+        margin: 3px 0;
+
+        span {
+            color: $ink-5;
+        }
+
+        input {
+            width: 90px;
+            background-color: $ink-0;
+            border: 1px solid $ink-3;
+            color: $ink-6;
+            font-family: $font-mono;
+            font-size: 11px;
+            padding: 2px 6px;
+
+            &:focus {
+                outline: none;
+                border-color: $ink-4;
+            }
+        }
+    }
+
+    .tp-status {
+        color: $ink-7;
+        font-size: 12px;
+    }
+
+    .tp-stats {
+        margin-top: 4px;
+        color: $ink-5;
+        font-size: 11px;
+        min-height: 14px;
+    }
+
+    .tp-notice {
+        margin-top: 6px;
+        color: $ink-6;
+        background-color: $ink-2;
+        border: 1px solid $ink-3;
+        padding: 6px 8px;
+        font-size: 11px;
+    }
+
+    .tp-preview {
+        flex: 1 1 auto;
+        min-height: 160px;
+        width: 100%;
+        background-color: $ink-0;
+        touch-action: none;
+        cursor: grab;
+
+        &:active {
+            cursor: grabbing;
+        }
+    }
+}

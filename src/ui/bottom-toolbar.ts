@@ -5,7 +5,6 @@ import { ShortcutManager } from '../shortcut-manager';
 import { i18n } from './localization';
 import measureSvg from './svg/measure.svg';
 import orientSvg from './svg/orient.svg';
-import redoSvg from './svg/redo.svg';
 import brushSvg from './svg/select-brush.svg';
 import eyedropperSvg from './svg/select-eyedropper.svg';
 import floodSvg from './svg/select-flood.svg';
@@ -14,7 +13,6 @@ import pickerSvg from './svg/select-picker.svg';
 import polygonSvg from './svg/select-poly.svg';
 import sphereSvg from './svg/select-sphere.svg';
 import boxSvg from './svg/show-hide-splats.svg';
-import undoSvg from './svg/undo.svg';
 import { Tooltips } from './tooltips';
 // import cropSvg from './svg/crop.svg';
 
@@ -34,18 +32,6 @@ class BottomToolbar extends Container {
 
         this.dom.addEventListener('pointerdown', (event) => {
             event.stopPropagation();
-        });
-
-        const undo = new Button({
-            id: 'bottom-toolbar-undo',
-            class: 'bottom-toolbar-button',
-            enabled: false
-        });
-
-        const redo = new Button({
-            id: 'bottom-toolbar-redo',
-            class: 'bottom-toolbar-button',
-            enabled: false
         });
 
         const picker = new Button({
@@ -133,8 +119,6 @@ class BottomToolbar extends Container {
             icon: 'E189'
         });
 
-        undo.dom.appendChild(createSvg(undoSvg));
-        redo.dom.appendChild(createSvg(redoSvg));
         picker.dom.appendChild(createSvg(pickerSvg));
         polygon.dom.appendChild(createSvg(polygonSvg));
         brush.dom.appendChild(createSvg(brushSvg));
@@ -147,9 +131,6 @@ class BottomToolbar extends Container {
         orient.dom.appendChild(createSvg(orientSvg));
         // crop.dom.appendChild(createSvg(cropSvg));
 
-        this.append(undo);
-        this.append(redo);
-        this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(picker);
         this.append(lasso);
         this.append(polygon);
@@ -170,8 +151,6 @@ class BottomToolbar extends Container {
         this.append(coordSpace);
         this.append(origin);
 
-        undo.dom.addEventListener('click', () => events.fire('edit.undo'));
-        redo.dom.addEventListener('click', () => events.fire('edit.redo'));
         polygon.dom.addEventListener('click', () => events.fire('tool.polygonSelection'));
         lasso.dom.addEventListener('click', () => events.fire('tool.lassoSelection'));
         brush.dom.addEventListener('click', () => events.fire('tool.brushSelection'));
@@ -192,13 +171,6 @@ class BottomToolbar extends Container {
             } else {
                 events.fire('pivot.reset', e.shiftKey);
             }
-        });
-
-        events.on('edit.canUndo', (value: boolean) => {
-            undo.enabled = value;
-        });
-        events.on('edit.canRedo', (value: boolean) => {
-            redo.enabled = value;
         });
 
         events.on('tool.activated', (toolName: string) => {
@@ -236,8 +208,6 @@ class BottomToolbar extends Container {
         };
 
         // register tooltips
-        tooltips.register(undo, tooltip('tooltip.bottom-toolbar.undo', 'edit.undo'));
-        tooltips.register(redo, tooltip('tooltip.bottom-toolbar.redo', 'edit.redo'));
         tooltips.register(picker, tooltip('tooltip.bottom-toolbar.rectangle-selection', 'tool.rectSelection'));
         tooltips.register(lasso, tooltip('tooltip.bottom-toolbar.lasso-selection', 'tool.lassoSelection'));
         tooltips.register(polygon, tooltip('tooltip.bottom-toolbar.polygon-selection', 'tool.polygonSelection'));

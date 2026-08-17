@@ -1,5 +1,11 @@
 import { Container, Element } from '@playcanvas/pcui';
 
+/**
+ * A slim indeterminate loading bar, docked to the bottom edge of the screen.
+ * Unlike the old full-screen spinner, this does not block input or darken
+ * the editor - background loads (a file import, a training-pane commit)
+ * should not stop the user from doing anything else meanwhile.
+ */
 class Spinner extends Container {
     constructor(args = {}) {
         args = {
@@ -10,21 +16,12 @@ class Spinner extends Container {
 
         super(args);
 
-        this.dom.tabIndex = 0;
-        this.dom.classList.add('blocks-shortcuts');
-
-        const spinner = new Element({
+        const bar = new Element({
             dom: 'div',
-            class: 'spinner'
+            class: 'spinner-bar'
         });
 
-        this.append(spinner);
-
-        this.dom.addEventListener('keydown', (event) => {
-            if (this.hidden) return;
-            event.stopPropagation();
-            event.preventDefault();
-        });
+        this.append(bar);
     }
 }
 

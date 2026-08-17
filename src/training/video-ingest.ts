@@ -1,0 +1,104 @@
+import { Events } from '../events';
+import { i18n } from '../ui/localization';
+
+/**
+ * Turn a video into a training dataset - as far as the browser honestly can.
+ *
+ * Training needs posed images, and pose estimation is COLMAP's job, which
+ * has no in-browser form. So this extracts frames into a directory the user
+ * picks, writes a ready-to-run COLMAP script next to them, and the user
+ * returns with the processed folder. One external command, everything else
+ * in-app.
+ *
+ * Extraction is seek-based - step the video element, draw to canvas, encode
+ * JPEG. Container-agnostic and dependency-free; a WebCodecs fast path is a
+ * later upgrade.
+ */
+
+const COLMAP_STEPS = [
+    'colmap feature_extractor --database_path colmap.db --image_path images --ImageReader.camera_model OPENCV --ImageReader.single_camera 1',
+    'colmap sequential_matcher --database_path colmap.db',
+    'colmap mapper --database_path colmap.db --image_path images --output_path sparse',
+    'colmap model_converter --input_path sparse/0 --output_path sparse/0 --output_type TXT'
+];
+
+const README = `This folder holds video frames ready for pose estimation.
+
+1. Install COLMAP (https://colmap.github.io) so the 'colmap' command works.
+2. Run run-colmap.bat (Windows) or run-colmap.sh (Mac/Linux) in this folder.
+3. Back in VoluLab's training pane, pick this folder as the dataset.
+
+The training pane reads the COLMAP output (sparse/0) directly.
+`;
+
+// frames extracted per second of video, and a hard cap so an hour of video
+// does not become ten thousand images
+const DEFAULT_FPS = 2;
+const MAX_FRAMES = 600;
+
+const writeFile = async (dir: FileSystemDirectoryHandle, name: string, data: Blob | string) => {
+    const handle = await dir.getFileHandle(name, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(data);
+    await writable.close();
+};
+
+/**
+ * Extract frames from `file` into a user-picked directory along with the
+ * COLMAP scripts. Returns true when the dataset directory was written.
+ */
+const ingestVideo = async (file: File, events: Events): Promise<boolean> => {
+    let dir: FileSystemDirectoryHandle;
+    try {
+        dir = await window.showDirectoryPicker({ mode: 'readwrite' } as any);
+    } catch (e) {
+        return false; // cancelled
+    }
+
+    events.fire('startSpinner');
+    try {
+        const images = await dir.getDirectoryHandle('images', { create: true });
+
+        const video = document.createElement('video');
+        video.muted = true;
+        video.playsInline = true;
+        video.src = URL.createObjectURL(file);
+        await new Promise<void>((resolve, reject) => {
+            video.onloadedmetadata = () => resolve();
+            video.onerror = () => reject(new Error(i18n.t('training.video-unreadable')));
+        });
+
+        const step = 1 / DEFAULT_FPS;
+        const count = Math.min(Math.floor(video.duration * DEFAULT_FPS), MAX_FRAMES);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+
+        for (let i = 0; i < count; i++) {
+            video.currentTime = Math.min(i * step, Math.max(video.duration - 0.05, 0));
+            await new Promise<void>((resolve) => {
+                video.onseeked = () => resolve();
+            });
+            ctx.drawImage(video, 0, 0);
+            const blob = await new Promise<Blob>((resolve) => {
+                canvas.toBlob(b => resolve(b), 'image/jpeg', 0.95);
+            });
+            await writeFile(images, `frame_${String(i).padStart(5, '0')}.jpg`, blob);
+        }
+
+        URL.revokeObjectURL(video.src);
+
+        const script = COLMAP_STEPS.join('\n');
+        await writeFile(dir, 'run-colmap.sh', `#!/usr/bin/env bash\nset -e\ncd "$(dirname "$0")"\nmkdir -p sparse\n${script}\n`);
+        await writeFile(dir, 'run-colmap.bat', `@echo off\ncd /d "%~dp0"\nif not exist sparse mkdir sparse\n${COLMAP_STEPS.join('\r\n')}\r\n`);
+        await writeFile(dir, 'README.txt', README);
+
+        return true;
+    } finally {
+        events.fire('stopSpinner');
+    }
+};
+
+export { ingestVideo };

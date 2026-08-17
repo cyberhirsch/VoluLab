@@ -1223,6 +1223,66 @@ class VoxeliseOp {
     }
 }
 
+/** The record a train node keeps: what was trained, how, and what came out. */
+type TrainSettings = {
+    datasetName: string;
+    /** the kebab-case Brush config the run actually used */
+    config: Record<string, unknown>;
+    iterations: number;
+    finalSplats: number;
+    psnr?: number;
+};
+
+/**
+ * A training run, recorded in the graph.
+ *
+ * Like merge and voxelise, the output exists before the op does - training
+ * is a long job driven from the training pane, and this op is committed
+ * with its product. The node is the record: dataset, settings, result.
+ * Editing the settings and retraining replaces the output, and everything
+ * downstream replays onto it.
+ *
+ * The dataset itself is session state, not history: a directory handle or
+ * a dropped file cannot be serialised, so retrain re-attaches it when the
+ * session no longer holds it.
+ */
+class TrainOp {
+    name = 'train';
+
+    scene: Scene;
+    /** trained from a dataset, not from scene objects */
+    inputs: Splat[] = [];
+    output: Splat;
+    settings: TrainSettings;
+    /** held so retrain can reuse the dataset within this session */
+    dataset?: unknown;
+
+    constructor(scene: Scene, output: Splat, settings: TrainSettings) {
+        this.scene = scene;
+        this.output = output;
+        this.settings = settings;
+    }
+
+    /** what the graph labels the produced object's lane with */
+    get sourceLabel() {
+        return this.settings.datasetName;
+    }
+
+    async do() {
+        await this.scene.add(this.output);
+    }
+
+    undo() {
+        this.scene.remove(this.output);
+    }
+
+    destroy() {
+        this.output?.destroy();
+        this.output = null;
+        this.dataset = null;
+    }
+}
+
 class SplatRenameOp {
     name = 'splatRename';
     splat: Splat;
@@ -1285,6 +1345,8 @@ export {
     MultiOp,
     MergeOp,
     VoxeliseOp,
+    TrainOp,
+    type TrainSettings,
     principalOp,
     CropOp,
     DecimateOp,

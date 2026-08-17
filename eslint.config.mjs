@@ -13,6 +13,8 @@ export default [
                 ...globals.browser,
                 ...globals.serviceworker,
                 BlobPart: 'readonly',
+                // WebGPU type names used in casts (training runs on WebGPU)
+                GPUFeatureName: 'readonly',
                 // injected into the service worker bundle at build time
                 __BUILD_ID__: 'readonly'
             }

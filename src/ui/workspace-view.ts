@@ -146,6 +146,25 @@ class WorkspaceView extends Container {
         this.parked.appendChild(element);
     }
 
+    /**
+     * Make a kind visible: no-op when a pane already shows it, otherwise the
+     * largest docked non-viewport pane switches to it. For flows that need a
+     * pane on screen - a node's retrain button opening the training pane.
+     */
+    reveal(kind: PaneKind) {
+        if (this.claims().has(kind)) return;
+        const panes = listPanes(this.root).filter(p => p.kind !== 'viewport');
+        if (!panes.length) return;
+
+        // biggest by rendered area, so the kind lands somewhere usable
+        const areaOf = (id: string) => {
+            const el = this.dom.querySelector(`[data-pane-body="${id}"]`) as HTMLElement | null;
+            return el ? el.clientWidth * el.clientHeight : 0;
+        };
+        const target = panes.reduce((a, b) => (areaOf(b.id) > areaOf(a.id) ? b : a));
+        this.mutate(assignKind(this.state, target.id, kind));
+    }
+
     private mutate(next: WorkspaceState) {
         this.state = next;
         saveLayout(this.state);

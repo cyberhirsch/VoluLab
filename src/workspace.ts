@@ -24,6 +24,7 @@ export type PaneKind =
     | 'transform'
     | 'timeline'
     | 'data'
+    | 'training'
     | 'settings';
 
 export const PANE_KINDS: { kind: PaneKind; label: string }[] = [
@@ -34,6 +35,7 @@ export const PANE_KINDS: { kind: PaneKind; label: string }[] = [
     { kind: 'transform', label: 'transform' },
     { kind: 'timeline', label: 'timeline' },
     { kind: 'data', label: 'splat data' },
+    { kind: 'training', label: 'training' },
     { kind: 'settings', label: 'settings' }
 ];
 

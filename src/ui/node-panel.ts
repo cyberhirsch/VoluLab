@@ -1,7 +1,7 @@
 import { Container } from '@playcanvas/pcui';
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { CleanupOp, CropOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { CleanupOp, CropOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -201,6 +201,39 @@ class NodePanel extends Container {
             const note = document.createElement('div');
             note.className = 'nd-note';
             note.textContent = 'a grid of cells, not gaussians on a lattice. the source is hidden rather than removed - bypass to bring it back';
+            this.body.appendChild(note);
+            return;
+        }
+
+        if (op instanceof TrainOp) {
+            this.empty.hidden = true;
+            const s = op.settings;
+            this.stat('dataset', s.datasetName);
+            this.stat('iterations', s.iterations.toLocaleString());
+            this.stat('splats', s.finalSplats.toLocaleString());
+            if (s.psnr !== undefined) {
+                this.stat('psnr', `${s.psnr.toFixed(2)} dB`);
+            }
+            ['max-splats', 'sh-degree', 'max-resolution'].forEach((key) => {
+                if (s.config[key] !== undefined) {
+                    this.stat(key.replace(/-/g, ' '), String(s.config[key]));
+                }
+            });
+
+            const retrainRow = this.row('');
+            const retrain = document.createElement('button');
+            retrain.type = 'button';
+            retrain.className = 'nd-choice';
+            retrain.textContent = 'retrain';
+            retrain.addEventListener('click', () => {
+                this.events.fire('training.retrain', op);
+            });
+            retrainRow.appendChild(retrain);
+            this.body.appendChild(retrainRow);
+
+            const note = document.createElement('div');
+            note.className = 'nd-note';
+            note.textContent = 'the record of a training run. retrain opens the training pane with these settings; the new result replaces this output';
             this.body.appendChild(note);
             return;
         }
