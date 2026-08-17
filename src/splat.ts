@@ -264,6 +264,7 @@ class Splat extends Element {
         const oldAsset = this.asset;
         const oldStateTexture = this.stateTexture;
         const oldTransformTexture = this.transformTexture;
+        const oldGradeTexture = this.gradeTexture;
 
         // carry the current transform onto the new entity
         const position = oldEntity.getLocalPosition().clone();
@@ -304,6 +305,7 @@ class Splat extends Element {
         oldEntity.destroy();
         oldStateTexture.destroy();
         oldTransformTexture.destroy();
+        oldGradeTexture?.destroy();
         oldAsset.registry?.remove(oldAsset);
         oldAsset.unload();
 

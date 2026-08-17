@@ -406,6 +406,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         return {
             kind: 'frozen',
             source,
+            numSplats,
             hits: sel instanceof Uint32Array ?
                 IndexRanges.fromSorted(sel) :
                 IndexRanges.fromPredicate(numSplats, i => sel[i] === 255)

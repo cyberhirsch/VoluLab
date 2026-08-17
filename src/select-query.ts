@@ -89,6 +89,15 @@ export type FrozenQuery = {
     /** what produced it, for the label only */
     source: string;
     hits: IndexRanges;
+    /**
+     * How many gaussians the object had when this was captured.
+     *
+     * A frozen set is a list of positions in one particular array. Replayed
+     * against a different frame of a sequence those positions mean nothing,
+     * and applying them anyway would select arbitrary gaussians rather than
+     * fail visibly. So the count is kept and checked.
+     */
+    numSplats?: number;
 };
 
 export type SelectQuery =
@@ -164,6 +173,10 @@ export const resolveHits = async (splat: Splat, query: SelectQuery): Promise<(i:
     const numSplats = splatData.numSplats;
 
     if (query.kind === 'frozen') {
+        // a stored set belongs to the data it was taken from
+        if (query.numSplats !== undefined && query.numSplats !== numSplats) {
+            return () => false;
+        }
         return query.hits.predicate();
     }
 

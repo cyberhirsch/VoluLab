@@ -80,6 +80,11 @@ const registerSequenceEvents = (events: Events, scene: Scene) => {
         } else {
             // in-place swap: preserves entity transform, visual props and selection
             await splat.replaceData(data.asset);
+
+            // The edits were made against the frame that just went away, so
+            // they are re-run against this one - which is what makes a
+            // selection or a grade belong to the shot rather than to a still.
+            await events.invoke('edit.reapplyAll');
         }
     };
 

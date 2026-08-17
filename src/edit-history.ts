@@ -35,6 +35,7 @@ class EditHistory {
         events.function('edit.reselect', (index: number, steps: SelectStep[]) => this.reselect(index, steps));
         events.function('edit.removeAt', (indices: number[]) => this.removeAt(indices));
         events.function('edit.refresh', (index: number, mutate?: () => void) => this.refresh(index, mutate));
+        events.function('edit.reapplyAll', () => this.reapplyAll());
         events.function('edit.setBypassed', (index: number, bypassed: boolean) => this.setBypassed(index, bypassed));
 
         // read access for views that draw the history rather than drive it -
@@ -169,6 +170,38 @@ class EditHistory {
             mutate,
             resume => Math.max(resume, index + 1)
         ));
+    }
+
+    /**
+     * Re-run the whole history against data that has been replaced underneath
+     * it - the next frame of a sequence.
+     *
+     * Deliberately does not undo first. Undo reverses an op using what it
+     * resolved against the *old* data, and that data is gone: the indices it
+     * holds now point at different gaussians, or at none. So the cursor is
+     * reset without reversing anything, every op forgets what it resolved, and
+     * the history is applied forward onto the new frame from a clean state.
+     *
+     * This is what "one edit, all frames" means in practice. A sphere
+     * selection catches whatever is inside it on this frame; a grade follows.
+     * A frozen selection cannot follow - its stored positions belong to the
+     * frame it was taken on - and resolves to nothing rather than to the wrong
+     * gaussians. See the numSplats check in select-query.ts.
+     */
+    reapplyAll() {
+        return this.queue(async () => {
+            const resume = this.cursor;
+            this.cursor = 0;
+
+            this.history.forEach((op) => {
+                if (op instanceof StateOp) op.invalidate();
+            });
+
+            while (this.cursor < resume) {
+                await this._redo();
+            }
+            this.fireEvents();
+        });
     }
 
     /** Turn an op off or on in place, rebuilding what stood on it. */
