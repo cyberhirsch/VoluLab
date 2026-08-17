@@ -43,6 +43,8 @@ How it works, in the order the pieces were built:
    already sits on, each holding that slot's grade composed with the node's.
    Undo runs the map backwards, reversing by slot rather than by selection.
 6. The colour panel binds to a node and commits at the end of a gesture.
+7. `src/splat-serialize.ts` does the same lookup on the cpu, so what is
+   written out matches what is on screen.
 
 Two traps worth keeping in mind if this is touched again:
 
@@ -248,7 +250,7 @@ its own export path, its own selection behaviour.
 
 ### Order of work
 
-1. ~~Colour palette~~ - done, bar the export path.
+1. ~~Colour palette~~ - done, export included.
 2. **The DAG** - foundational, and both of the remaining items sit inside it.
 3. **Frames.**
 4. **Voxelise** - last, because a new element type is easiest to design once
