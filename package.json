@@ -1,6 +1,6 @@
 {
     "name": "volulab",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "author": "Seb Hirsch",
     "description": "Volumetric Gaussian Splat Editor",
     "keywords": [
