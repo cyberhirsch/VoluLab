@@ -522,14 +522,14 @@ class GraphPanel extends Container {
 
         // lane key -> the nodes in it, left to right. Insertion order of the
         // map is the row order on screen.
-        const lanes = new Map<Splat | null, NodeModel[]>();
-        const laneOf = (key: Splat | null) => {
+        const lanes = new Map<object | null, NodeModel[]>();
+        const laneOf = (key: object | null) => {
             if (!lanes.has(key)) lanes.set(key, []);
             return lanes.get(key);
         };
 
         // y is filled in below, once every lane exists and the rows are known
-        const add = (key: Splat | null, node: Omit<NodeModel, 'x' | 'y'>) => {
+        const add = (key: object | null, node: Omit<NodeModel, 'x' | 'y'>) => {
             const lane = laneOf(key);
             lane.push({ ...node, x: lane.length * (NODE_W + COL_GAP), y: 0 });
         };
@@ -582,9 +582,12 @@ class GraphPanel extends Container {
             }
 
             const splat = opSplat(op);
-            // an op with no object of its own - or whose object is gone - still
-            // belongs somewhere; the scene lane is where those collect
-            const key = splat && splats.includes(splat) ? splat : null;
+            // A pending producer (a train node before its first run) is not a
+            // scene-wide entry - it stands free in a lane of its own, its only
+            // wire the one from the import node feeding it. The scene lane is
+            // for ops that genuinely belong to no object at all.
+            const pendingProducer = op.name === 'train';
+            const key = splat && splats.includes(splat) ? splat : (pendingProducer ? op : null);
             if (key === null && laneOf(null).length === 0) {
                 add(null, { index: -1, kind: 'scene', name: '', applied: true, splat: null, key: lanes });
             }
