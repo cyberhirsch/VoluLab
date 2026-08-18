@@ -44,6 +44,18 @@ const writeFile = async (dir: FileSystemDirectoryHandle, name: string, data: Blo
     await writable.close();
 };
 
+/**
+ * The kit is only useful if the user knows what to do with it - say so,
+ * concretely, the moment it lands.
+ */
+const explainColmapStep = (events: Events) => {
+    return events.invoke('showPopup', {
+        type: 'info',
+        header: i18n.t('training.dataset'),
+        message: i18n.t('import.colmap-howto')
+    });
+};
+
 /** The run-me scripts and readme that turn an images folder into poses. */
 const writeColmapKit = async (dir: FileSystemDirectoryHandle) => {
     const script = COLMAP_STEPS.join('\n');
@@ -86,6 +98,7 @@ const ingestImagesInPlace = async (dir: FileSystemDirectoryHandle, entries: DirE
             await writeFile(images, file.name, file);
         }
         await writeColmapKit(dir);
+        await explainColmapStep(events);
         return true;
     } finally {
         events.fire('stopSpinner');
@@ -112,6 +125,7 @@ const ingestImages = async (files: File[], events: Events): Promise<boolean> => 
             await writeFile(images, file.name, file);
         }
         await writeColmapKit(dir);
+        await explainColmapStep(events);
         return true;
     } finally {
         events.fire('stopSpinner');
@@ -166,6 +180,7 @@ const ingestVideo = async (file: File, events: Events): Promise<boolean> => {
         URL.revokeObjectURL(video.src);
 
         await writeColmapKit(dir);
+        await explainColmapStep(events);
 
         return true;
     } finally {

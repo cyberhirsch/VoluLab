@@ -117,7 +117,10 @@ localhost.
 The shape: drop a video or a folder of frames, VoluLab extracts and posts
 them, the bridge runs feature extraction, matching and mapping, and hands
 back a dataset the node starts training on. Progress streams back so the
-node's face can show which stage is running.
+node's face can show which stage is running. On first run the bridge
+should provision COLMAP itself - the Windows builds ship as a portable
+zip, so "install" is a download and an unpack, no admin rights - making
+the whole pose step: start the bridge once, done.
 
 This is the one decision in this project that took the *cheaper* option
 rather than the maximal one, and deliberately - a WASM COLMAP would be weeks
@@ -194,8 +197,9 @@ holds, but nothing writes them out. That wants a target format chosen first,
 since the format decides what the writer looks like.
 
 **Merging is offered by name**, in the context menu, rather than by dragging
-one node's output onto another's input. Ports can start a drag but cannot
-accept a drop - that is the gesture it wants.
+one node's output onto another's input. The dataset wire proved the drop
+gesture out - an import node's output drags onto a train node - but merge
+still goes through the menu; it wants the same treatment.
 
 **Cleanup runs on the CPU inside the op's resolver.** Fine at the counts
 tested; a million-point capture wants it in a worker. That is a change of

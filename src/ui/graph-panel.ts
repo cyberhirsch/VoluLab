@@ -149,6 +149,9 @@ interface NodeModel {
     isSource?: boolean;
     /** last in its chain by nature - an output writes, it does not pass on */
     terminal?: boolean;
+    // draws an input port even while nothing arrives - a train node's
+    // dataset input exists before it is wired
+    wantsInput?: boolean;
     /** what to key a stored position and a selection against */
     key: object;
 }
@@ -623,6 +626,7 @@ class GraphPanel extends Container {
                 splat,
                 select: !!select,
                 terminal: op.name === 'output',
+                wantsInput: pendingProducer,
                 bypassed: !!op.bypassed,
                 // frozen only when nothing in it can be re-run
                 frozen: steps.length ? steps.every(s => !isParametric(s.query)) : undefined,
@@ -739,10 +743,10 @@ class GraphPanel extends Container {
             el.appendChild(name);
         }
 
-        // An input port only where an edge actually arrives. Keyed on the node's
-        // place in its chain rather than on where it sits, or dragging a node
-        // rightwards would grow it an input it has nothing to receive on.
-        if (!node.isSource) {
+        // An input port only where an edge actually arrives - or where one is
+        // owed: a train node's dataset input exists before it is wired, so
+        // there is something to aim a dragged wire at.
+        if (!node.isSource || node.wantsInput) {
             const inPort = document.createElement('div');
             inPort.className = 'gn-port gn-port-in';
             el.appendChild(inPort);
@@ -799,7 +803,12 @@ class GraphPanel extends Container {
                     label: 'move history here',
                     disabled: node.index === -1 || many,
                     action: () => this.events.fire('edit.goto', node.index + 1)
-                }
+                },
+                // a wired train node can be cut loose again
+                ...(((node.key as any)?.name === 'train' && (node.key as any)?.datasetOp) ? [{
+                    label: 'disconnect dataset',
+                    action: () => this.events.fire('graph.disconnectDataset', node.key)
+                }] : [])
             ]);
         });
 
@@ -839,6 +848,23 @@ class GraphPanel extends Container {
                 port.removeEventListener('pointerup', up);
                 releasePointer(port, ev.pointerId);
                 link.remove();
+
+                // released over a node that can take this wire? then it
+                // connects - an import node's dataset into a train node
+                const at = this.toStage(ev.clientX, ev.clientY);
+                const target = this.nodes.find(n => n !== node &&
+                    at.x >= n.x && at.x <= n.x + NODE_W &&
+                    at.y >= n.y && at.y <= n.y + NODE_H);
+                if ((node.key as any)?.name === 'dataset') {
+                    if (target && (target.key as any)?.name === 'train') {
+                        this.events.fire('graph.connectDataset', node.key, target.key);
+                    } else {
+                        showContextMenu(document, ev.clientX, ev.clientY, [
+                            { label: 'drop onto a train node to connect', disabled: true, action: () => {} }
+                        ]);
+                    }
+                    return;
+                }
 
                 const splat = node.splat;
                 const items: MenuEntry[] = splat ? [

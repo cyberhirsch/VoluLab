@@ -986,45 +986,49 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     /**
      * Add a pending train node: the node exists before any gaussians do.
-     * A dataset arriving with it becomes an import node of its own, and
-     * the train node consumes it through the graph - the edge is the
-     * attachment. The run controller (train-run.ts) fills in the output
-     * when a run produces one; here is only the record entering history.
+     * It arrives unwired - the dataset comes from an import node the user
+     * connects by hand. The run controller (train-run.ts) fills in the
+     * output when a run produces one; here is only the record entering
+     * history.
      */
-    events.function('training.addNode', (dataset: unknown = null, datasetName: string | null = null, config: Record<string, unknown> = {}) => {
-        let importOp: DatasetOp | null = null;
-        if (dataset !== null || datasetName !== null) {
-            importOp = new DatasetOp(dataset, datasetName ?? 'dataset');
-            events.fire('edit.add', importOp);
-
-            // an idle train node with no dataset adopts the import rather
-            // than a twin appearing beside it
-            const h = history();
-            const applied = (h.ops as EditOp[]).slice(0, h.cursor);
-            const idle = [...applied].reverse().find(o => o instanceof TrainOp && !o.datasetOp && !o.output && !o.bypassed) as TrainOp | undefined;
-            if (idle) {
-                idle.datasetOp = importOp;
-                idle.inputs = [importOp.output];
-                idle.settings.datasetName = importOp.sourceName;
-                Object.assign(idle.settings.config, config);
-                events.fire('edit.changed');
-                openInGraph((h.ops as EditOp[]).indexOf(idle));
-                events.fire('workspace.reveal', 'node');
-                return idle;
-            }
-        }
-
-        const settings: TrainSettings = { datasetName: importOp?.sourceName ?? 'no dataset', config, iterations: 0, finalSplats: 0 };
+    events.function('training.addNode', (config: Record<string, unknown> = {}) => {
+        const settings: TrainSettings = { datasetName: 'no dataset', config, iterations: 0, finalSplats: 0 };
         const op = new TrainOp(scene, null, settings);
-        if (importOp) {
-            op.datasetOp = importOp;
-            op.inputs = [importOp.output];
-        }
         const index = history().cursor;
         events.fire('edit.add', op);
         openInGraph(index);
         events.fire('workspace.reveal', 'node');
         return op;
+    });
+
+    /**
+     * A dataset entering the graph as an import node of its own. Nothing
+     * is wired automatically - the user drags its output into a train
+     * node's input.
+     */
+    events.function('dataset.addNode', (source: unknown = null, sourceName = 'dataset') => {
+        const op = new DatasetOp(source, sourceName);
+        const index = history().cursor;
+        events.fire('edit.add', op);
+        openInGraph(index);
+        events.fire('workspace.reveal', 'node');
+        return op;
+    });
+
+    /** The hand-drawn wire: an import node's output into a train node. */
+    events.on('graph.connectDataset', (from: DatasetOp, to: TrainOp) => {
+        if (!(from instanceof DatasetOp) || !(to instanceof TrainOp)) return;
+        to.datasetOp = from;
+        to.inputs = [from.output];
+        to.settings.datasetName = from.sourceName;
+        events.fire('edit.changed');
+    });
+
+    events.on('graph.disconnectDataset', (op: TrainOp) => {
+        if (!(op instanceof TrainOp) || !op.datasetOp) return;
+        op.datasetOp = undefined;
+        op.inputs = [];
+        events.fire('edit.changed');
     });
 
     registerTraining(events, scene);

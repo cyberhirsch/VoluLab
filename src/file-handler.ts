@@ -409,7 +409,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             events.fire('startSpinner');
             try {
                 const { bytes, name } = await packDataset(files);
-                events.invoke('training.addNode', { kind: 'bytes', bytes, name: `${name}.zip` }, name);
+                events.invoke('dataset.addNode', { kind: 'bytes', bytes, name: `${name}.zip` }, name);
             } finally {
                 events.fire('stopSpinner');
             }
@@ -434,8 +434,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             if (imageFiles.length > 1 && imageFiles.length === files.length) {
                 const wrote = await ingestImages(imageFiles.map(f => f.contents), events);
                 if (wrote) {
-                    const op = events.invoke('training.addNode', null, i18n.t('training.awaiting-poses'));
-                    op?.datasetOp?.markAwaiting(i18n.t('training.awaiting-poses'));
+                    const op = events.invoke('dataset.addNode', null, i18n.t('training.awaiting-poses'));
+                    op?.markAwaiting(i18n.t('training.awaiting-poses'));
                 }
                 return result;
             }
@@ -488,8 +488,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     const contents = files[i].contents ?? new File([await (await fetch(files[i].url)).blob()], files[i].filename);
                     const wrote = await ingestVideo(contents, events);
                     if (wrote) {
-                        const op = events.invoke('training.addNode', null, i18n.t('training.awaiting-poses'));
-                        op?.datasetOp?.markAwaiting(i18n.t('training.awaiting-poses'));
+                        const op = events.invoke('dataset.addNode', null, i18n.t('training.awaiting-poses'));
+                        op?.markAwaiting(i18n.t('training.awaiting-poses'));
                     }
                 } else if (filename.endsWith('.vox')) {
                     // a voxel model onto the voxel element
@@ -632,15 +632,15 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             const names = entries.map(e => e.path);
 
             if (looksLikeDataset(names)) {
-                events.invoke('training.addNode', { kind: 'directory', handle }, handle.name);
+                events.invoke('dataset.addNode', { kind: 'directory', handle }, handle.name);
                 return;
             }
 
             if (names.length > 1 && isImageSet(names)) {
                 const wrote = await ingestImagesInPlace(handle, entries, events);
                 if (wrote) {
-                    const op = events.invoke('training.addNode', null, i18n.t('training.awaiting-poses'));
-                    op?.datasetOp?.markAwaiting(i18n.t('training.awaiting-poses'));
+                    const op = events.invoke('dataset.addNode', null, i18n.t('training.awaiting-poses'));
+                    op?.markAwaiting(i18n.t('training.awaiting-poses'));
                 }
                 return;
             }

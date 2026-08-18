@@ -24,14 +24,16 @@ splats, point clouds, voxels, checkpoints, videos - falls through to the
 per-file importer.
 
 Datasets are import nodes of their own: importing one creates a node
-holding the source, wired by a graph edge into the train node that
-consumes it - and an idle train node without a dataset adopts the next
-import rather than a twin appearing beside it. The import node's face
-carries the pickers and takes the same three gestures, so swapping a
-dataset happens there; the train node only trains. The dataset node's
-output is a lane marker rather than a scene object, which is what lets
-the graph's ordinary produce/consume machinery draw the lane and the
-edge without special cases.
+holding the source, and nothing wires itself. The train node shows an
+empty input port from birth; the user drags the import node's output
+onto it to connect, and the context menu cuts the wire again. The
+import node's face carries the pickers and takes the same three
+gestures, so swapping a dataset happens there; the train node only
+trains. The dataset node's output is a lane marker rather than a scene
+object, which is what lets the graph's ordinary produce/consume
+machinery draw the lane and the edge without special cases. After the
+photo and video ingests write their COLMAP kit, a dialog spells out the
+three steps that turn it into poses.
 
 Point clouds (`.ply/.las/.laz/.pcd/.xyz/.pts`) import as tiny isotropic
 gaussians - median-neighbour-distance scale, near-solid opacity - so every
