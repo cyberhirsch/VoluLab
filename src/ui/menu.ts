@@ -231,6 +231,13 @@ class Menu extends Container {
                 await events.invoke('scene.import');
             }
         }, {
+            text: () => i18n.t('menu.file.import-folder', { ellipsis: true }),
+            icon: createSvg(sceneImport),
+            isEnabled: () => !!window.showDirectoryPicker,
+            onSelect: async () => {
+                await events.invoke('scene.importFolder');
+            }
+        }, {
             text: () => i18n.t('menu.file.export'),
             icon: createSvg(sceneExport),
             subMenu: exportMenuPanel

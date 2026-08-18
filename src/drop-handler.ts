@@ -14,6 +14,14 @@ class DroppedFile {
 
 type DropHandlerFunc = (files: Array<DroppedFile>, resetScene: boolean) => void;
 
+type DropPayload = {
+    // present when the drop was a single folder and the browser can hand
+    // over its handle - callers that can use the folder itself (the train
+    // node) get it without reading a byte
+    directory?: FileSystemDirectoryHandle;
+    files: Array<DroppedFile>;
+};
+
 const resolveDirectories = (entries: Array<FileSystemEntry>): Promise<Array<FileSystemFileEntry>> => {
     const promises: Promise<Array<FileSystemFileEntry>>[] = [];
     const result: Array<FileSystemFileEntry> = [];
@@ -79,6 +87,57 @@ const removeCommonPrefix = (urls: Array<DroppedFile>) => {
     }
 };
 
+/**
+ * Resolve a DataTransfer into dropped files, folders traversed recursively
+ * and the common path prefix removed. Must be called synchronously from the
+ * drop event - the DataTransfer's items are dead after the first await.
+ */
+const resolveDropPayload = async (dataTransfer: DataTransfer): Promise<DropPayload> => {
+    const items = Array.from(dataTransfer.items);
+
+    // capture everything the DataTransfer offers before any await invalidates it
+    const entries = items
+    .map(item => item.webkitGetAsEntry())
+    .filter(v => v);
+    const handlePromise = (items.length === 1 && items[0].getAsFileSystemHandle) ?
+        items[0].getAsFileSystemHandle().catch((): FileSystemHandle => null) :
+        null;
+
+    const entriesToFiles = async () => {
+        const resolvedEntries = await resolveDirectories(entries);
+        const files = await Promise.all(
+            resolvedEntries.map((entry) => {
+                return new Promise<DroppedFile>((resolve, reject) => {
+                    entry.file((entryFile: any) => {
+                        resolve(new DroppedFile(entry.fullPath.substring(1), entryFile));
+                    });
+                });
+            })
+        );
+        if (files.length > 1) {
+            // if all files share a common filename prefix, remove it
+            removeCommonPrefix(files);
+        }
+        return files;
+    };
+
+    const handle = handlePromise ? await handlePromise : null;
+
+    // a single folder: hand over its handle alongside the traversal
+    if (handle?.kind === 'directory') {
+        return { directory: handle as FileSystemDirectoryHandle, files: await entriesToFiles() };
+    }
+
+    // a single file: propagate the filesystemfilehandle so documents can save in place
+    if (handle?.kind === 'file') {
+        const fileHandle = handle as FileSystemFileHandle;
+        const file = await fileHandle.getFile();
+        return { files: [new DroppedFile(file.name, file, fileHandle)] };
+    }
+
+    return { files: await entriesToFiles() };
+};
+
 // configure drag and drop
 const CreateDropHandler = (target: HTMLElement, dropHandler: DropHandlerFunc) => {
 
@@ -97,48 +156,10 @@ const CreateDropHandler = (target: HTMLElement, dropHandler: DropHandlerFunc) =>
     const drop = async (ev: DragEvent) => {
         ev.preventDefault();
 
-        const items = Array.from(ev.dataTransfer.items);
-
-        // handle single file drops so documents can propagate the filesystemfilehandle
-        if (items.length === 1) {
-            const item = items[0];
-            if (item.getAsFileSystemHandle && item.webkitGetAsEntry().isFile) {
-                const handle = await item.getAsFileSystemHandle();
-                if (handle?.kind === 'file') {
-                    const fileHandle = handle as FileSystemFileHandle;
-                    const file = await fileHandle.getFile();
-                    const droppedFile = new DroppedFile(file.name, file, fileHandle);
-                    dropHandler([droppedFile], ev.shiftKey);
-                    return;
-                }
-            }
+        const payload = await resolveDropPayload(ev.dataTransfer);
+        if (payload.files.length > 0) {
+            dropHandler(payload.files, ev.shiftKey);
         }
-
-        // Map to entries first
-        const entries = items
-        .map(item => item.webkitGetAsEntry())
-        .filter(v => v);
-
-        // resolve directories to files
-        const resolvedEntries = await resolveDirectories(entries);
-
-        const files = await Promise.all(
-            resolvedEntries.map((entry) => {
-                return new Promise<DroppedFile>((resolve, reject) => {
-                    entry.file((entryFile: any) => {
-                        resolve(new DroppedFile(entry.fullPath.substring(1), entryFile));
-                    });
-                });
-            })
-        );
-
-        if (files.length > 1) {
-            // if all files share a common filename prefix, remove it
-            removeCommonPrefix(files);
-        }
-
-        // finally, call the drop handler
-        dropHandler(files, ev.shiftKey);
     };
 
     target.addEventListener('dragstart', dragstart, true);
@@ -146,4 +167,4 @@ const CreateDropHandler = (target: HTMLElement, dropHandler: DropHandlerFunc) =>
     target.addEventListener('drop', drop, true);
 };
 
-export { CreateDropHandler };
+export { CreateDropHandler, resolveDropPayload, DroppedFile, type DropPayload };

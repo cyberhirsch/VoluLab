@@ -1016,6 +1016,11 @@ class GraphPanel extends Container {
                 action: () => this.events.invoke('scene.import')
             },
             {
+                // folder mode: dataset folders, photo sets and file piles alike
+                label: 'add import node (folder)',
+                action: () => this.events.invoke('scene.importFolder')
+            },
+            {
                 // training is the other way an object enters the graph: the
                 // node arrives pending, and its face in the node pane runs it
                 label: 'add training node',

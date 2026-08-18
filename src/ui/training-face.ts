@@ -1,10 +1,12 @@
 import { Container } from '@playcanvas/pcui';
 
 import { i18n } from './localization';
+import { resolveDropPayload } from '../drop-handler';
 import { TrainOp } from '../edit-ops';
 import { Events } from '../events';
 import { TrainPhase, TrainProgress, TrainSource } from '../training/brush-engine';
-import { ingestVideo } from '../training/video-ingest';
+import { isImageSet, listDirectory, looksLikeDataset, packDataset } from '../training/dataset';
+import { ensureWrite, ingestImages, ingestImagesInPlace, ingestVideo } from '../training/video-ingest';
 
 /**
  * The train node's parameters, mounted in the node pane the way the colour
@@ -86,13 +88,13 @@ class TrainingFace extends Container {
         pickRow.className = 'tf-row';
         dataset.appendChild(pickRow);
         button(pickRow, 'pickFolder', i18n.t('training.pick-folder'), () => this.pickFolder());
-        button(pickRow, 'pickFile', i18n.t('training.pick-file'), () => this.pickFile());
+        button(pickRow, 'pickFiles', i18n.t('training.pick-files'), () => this.pickFiles());
         this.sourceLabel = document.createElement('div');
         this.sourceLabel.className = 'tf-source';
         dataset.appendChild(this.sourceLabel);
 
-        // drops of zips/videos aimed at this node stay here rather than
-        // falling through to the scene importer
+        // drops aimed at this node stay here rather than falling through to
+        // the scene importer - folders, file lists and single files alike
         this.dom.addEventListener('dragover', (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -100,8 +102,15 @@ class TrainingFace extends Container {
         this.dom.addEventListener('drop', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            const file = e.dataTransfer?.files?.[0];
-            if (file) this.acceptFile(file).catch(() => {});
+            if (!e.dataTransfer) return;
+            // resolve synchronously - the DataTransfer dies after the first await
+            resolveDropPayload(e.dataTransfer).then(async (payload) => {
+                if (payload.directory) {
+                    await this.attachDirectory(payload.directory);
+                } else if (payload.files.length > 0) {
+                    await this.acceptFiles(payload.files.map(f => f.file), payload.files.map(f => f.filename));
+                }
+            }).catch(() => {});
         });
 
         // config
@@ -200,34 +209,115 @@ class TrainingFace extends Container {
 
     private async pickFolder() {
         try {
-            const handle = await window.showDirectoryPicker();
-            this.setDataset({ kind: 'directory', handle }, handle.name);
+            // readwrite so a folder of bare photos can take its COLMAP kit
+            const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+            await this.attachDirectory(handle);
         } catch (e) {
             // cancelled
         }
     }
 
-    private pickFile() {
+    private pickFiles() {
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = '.zip,.ply,video/*';
+        input.multiple = true;
+        input.accept = '.zip,.ply,.jpg,.jpeg,.png,.csv,.json,.txt,.bin,.mp4,.mov,.webm,.mkv,video/*';
         input.onchange = () => {
-            const file = input.files?.[0];
-            if (file) this.acceptFile(file).catch(() => {});
+            const files = Array.from(input.files ?? []);
+            if (files.length > 0) this.acceptFiles(files).catch(() => {});
         };
         input.click();
     }
 
-    private async acceptFile(file: File) {
-        if (file.type.startsWith('video/')) {
-            const result = await ingestVideo(file, this.events);
-            if (result && this.op) {
-                this.sourceLabel.textContent = i18n.t('training.awaiting-poses');
+    /**
+     * Folder mode: a dataset folder attaches whole (Brush reads it in
+     * place), a folder of bare photos gets the COLMAP kit written beside
+     * them, anything else is not a dataset.
+     */
+    private async attachDirectory(handle: FileSystemDirectoryHandle) {
+        const entries = await listDirectory(handle);
+        const names = entries.map(e => e.path);
+
+        if (looksLikeDataset(names)) {
+            this.setDataset({ kind: 'directory', handle }, handle.name);
+            return;
+        }
+
+        if (names.length > 1 && isImageSet(names)) {
+            if (await ensureWrite(handle)) {
+                await ingestImagesInPlace(handle, entries, this.events);
+                this.markAwaitingPoses();
+            } else {
+                // the browser refused to write into the dropped folder:
+                // fall back to copying the photos out beside a fresh kit
+                const files = await Promise.all(entries.map(e => e.handle.getFile()));
+                if (await ingestImages(files, this.events)) {
+                    this.markAwaitingPoses();
+                }
             }
             return;
         }
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        this.setDataset({ kind: 'bytes', bytes, name: file.name }, file.name);
+
+        this.notice(i18n.t('import.folder-unrecognized'));
+    }
+
+    /** File and file-list mode: route whatever was picked or dropped. */
+    private async acceptFiles(files: File[], names?: string[]) {
+        const filenames = names ?? files.map(f => f.name);
+        const lower = filenames.map(f => f.toLowerCase());
+
+        if (files.length === 1) {
+            const file = files[0];
+            const name = lower[0];
+            if (file.type.startsWith('video/') || ['.mp4', '.mov', '.webm', '.mkv'].some(ext => name.endsWith(ext))) {
+                if (await ingestVideo(file, this.events)) this.markAwaitingPoses();
+            } else if (name.endsWith('.zip') || name.endsWith('.ply')) {
+                const bytes = new Uint8Array(await file.arrayBuffer());
+                this.setDataset({ kind: 'bytes', bytes, name: file.name }, file.name);
+            } else if (isImageSet([name])) {
+                this.notice(i18n.t('import.single-image'));
+            } else {
+                this.notice(i18n.t('import.dataset-needs-images'));
+            }
+            return;
+        }
+
+        if (looksLikeDataset(filenames)) {
+            // several files forming one dataset: pack them into a zip
+            this.events.fire('startSpinner');
+            try {
+                const { bytes, name } = await packDataset(files.map((f, i) => ({ filename: filenames[i], contents: f })));
+                this.setDataset({ kind: 'bytes', bytes, name: `${name}.zip` }, name);
+            } finally {
+                this.events.fire('stopSpinner');
+            }
+            return;
+        }
+
+        if (isImageSet(lower)) {
+            // bare photos: copy them out with the COLMAP kit
+            if (await ingestImages(files, this.events)) {
+                this.markAwaitingPoses();
+            }
+            return;
+        }
+
+        this.notice(i18n.t('import.folder-unrecognized'));
+    }
+
+    /** The dataset is out being posed; the node waits for its return. */
+    private markAwaitingPoses() {
+        if (this.op) {
+            this.op.awaitingPoses = true;
+            this.op.settings.datasetName = i18n.t('training.awaiting-poses');
+            this.events.fire('edit.changed');
+        }
+        this.refresh();
+    }
+
+    private notice(text: string) {
+        this.noticeLine.textContent = text;
+        this.noticeLine.hidden = false;
     }
 
     private setDataset(dataset: TrainSource, name: string) {
@@ -253,7 +343,8 @@ class TrainingFace extends Container {
 
         this.sourceLabel.textContent = op.dataset ?
             op.settings.datasetName :
-            i18n.t(op.settings.finalSplats > 0 ? 'training.reattach-dataset' : 'training.no-dataset');
+            i18n.t(op.awaitingPoses ? 'training.awaiting-poses' :
+                op.settings.finalSplats > 0 ? 'training.reattach-dataset' : 'training.no-dataset');
 
         const state = this.events.invoke('training.state', op) as { phase: TrainPhase, progress: TrainProgress | null, active: boolean };
         const paused = this.events.invoke('training.isPaused', op);

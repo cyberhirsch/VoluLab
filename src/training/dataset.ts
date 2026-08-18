@@ -18,6 +18,36 @@ type DatasetFile = {
 
 const IMAGE_RE = /\.(?:jpg|jpeg|png)$/;
 
+/** Every file is a photo: a dataset still waiting for its poses. */
+const isImageSet = (filenames: string[]): boolean => {
+    return filenames.length > 0 && filenames.every(f => IMAGE_RE.test(f.toLowerCase()));
+};
+
+type DirEntry = {
+    path: string;
+    handle: FileSystemFileHandle;
+};
+
+/**
+ * Flatten a picked directory into file handles with folder-relative paths,
+ * the same shape a folder drop produces - so folder mode and drop mode
+ * route through the same classifiers.
+ */
+const listDirectory = async (dir: FileSystemDirectoryHandle, prefix = ''): Promise<DirEntry[]> => {
+    const out: DirEntry[] = [];
+    for await (const value of dir.values()) {
+        if (value.name === '.DS_Store') {
+            continue;
+        }
+        if (value.kind === 'file') {
+            out.push({ path: `${prefix}${value.name}`, handle: value as FileSystemFileHandle });
+        } else {
+            out.push(...await listDirectory(value as FileSystemDirectoryHandle, `${prefix}${value.name}/`));
+        }
+    }
+    return out;
+};
+
 /**
  * Does this set of filenames look like a capture dataset rather than a
  * pile of unrelated imports? Pose files alone are not enough for the
@@ -76,4 +106,4 @@ const packDataset = async (files: DatasetFile[]): Promise<{ bytes: Uint8Array, n
     return { bytes, name: name === poseFile?.filename ? 'dataset' : name };
 };
 
-export { looksLikeDataset, packDataset, type DatasetFile };
+export { isImageSet, listDirectory, looksLikeDataset, packDataset, type DatasetFile, type DirEntry };

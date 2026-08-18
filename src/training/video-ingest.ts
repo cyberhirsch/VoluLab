@@ -1,3 +1,4 @@
+import { DirEntry } from './dataset';
 import { Events } from '../events';
 import { i18n } from '../ui/localization';
 
@@ -49,6 +50,46 @@ const writeColmapKit = async (dir: FileSystemDirectoryHandle) => {
     await writeFile(dir, 'run-colmap.sh', `#!/usr/bin/env bash\nset -e\ncd "$(dirname "$0")"\nmkdir -p sparse\n${script}\n`);
     await writeFile(dir, 'run-colmap.bat', `@echo off\ncd /d "%~dp0"\nif not exist sparse mkdir sparse\n${COLMAP_STEPS.join('\r\n')}\r\n`);
     await writeFile(dir, 'README.txt', README);
+};
+
+/**
+ * Ask the browser for write access to a folder we already hold - drops and
+ * read-mode pickers hand over read-only handles.
+ */
+const ensureWrite = async (handle: FileSystemDirectoryHandle): Promise<boolean> => {
+    const h = handle as any;
+    try {
+        if (await h.queryPermission?.({ mode: 'readwrite' }) === 'granted') {
+            return true;
+        }
+        return await h.requestPermission?.({ mode: 'readwrite' }) === 'granted';
+    } catch (e) {
+        return false;
+    }
+};
+
+/**
+ * Write the COLMAP kit into the folder the photos already live in - folder
+ * mode's counterpart of ingestImages, with no second picker. Photos not
+ * already under images/ are copied there so the scripts find them.
+ * Returns true when the kit was written.
+ */
+const ingestImagesInPlace = async (dir: FileSystemDirectoryHandle, entries: DirEntry[], events: Events): Promise<boolean> => {
+    events.fire('startSpinner');
+    try {
+        const images = await dir.getDirectoryHandle('images', { create: true });
+        for (const entry of entries) {
+            if (entry.path.startsWith('images/')) {
+                continue; // already where the scripts expect it
+            }
+            const file = await entry.handle.getFile();
+            await writeFile(images, file.name, file);
+        }
+        await writeColmapKit(dir);
+        return true;
+    } finally {
+        events.fire('stopSpinner');
+    }
 };
 
 /**
@@ -132,4 +173,4 @@ const ingestVideo = async (file: File, events: Events): Promise<boolean> => {
     }
 };
 
-export { ingestImages, ingestVideo };
+export { ensureWrite, ingestImages, ingestImagesInPlace, ingestVideo };

@@ -101,23 +101,23 @@ the one above would only move the surprise later.
 
 ## COLMAP bridge — decided, not started
 
-Training needs posed images. Today a video is ingested to frames and VoluLab
-writes a `run-colmap` script for the user to run - honest, but it leaves the
-app, and dropping raw frames into the training pane just answers *format not
-recognized*.
+Training needs posed images. Today a video or a folder of photos is
+ingested - frames extracted, COLMAP kit written beside them - and VoluLab
+leaves a `run-colmap` script for the user to run. Honest, but it leaves the
+app.
 
 **A local bridge, not a port.** COLMAP will not compile to WASM in any form
 worth having: it wants Ceres, SuiteSparse and CUDA SIFT, and a browser build
 means CPU-only feature extraction plus threads, which means SharedArrayBuffer
 and COOP/COEP headers - the exact requirement avoiding which is why Brush was
 chosen as the trainer. So COLMAP stays native and fast, and a small local
-helper process drives it, with the training pane talking to it over
+helper process drives it, with the train node talking to it over
 localhost.
 
 The shape: drop a video or a folder of frames, VoluLab extracts and posts
 them, the bridge runs feature extraction, matching and mapping, and hands
-back a dataset the pane starts training on. Progress streams back so the pane
-can show which stage is running.
+back a dataset the node starts training on. Progress streams back so the
+node's face can show which stage is running.
 
 This is the one decision in this project that took the *cheaper* option
 rather than the maximal one, and deliberately - a WASM COLMAP would be weeks

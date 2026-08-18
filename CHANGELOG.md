@@ -9,6 +9,33 @@ months finds out why before they change it.
 
 ---
 
+## Import: every format, every gesture
+
+One importer, three gestures - drop, file picker, folder picker - and each
+takes single files, multi-selections and whole folders through the same
+classifiers. A folder or selection holding posed cameras (COLMAP sparse,
+nerfstudio `transforms.json`, RealityCapture csv) becomes a pending train
+node; picked folders attach as a directory handle the trainer reads in
+place, nothing copied. A folder or selection of bare photos gets the COLMAP
+kit written *next to the photos* - copied under `images/` where the scripts
+expect them, no second picker - and the node waits for poses. One photo
+alone is told why it cannot train instead of silence. Everything else -
+splats, point clouds, voxels, checkpoints, videos - falls through to the
+per-file importer. The train node's face accepts the same three gestures,
+so a dataset can be aimed at a specific node rather than the scene.
+
+Point clouds (`.ply/.las/.laz/.pcd/.xyz/.pts`) import as tiny isotropic
+gaussians - median-neighbour-distance scale, near-solid opacity - so every
+existing tool works on them the moment they land. MagicaVoxel `.vox`
+arrives as a voxel node with its palette.
+
+Traps: a `DataTransfer`'s items die at the first `await`, so
+`resolveDropPayload` captures the entries and the single-item handle
+synchronously before resolving anything. Directory pickers open with
+`readwrite` so the kit can land in place; dropped folders arrive read-only
+and must pass `requestPermission`, falling back to the copy-out flow when
+the browser says no.
+
 ## Training
 
 Gaussians are made in VoluLab now, not only edited. **Brush**
@@ -17,23 +44,27 @@ compiled to WASM it trains on a WebGPU device inside the app. No server, no
 CUDA, and the same code path on Mac and PC - which is what ruled out the CUDA
 trainers, whose kernels cannot cross into a browser at all.
 
-`TrainOp` is the record: dataset name, the config the run used, iterations,
-final splat count, PSNR. Like merge and voxelise the output exists before the
-op does - training is a long job driven from the pane, and the node is
-committed with its product. Its *retrain* button reopens the pane with those
-settings, and everything downstream replays onto the new output.
+`TrainOp` is the node, and the node *is* training: it enters history
+pending - dataset attached and config edited on its face in the node pane -
+and its output splat appears in the real viewport with the first snapshot,
+refining in place every few seconds through the same `replaceData` path
+sequences use. *Retrain* runs again over the same record, and downstream
+ops replay onto the new output when the run completes. Undoing or bypassing
+the node mid-run stops the run.
 
 Pieces: `src/training/brush-engine.ts` (device, pump loop, pause by not
-pumping), `preview-renderer.ts` (point sprites off Brush's own GPU buffers -
-watching a reconstruction appear does not need gaussian rendering),
-`src/ui/training-panel.ts`, and `scripts/build-brush.mjs` producing the wasm
-under `static/brush/pkg`. The fork adds three entry points brush-js lacked:
-start from bytes, start from a URL, and read the result back as a PLY.
+pumping), `train-run.ts` (the run controller: snapshot loop, the undo
+guard), `src/ui/training-face.ts` (the node's face, mounted in the node
+pane the way the colour panel is), and `scripts/build-brush.mjs` producing
+the wasm under `static/brush/pkg`. The fork adds three entry points
+brush-js lacked: start from bytes, start from a URL, and read the result
+back as a PLY.
 
 Worth knowing: training runs on its *own* WebGPU device, separate from the
-WebGL2 device the rest of the app renders with. The finished splats cross
-that boundary as PLY bytes, which is why the preview lives in the pane rather
-than in the viewport.
+device the rest of the app renders with. Splats cross that boundary as PLY
+bytes - a snapshot is a GPU readback plus a parse, seconds at a million
+splats - which is why snapshots are throttled and skipped while one is
+still in flight.
 
 Video input is ingested to frames in-app, but poses still come from an
 external COLMAP run VoluLab writes a script for. The bridge that closes that

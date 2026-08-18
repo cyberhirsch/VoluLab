@@ -10,8 +10,8 @@ import { Splat } from './splat';
 import { SerializeSettings, serializeSog, serializeSpz, serializeViewer, SogSettings, SpzSettings, ViewerExportSettings, WebGPUUnavailableError, writeSplatFile } from './splat-serialize';
 import { TghFrameSource } from './tgh/tgh-frame-source';
 import { TghModel } from './tgh/tgh-model';
-import { looksLikeDataset, packDataset } from './training/dataset';
-import { ingestImages, ingestVideo } from './training/video-ingest';
+import { isImageSet, listDirectory, looksLikeDataset, packDataset } from './training/dataset';
+import { ingestImages, ingestImagesInPlace, ingestVideo } from './training/video-ingest';
 import { i18n } from './ui/localization';
 
 // ts compiler and vscode find this type, but eslint does not
@@ -434,8 +434,19 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             if (imageFiles.length > 1 && imageFiles.length === files.length) {
                 const wrote = await ingestImages(imageFiles.map(f => f.contents), events);
                 if (wrote) {
-                    events.invoke('training.addNode', null, i18n.t('training.awaiting-poses'));
+                    const op = events.invoke('training.addNode', null, i18n.t('training.awaiting-poses'));
+                    if (op) op.awaitingPoses = true;
                 }
+                return result;
+            }
+
+            // one photo alone cannot be posed - say so instead of silence
+            if (imageFiles.length === 1 && files.length === 1) {
+                await events.invoke('showPopup', {
+                    type: 'info',
+                    header: i18n.t('training.dataset'),
+                    message: i18n.t('import.single-image')
+                });
                 return result;
             }
 
@@ -477,7 +488,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     const contents = files[i].contents ?? new File([await (await fetch(files[i].url)).blob()], files[i].filename);
                     const wrote = await ingestVideo(contents, events);
                     if (wrote) {
-                        events.invoke('training.addNode', null, i18n.t('training.awaiting-poses'));
+                        const op = events.invoke('training.addNode', null, i18n.t('training.awaiting-poses'));
+                        if (op) op.awaitingPoses = true;
                     }
                 } else if (filename.endsWith('.vox')) {
                     // a voxel model onto the voxel element
@@ -601,6 +613,48 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 if (error.name !== 'AbortError') {
                     console.error(error);
                 }
+            }
+        }
+    });
+
+    // import a whole folder: a dataset folder attaches to a train node
+    // directly (the trainer reads it in place - nothing is copied), a folder
+    // of bare photos gets the COLMAP kit written beside them, anything else
+    // routes through the regular importer
+    events.function('scene.importFolder', async () => {
+        try {
+            const handle = await window.showDirectoryPicker({
+                id: 'VoluLabFolderImport',
+                mode: 'readwrite'
+            });
+
+            const entries = await listDirectory(handle);
+            const names = entries.map(e => e.path);
+
+            if (looksLikeDataset(names)) {
+                events.invoke('training.addNode', { kind: 'directory', handle }, handle.name);
+                return;
+            }
+
+            if (names.length > 1 && isImageSet(names)) {
+                const wrote = await ingestImagesInPlace(handle, entries, events);
+                if (wrote) {
+                    const op = events.invoke('training.addNode', null, i18n.t('training.awaiting-poses'));
+                    if (op) op.awaitingPoses = true;
+                }
+                return;
+            }
+
+            const files: ImportFile[] = await Promise.all(entries.map(async e => ({
+                filename: e.path,
+                contents: await e.handle.getFile()
+            })));
+            if (files.length > 0) {
+                await importFiles(files);
+            }
+        } catch (error) {
+            if (error.name !== 'AbortError') {
+                console.error(error);
             }
         }
     });

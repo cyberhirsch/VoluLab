@@ -1296,6 +1296,8 @@ class TrainOp {
     settings: TrainSettings;
     /** held so retrain can reuse the dataset within this session */
     dataset?: unknown;
+    /** photos ingested, poses still being estimated outside the app */
+    awaitingPoses?: boolean;
     bypassed?: boolean;
 
     constructor(scene: Scene, output: Splat | null, settings: TrainSettings) {
