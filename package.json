@@ -15,6 +15,7 @@
     "scripts": {
         "build": "rollup -c",
         "build:brush": "node scripts/build-brush.mjs",
+        "bridge": "node bridge/server.mjs",
         "watch": "rollup -c -w",
         "serve": "serve dist -C",
         "develop": "cross-env BUILD_TYPE=debug concurrently --kill-others \"npm run watch\" \"npm run serve\"",

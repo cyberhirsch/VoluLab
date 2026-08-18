@@ -1292,6 +1292,8 @@ class DatasetOp {
     sourceName: string;
     /** photos ingested, poses still being estimated outside the app */
     awaitingPoses?: boolean;
+    /** transient progress line while the bridge works on this node */
+    status?: string;
     bypassed?: boolean;
 
     constructor(source: unknown | null, sourceName: string) {

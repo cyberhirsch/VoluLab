@@ -4,8 +4,10 @@ import { i18n } from './localization';
 import { resolveDropPayload } from '../drop-handler';
 import { DatasetOp } from '../edit-ops';
 import { Events } from '../events';
+import { BridgeImage, bridgeReady } from '../training/bridge-client';
+import { bridgePoseIntoOp } from '../training/bridge-ingest';
 import { isImageSet, listDirectory, looksLikeDataset, packDataset } from '../training/dataset';
-import { ensureWrite, ingestImages, ingestImagesInPlace, ingestVideo } from '../training/video-ingest';
+import { ensureWrite, extractVideoFrames, ingestImages, ingestImagesInPlace, ingestVideo } from '../training/video-ingest';
 
 /**
  * The dataset import node's face, mounted in the node pane like the colour
@@ -90,6 +92,11 @@ class ImportFace extends Container {
                 }
             }).catch(() => {});
         });
+
+        // the bridge reports its stages onto whichever node it works for
+        events.on('dataset.statusChanged', (op: DatasetOp) => {
+            if (op === this.op) this.refresh();
+        });
     }
 
     private async pickFolder() {
@@ -129,7 +136,15 @@ class ImportFace extends Container {
         }
 
         if (names.length > 1 && isImageSet(names)) {
-            if (await ensureWrite(handle)) {
+            // the bridge poses the photos right here; without it the
+            // COLMAP kit lands next to them for a manual run
+            if (await bridgeReady()) {
+                const images: BridgeImage[] = await Promise.all(entries.map(async e => ({
+                    name: e.path.split('/').pop(),
+                    data: await e.handle.getFile() as Blob
+                })));
+                this.runBridge(images, 'exhaustive', handle.name);
+            } else if (await ensureWrite(handle)) {
                 await ingestImagesInPlace(handle, entries, this.events);
                 this.markAwaiting();
             } else {
@@ -155,7 +170,18 @@ class ImportFace extends Container {
             const file = files[0];
             const name = lower[0];
             if (file.type.startsWith('video/') || ['.mp4', '.mov', '.webm', '.mkv'].some(ext => name.endsWith(ext))) {
-                if (await ingestVideo(file, this.events)) this.markAwaiting();
+                if (await bridgeReady()) {
+                    // frames go straight to the bridge - nothing touches disk
+                    const frames: BridgeImage[] = [];
+                    this.notice(i18n.t('bridge.stage-frames'));
+                    await extractVideoFrames(file, (frameName, blob) => {
+                        frames.push({ name: frameName, data: blob });
+                        return Promise.resolve();
+                    });
+                    this.runBridge(frames, 'sequential', file.name);
+                } else if (await ingestVideo(file, this.events)) {
+                    this.markAwaiting();
+                }
             } else if (name.endsWith('.zip') || name.endsWith('.ply')) {
                 const bytes = new Uint8Array(await file.arrayBuffer());
                 this.setSource({ kind: 'bytes', bytes, name: file.name }, file.name);
@@ -180,14 +206,27 @@ class ImportFace extends Container {
         }
 
         if (isImageSet(lower)) {
-            // bare photos: copy them out with the COLMAP kit
-            if (await ingestImages(files, this.events)) {
+            // the bridge poses bare photos in place; without it they are
+            // copied out with the COLMAP kit for a manual run
+            if (await bridgeReady()) {
+                this.runBridge(files.map((f, i) => ({ name: filenames[i].split('/').pop(), data: f as Blob })), 'exhaustive', 'photos');
+            } else if (await ingestImages(files, this.events)) {
                 this.markAwaiting();
             }
             return;
         }
 
         this.notice(i18n.t('import.folder-unrecognized'));
+    }
+
+    /** Hand images to the bridge; progress lands on the node's status line. */
+    private runBridge(images: BridgeImage[], matcher: 'sequential' | 'exhaustive', label: string) {
+        const op = this.op;
+        if (!op) return;
+        op.sourceName = label;
+        op.output.name = label;
+        this.events.fire('edit.changed');
+        bridgePoseIntoOp(op, images, matcher, this.events).catch(() => {});
     }
 
     private setSource(source: unknown, name: string) {
@@ -215,9 +254,10 @@ class ImportFace extends Container {
         const op = this.op;
         if (!op) return;
         this.noticeLine.hidden = true;
-        this.sourceLabel.textContent = op.source || op.awaitingPoses ?
-            op.sourceName :
-            i18n.t('training.no-dataset');
+        this.sourceLabel.textContent = op.status ??
+            (op.source || op.awaitingPoses ?
+                op.sourceName :
+                i18n.t('training.no-dataset'));
     }
 }
 

@@ -10,8 +10,10 @@ import { Splat } from './splat';
 import { SerializeSettings, serializeSog, serializeSpz, serializeViewer, SogSettings, SpzSettings, ViewerExportSettings, WebGPUUnavailableError, writeSplatFile } from './splat-serialize';
 import { TghFrameSource } from './tgh/tgh-frame-source';
 import { TghModel } from './tgh/tgh-model';
+import { BridgeImage, bridgeReady } from './training/bridge-client';
+import { bridgePoseIntoOp } from './training/bridge-ingest';
 import { isImageSet, listDirectory, looksLikeDataset, packDataset } from './training/dataset';
-import { ingestImages, ingestImagesInPlace, ingestVideo } from './training/video-ingest';
+import { extractVideoFrames, ingestImages, ingestImagesInPlace, ingestVideo } from './training/video-ingest';
 import { i18n } from './ui/localization';
 
 // ts compiler and vscode find this type, but eslint does not
@@ -428,10 +430,17 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 }
             }
 
-            // a set of bare photos is a dataset waiting for poses: copy them
-            // out with the COLMAP kit and leave a train node waiting
+            // a set of bare photos is a dataset waiting for poses: the
+            // bridge estimates them right here; without it they are copied
+            // out with the COLMAP kit and an import node waits
             const imageFiles = files.filter((f, i) => /\.(?:jpg|jpeg|png)$/.test(filenames[i]));
             if (imageFiles.length > 1 && imageFiles.length === files.length) {
+                if (await bridgeReady()) {
+                    const op = events.invoke('dataset.addNode', null, 'photos');
+                    const images: BridgeImage[] = imageFiles.map(f => ({ name: f.filename.split('/').pop(), data: f.contents as Blob }));
+                    bridgePoseIntoOp(op, images, 'exhaustive', events).catch(() => {});
+                    return result;
+                }
                 const wrote = await ingestImages(imageFiles.map(f => f.contents), events);
                 if (wrote) {
                     const op = events.invoke('dataset.addNode', null, i18n.t('training.awaiting-poses'));
@@ -483,13 +492,26 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     const bytes = new Uint8Array(await contents.arrayBuffer());
                     events.invoke('training.addNode', { kind: 'bytes', bytes, name: files[i].filename }, files[i].filename);
                 } else if (['.mp4', '.mov', '.webm', '.mkv'].some(ext => filename.endsWith(ext))) {
-                    // video: extract frames + write the COLMAP kit, and leave
-                    // a train node waiting for the processed folder
+                    // video: with the bridge running, frames go straight to
+                    // pose estimation; without it they land on disk with the
+                    // COLMAP kit and an import node waits
                     const contents = files[i].contents ?? new File([await (await fetch(files[i].url)).blob()], files[i].filename);
-                    const wrote = await ingestVideo(contents, events);
-                    if (wrote) {
-                        const op = events.invoke('dataset.addNode', null, i18n.t('training.awaiting-poses'));
-                        op?.markAwaiting(i18n.t('training.awaiting-poses'));
+                    if (await bridgeReady()) {
+                        const op = events.invoke('dataset.addNode', null, files[i].filename);
+                        op.status = i18n.t('bridge.stage-frames');
+                        events.fire('dataset.statusChanged', op);
+                        const frames: BridgeImage[] = [];
+                        await extractVideoFrames(contents, (frameName, blob) => {
+                            frames.push({ name: frameName, data: blob });
+                            return Promise.resolve();
+                        });
+                        bridgePoseIntoOp(op, frames, 'sequential', events).catch(() => {});
+                    } else {
+                        const wrote = await ingestVideo(contents, events);
+                        if (wrote) {
+                            const op = events.invoke('dataset.addNode', null, i18n.t('training.awaiting-poses'));
+                            op?.markAwaiting(i18n.t('training.awaiting-poses'));
+                        }
                     }
                 } else if (filename.endsWith('.vox')) {
                     // a voxel model onto the voxel element
@@ -637,6 +659,15 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             }
 
             if (names.length > 1 && isImageSet(names)) {
+                if (await bridgeReady()) {
+                    const op = events.invoke('dataset.addNode', null, handle.name);
+                    const images: BridgeImage[] = await Promise.all(entries.map(async e => ({
+                        name: e.path.split('/').pop(),
+                        data: await e.handle.getFile() as Blob
+                    })));
+                    bridgePoseIntoOp(op, images, 'exhaustive', events).catch(() => {});
+                    return;
+                }
                 const wrote = await ingestImagesInPlace(handle, entries, events);
                 if (wrote) {
                     const op = events.invoke('dataset.addNode', null, i18n.t('training.awaiting-poses'));

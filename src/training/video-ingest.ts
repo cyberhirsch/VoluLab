@@ -133,6 +133,44 @@ const ingestImages = async (files: File[], events: Events): Promise<boolean> => 
 };
 
 /**
+ * Step through `file` and hand every extracted frame to `onFrame` as a
+ * jpeg blob - the caller decides whether frames land on disk (the script
+ * kit) or go straight to the bridge.
+ */
+const extractVideoFrames = async (file: File, onFrame: (name: string, blob: Blob) => Promise<void>) => {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.src = URL.createObjectURL(file);
+    await new Promise<void>((resolve, reject) => {
+        video.onloadedmetadata = () => resolve();
+        video.onerror = () => reject(new Error(i18n.t('training.video-unreadable')));
+    });
+
+    const step = 1 / DEFAULT_FPS;
+    const count = Math.min(Math.floor(video.duration * DEFAULT_FPS), MAX_FRAMES);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+
+    for (let i = 0; i < count; i++) {
+        video.currentTime = Math.min(i * step, Math.max(video.duration - 0.05, 0));
+        await new Promise<void>((resolve) => {
+            video.onseeked = () => resolve();
+        });
+        ctx.drawImage(video, 0, 0);
+        const blob = await new Promise<Blob>((resolve) => {
+            canvas.toBlob(b => resolve(b), 'image/jpeg', 0.95);
+        });
+        await onFrame(`frame_${String(i).padStart(5, '0')}.jpg`, blob);
+    }
+
+    URL.revokeObjectURL(video.src);
+};
+
+/**
  * Extract frames from `file` into a user-picked directory along with the
  * COLMAP scripts. Returns true when the dataset directory was written.
  */
@@ -148,36 +186,7 @@ const ingestVideo = async (file: File, events: Events): Promise<boolean> => {
     try {
         const images = await dir.getDirectoryHandle('images', { create: true });
 
-        const video = document.createElement('video');
-        video.muted = true;
-        video.playsInline = true;
-        video.src = URL.createObjectURL(file);
-        await new Promise<void>((resolve, reject) => {
-            video.onloadedmetadata = () => resolve();
-            video.onerror = () => reject(new Error(i18n.t('training.video-unreadable')));
-        });
-
-        const step = 1 / DEFAULT_FPS;
-        const count = Math.min(Math.floor(video.duration * DEFAULT_FPS), MAX_FRAMES);
-
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
-
-        for (let i = 0; i < count; i++) {
-            video.currentTime = Math.min(i * step, Math.max(video.duration - 0.05, 0));
-            await new Promise<void>((resolve) => {
-                video.onseeked = () => resolve();
-            });
-            ctx.drawImage(video, 0, 0);
-            const blob = await new Promise<Blob>((resolve) => {
-                canvas.toBlob(b => resolve(b), 'image/jpeg', 0.95);
-            });
-            await writeFile(images, `frame_${String(i).padStart(5, '0')}.jpg`, blob);
-        }
-
-        URL.revokeObjectURL(video.src);
+        await extractVideoFrames(file, (name, blob) => writeFile(images, name, blob));
 
         await writeColmapKit(dir);
         await explainColmapStep(events);
@@ -188,4 +197,4 @@ const ingestVideo = async (file: File, events: Events): Promise<boolean> => {
     }
 };
 
-export { ensureWrite, ingestImages, ingestImagesInPlace, ingestVideo };
+export { ensureWrite, extractVideoFrames, ingestImages, ingestImagesInPlace, ingestVideo };

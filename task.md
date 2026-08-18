@@ -99,35 +99,29 @@ the one above would only move the surprise later.
 
 ---
 
-## COLMAP bridge — decided, not started
+## COLMAP bridge — built, needs a real-COLMAP run
 
-Training needs posed images. Today a video or a folder of photos is
-ingested - frames extracted, COLMAP kit written beside them - and VoluLab
-leaves a `run-colmap` script for the user to run. Honest, but it leaves the
-app.
+The bridge exists (`bridge/server.mjs`, `npm run bridge`): a zero-dependency
+node helper on 127.0.0.1:39733 that takes images, runs COLMAP's
+feature/match/map/convert pipeline, and serves the sparse model back.
+Importing photos or a video with it running estimates poses automatically -
+stages stream onto the import node's face - and without it the script-kit
+fallback still works. On first run without COLMAP (Windows) it offers to
+download the official portable build; the asset selection was verified
+against the live release API (4.1.1, cuda/nocuda by nvidia-smi probe).
 
-**A local bridge, not a port.** COLMAP will not compile to WASM in any form
-worth having: it wants Ceres, SuiteSparse and CUDA SIFT, and a browser build
-means CPU-only feature extraction plus threads, which means SharedArrayBuffer
-and COOP/COEP headers - the exact requirement avoiding which is why Brush was
-chosen as the trainer. So COLMAP stays native and fast, and a small local
-helper process drives it, with the train node talking to it over
-localhost.
+What remains: the pipeline is verified end to end against a stub COLMAP
+(the browser pane used for testing cannot reach other local ports, so the
+protocol was driven from node - identical requests). A run with *real*
+COLMAP on a real capture has not been watched yet, and the provisioning
+download path has not actually pulled the 1-2 GB zip. Both want one manual
+session. Non-Windows provisioning stays manual (brew/apt) by design.
 
-The shape: drop a video or a folder of frames, VoluLab extracts and posts
-them, the bridge runs feature extraction, matching and mapping, and hands
-back a dataset the node starts training on. Progress streams back so the
-node's face can show which stage is running. On first run the bridge
-should provision COLMAP itself - the Windows builds ship as a portable
-zip, so "install" is a download and an unpack, no admin rights - making
-the whole pose step: start the bridge once, done.
-
-This is the one decision in this project that took the *cheaper* option
-rather than the maximal one, and deliberately - a WASM COLMAP would be weeks
-of work likely ending too slow to use. The cost, stated plainly: it is the
-first piece of VoluLab that is not client-side. It has to stay strictly
-optional. Everything already built must keep working with no bridge running,
-and a posed dataset must still be loadable by hand.
+Why a bridge, not a port, for the record: COLMAP will not compile to WASM
+in any form worth having - Ceres, SuiteSparse, CUDA SIFT, threads,
+COOP/COEP. The bridge is the first piece of VoluLab that is not
+client-side, and it stays strictly optional: everything works with no
+bridge running, and a posed dataset is still loadable by hand.
 
 ---
 

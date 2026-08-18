@@ -49,7 +49,12 @@ export default [
             }
         },
         rules: {
-            'import/no-unresolved': 'off'
+            'import/no-unresolved': 'off',
+            // the bridge is sequential-by-design node tooling
+            'jsdoc/require-param': 'off',
+            'jsdoc/require-returns': 'off',
+            'no-await-in-loop': 'off',
+            'require-atomic-updates': 'off'
         }
     }
 ];

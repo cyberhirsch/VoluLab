@@ -9,6 +9,28 @@ months finds out why before they change it.
 
 ---
 
+## The COLMAP bridge
+
+Pose estimation without leaving the app. `npm run bridge` starts a small
+zero-dependency node helper on 127.0.0.1:39733; with it running, importing
+photos or a video sends the frames over, COLMAP runs natively
+(feature extraction → matching → mapping → conversion), and the posed
+dataset lands on the import node - each stage streaming onto the node's
+face while it works. Photos match exhaustively, video frames sequentially.
+Without the bridge, nothing changes: the script-kit fallback remains.
+
+First run without COLMAP on the PATH (Windows): the bridge offers to
+download the official portable build and unpacks it beside itself - the
+cuda/nocuda choice made by an nvidia-smi probe against the live release
+assets. Mac/Linux stay on brew/apt by instruction.
+
+Worth knowing: the browser talks to the bridge across origins, so the
+bridge answers CORS *and* Chrome's private-network-access preflight
+(`Access-Control-Allow-Private-Network: true`) - loopback is exempt from
+mixed-content blocking, which is why this works from the https deployment
+too. The whole protocol was verified end to end against a stub COLMAP;
+a run with the real binary is the one thing still owed.
+
 ## Import: every format, every gesture
 
 One importer, three gestures - drop, file picker, folder picker - and each
