@@ -859,8 +859,17 @@ class GraphPanel extends Container {
                     if (target && (target.key as any)?.name === 'train') {
                         this.events.fire('graph.connectDataset', node.key, target.key);
                     } else {
+                        // released over nothing: offer what a dataset can
+                        // feed, created at the drop point and wired up
                         showContextMenu(document, ev.clientX, ev.clientY, [
-                            { label: 'drop onto a train node to connect', disabled: true, action: () => {} }
+                            {
+                                label: 'train',
+                                action: () => {
+                                    const op = this.events.invoke('training.addNode');
+                                    this.positions.set(op, { x: at.x, y: at.y - NODE_H / 2 });
+                                    this.events.fire('graph.connectDataset', node.key, op);
+                                }
+                            }
                         ]);
                     }
                     return;
