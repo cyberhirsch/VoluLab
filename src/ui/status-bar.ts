@@ -1,5 +1,6 @@
 import { Container, Label } from '@playcanvas/pcui';
 
+import { version as appVersion } from '../../package.json';
 import { Events } from '../events';
 import { Splat } from '../splat';
 import { i18n } from './localization';
@@ -17,6 +18,18 @@ class StatusBar extends Container {
         // The timeline and splat-data toggles are gone: both are workspace pane
         // kinds now, chosen from a pane's own header dropdown rather than
         // toggled as docked panels from down here.
+
+        // Left corner: build version. One patch bump per push (the Pages
+        // deploy workflow does it, since it is the one place that knows a
+        // push landed and controls what actually gets built) - this is
+        // package.json's version, read the same way the service worker
+        // reads it for its cache name.
+        const versionLabel = new Label({
+            class: 'status-bar-version',
+            text: `v${appVersion}`
+        });
+        tooltips.register(versionLabel, () => `VoluLab ${appVersion}`, 'top');
+        this.append(versionLabel);
 
         // Right section: stats
         const statsContainer = new Container({

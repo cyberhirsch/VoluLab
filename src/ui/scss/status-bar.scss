@@ -63,3 +63,11 @@
     color: $text-primary;
     font-size: 11px;
 }
+
+// tucked in the far corner, out of the way of the working stats
+.status-bar-version {
+    color: $text-secondary;
+    font-size: 11px;
+    padding: 0 8px;
+    white-space: nowrap;
+}
