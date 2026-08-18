@@ -125,12 +125,23 @@ bridge running, and a posed dataset is still loadable by hand.
 
 ---
 
-## WebGPU viewport — assessed, not started
+## WebGPU viewport — spiked, first breakage catalogued
 
 Move the viewport off WebGL2 so the app and the trainer share one device.
 Estimated twice: the first estimate, in the training plan, called it *its own
 project* and listed three blockers. All three checked out cheaper than that,
 and the correction is the point of this entry.
+
+**Spike result (the flip is reverted to opt-in).** With
+`?device=webgpu` the device comes up and renders, but the first splat
+import dies: the engine's WebGPU gsplat resource does not expose the
+per-splat textures the data-processor reads -
+`resource.getTexture('transformA')` returns undefined and the bound
+calculation crashes with *reading 'width'*. Everything in
+`src/data-processor` and the picker leans on those textures, so the port
+is: move the data-processor onto whatever the unified gsplat path
+exposes (or maintain the textures ourselves). Until then WebGL2 is the
+default again and WebGPU sits behind the flag.
 
 **Sharing the device works untouched.** The question was whether PlayCanvas's
 WebGPU device could carry what Brush needs. `createDevice` in the 2.21 engine
