@@ -9,6 +9,7 @@ import { ColorPanel } from './color-panel';
 import { ExportPopup } from './export-popup';
 import { GraphPanel } from './graph-panel';
 import { ImageSettingsDialog } from './image-settings-dialog';
+import { ImportFace } from './import-face';
 import { i18n } from './localization';
 import { Menu } from './menu';
 import { NodePanel } from './node-panel';
@@ -123,9 +124,12 @@ class EditorUI {
         const graphPanel = new GraphPanel(events);
         const nodePanel = new NodePanel(events);
         // training is a node now: its controls are the train node's face,
-        // mounted in the node pane the way the colour panel is
+        // mounted in the node pane the way the colour panel is. The dataset
+        // import node carries the pickers on a face of its own.
         const trainingFace = new TrainingFace(events);
         nodePanel.mount('train', trainingFace.dom);
+        const importFace = new ImportFace(events);
+        nodePanel.mount('dataset', importFace.dom);
         // the colour controls are a node's parameters now, so they live inside
         // the node pane rather than in a pane of their own
         nodePanel.mount('colour', colorPanel.dom);

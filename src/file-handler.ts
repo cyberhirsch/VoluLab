@@ -435,7 +435,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 const wrote = await ingestImages(imageFiles.map(f => f.contents), events);
                 if (wrote) {
                     const op = events.invoke('training.addNode', null, i18n.t('training.awaiting-poses'));
-                    if (op) op.awaitingPoses = true;
+                    op?.datasetOp?.markAwaiting(i18n.t('training.awaiting-poses'));
                 }
                 return result;
             }
@@ -489,7 +489,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     const wrote = await ingestVideo(contents, events);
                     if (wrote) {
                         const op = events.invoke('training.addNode', null, i18n.t('training.awaiting-poses'));
-                        if (op) op.awaitingPoses = true;
+                        op?.datasetOp?.markAwaiting(i18n.t('training.awaiting-poses'));
                     }
                 } else if (filename.endsWith('.vox')) {
                     // a voxel model onto the voxel element
@@ -640,7 +640,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 const wrote = await ingestImagesInPlace(handle, entries, events);
                 if (wrote) {
                     const op = events.invoke('training.addNode', null, i18n.t('training.awaiting-poses'));
-                    if (op) op.awaitingPoses = true;
+                    op?.datasetOp?.markAwaiting(i18n.t('training.awaiting-poses'));
                 }
                 return;
             }

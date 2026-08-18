@@ -133,6 +133,9 @@ const registerTraining = (events: Events, scene: Scene) => {
         snapshotDirty = false;
         lastSnapshotAt = 0;
 
+        // the record keeps the name of what actually fed this run
+        if (op.datasetOp) op.settings.datasetName = op.datasetOp.sourceName;
+
         // does anything downstream stand on this node's output? then a
         // retrain has replaced data under applied history and it must re-run
         const hadOutput = !!op.output;

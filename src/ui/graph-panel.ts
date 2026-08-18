@@ -74,6 +74,7 @@ const OP_LABELS: Record<string, string> = {
     merge: 'merge',
     voxelise: 'voxelise',
     addVoxels: 'import voxels',
+    dataset: 'import',
     train: 'train',
     crop: 'crop',
     cleanup: 'cleanup',
@@ -560,6 +561,10 @@ class GraphPanel extends Container {
         ops.forEach((op, i) => {
             const produces = (op as any).output as Splat;
             if (produces) {
+                // a dataset import produces a lane marker, not a scene
+                // object - it gets a lane like anything produced, but a
+                // click on it must not become a scene selection
+                const sceneOutput = (produces as any).dataset ? null : produces;
                 add(produces, {
                     index: i,
                     kind: opLabel(op),
@@ -567,7 +572,7 @@ class GraphPanel extends Container {
                     // dataset) says what that was; otherwise count its inputs
                     name: (op as any).sourceLabel ?? `${((op as any).inputs?.length ?? 0)} inputs`,
                     applied: i < cursor,
-                    splat: produces,
+                    splat: sceneOutput,
                     bypassed: !!op.bypassed,
                     key: op
                 });
@@ -620,6 +625,13 @@ class GraphPanel extends Container {
                 frozen: steps.length ? steps.every(s => !isParametric(s.query)) : undefined,
                 key: op
             });
+
+            // a pending producer that consumes something (a train node
+            // waiting on its import node) still owes the graph that edge
+            if (((op as any).inputs ?? []).length > 0) {
+                const lane = laneOf(key);
+                crossLinks.push({ op, node: lane[lane.length - 1] });
+            }
         });
 
         const nodes: NodeModel[] = [];

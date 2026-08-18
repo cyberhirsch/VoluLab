@@ -2,7 +2,7 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Quat, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { EditHistory } from './edit-history';
-import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
+import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -986,13 +986,40 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     /**
      * Add a pending train node: the node exists before any gaussians do.
-     * The run controller (train-run.ts) fills in its output when a run
-     * produces one; here is only the record entering history.
+     * A dataset arriving with it becomes an import node of its own, and
+     * the train node consumes it through the graph - the edge is the
+     * attachment. The run controller (train-run.ts) fills in the output
+     * when a run produces one; here is only the record entering history.
      */
-    events.function('training.addNode', (dataset: unknown = null, datasetName = 'no dataset', config: Record<string, unknown> = {}) => {
-        const settings: TrainSettings = { datasetName, config, iterations: 0, finalSplats: 0 };
+    events.function('training.addNode', (dataset: unknown = null, datasetName: string | null = null, config: Record<string, unknown> = {}) => {
+        let importOp: DatasetOp | null = null;
+        if (dataset !== null || datasetName !== null) {
+            importOp = new DatasetOp(dataset, datasetName ?? 'dataset');
+            events.fire('edit.add', importOp);
+
+            // an idle train node with no dataset adopts the import rather
+            // than a twin appearing beside it
+            const h = history();
+            const applied = (h.ops as EditOp[]).slice(0, h.cursor);
+            const idle = [...applied].reverse().find(o => o instanceof TrainOp && !o.datasetOp && !o.output && !o.bypassed) as TrainOp | undefined;
+            if (idle) {
+                idle.datasetOp = importOp;
+                idle.inputs = [importOp.output];
+                idle.settings.datasetName = importOp.sourceName;
+                Object.assign(idle.settings.config, config);
+                events.fire('edit.changed');
+                openInGraph((h.ops as EditOp[]).indexOf(idle));
+                events.fire('workspace.reveal', 'node');
+                return idle;
+            }
+        }
+
+        const settings: TrainSettings = { datasetName: importOp?.sourceName ?? 'no dataset', config, iterations: 0, finalSplats: 0 };
         const op = new TrainOp(scene, null, settings);
-        op.dataset = dataset ?? undefined;
+        if (importOp) {
+            op.datasetOp = importOp;
+            op.inputs = [importOp.output];
+        }
         const index = history().cursor;
         events.fire('edit.add', op);
         openInGraph(index);

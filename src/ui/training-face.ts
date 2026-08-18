@@ -1,12 +1,9 @@
 import { Container } from '@playcanvas/pcui';
 
 import { i18n } from './localization';
-import { resolveDropPayload } from '../drop-handler';
 import { TrainOp } from '../edit-ops';
 import { Events } from '../events';
-import { TrainPhase, TrainProgress, TrainSource } from '../training/brush-engine';
-import { isImageSet, listDirectory, looksLikeDataset, packDataset } from '../training/dataset';
-import { ensureWrite, ingestImages, ingestImagesInPlace, ingestVideo } from '../training/video-ingest';
+import { TrainPhase, TrainProgress } from '../training/brush-engine';
 
 /**
  * The train node's parameters, mounted in the node pane the way the colour
@@ -82,36 +79,13 @@ class TrainingFace extends Container {
             return el;
         };
 
-        // dataset
+        // the dataset is not picked here - it arrives through the node's
+        // input, an import node, whose face holds the pickers. This line
+        // only says what is connected.
         const dataset = section(i18n.t('training.dataset'));
-        const pickRow = document.createElement('div');
-        pickRow.className = 'tf-row';
-        dataset.appendChild(pickRow);
-        button(pickRow, 'pickFolder', i18n.t('training.pick-folder'), () => this.pickFolder());
-        button(pickRow, 'pickFiles', i18n.t('training.pick-files'), () => this.pickFiles());
         this.sourceLabel = document.createElement('div');
         this.sourceLabel.className = 'tf-source';
         dataset.appendChild(this.sourceLabel);
-
-        // drops aimed at this node stay here rather than falling through to
-        // the scene importer - folders, file lists and single files alike
-        this.dom.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-        });
-        this.dom.addEventListener('drop', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (!e.dataTransfer) return;
-            // resolve synchronously - the DataTransfer dies after the first await
-            resolveDropPayload(e.dataTransfer).then(async (payload) => {
-                if (payload.directory) {
-                    await this.attachDirectory(payload.directory);
-                } else if (payload.files.length > 0) {
-                    await this.acceptFiles(payload.files.map(f => f.file), payload.files.map(f => f.filename));
-                }
-            }).catch(() => {});
-        });
 
         // config
         const config = section(i18n.t('training.settings'));
@@ -207,125 +181,9 @@ class TrainingFace extends Container {
         }
     }
 
-    private async pickFolder() {
-        try {
-            // readwrite so a folder of bare photos can take its COLMAP kit
-            const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
-            await this.attachDirectory(handle);
-        } catch (e) {
-            // cancelled
-        }
-    }
-
-    private pickFiles() {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.multiple = true;
-        input.accept = '.zip,.ply,.jpg,.jpeg,.png,.csv,.json,.txt,.bin,.mp4,.mov,.webm,.mkv,video/*';
-        input.onchange = () => {
-            const files = Array.from(input.files ?? []);
-            if (files.length > 0) this.acceptFiles(files).catch(() => {});
-        };
-        input.click();
-    }
-
-    /**
-     * Folder mode: a dataset folder attaches whole (Brush reads it in
-     * place), a folder of bare photos gets the COLMAP kit written beside
-     * them, anything else is not a dataset.
-     */
-    private async attachDirectory(handle: FileSystemDirectoryHandle) {
-        const entries = await listDirectory(handle);
-        const names = entries.map(e => e.path);
-
-        if (looksLikeDataset(names)) {
-            this.setDataset({ kind: 'directory', handle }, handle.name);
-            return;
-        }
-
-        if (names.length > 1 && isImageSet(names)) {
-            if (await ensureWrite(handle)) {
-                await ingestImagesInPlace(handle, entries, this.events);
-                this.markAwaitingPoses();
-            } else {
-                // the browser refused to write into the dropped folder:
-                // fall back to copying the photos out beside a fresh kit
-                const files = await Promise.all(entries.map(e => e.handle.getFile()));
-                if (await ingestImages(files, this.events)) {
-                    this.markAwaitingPoses();
-                }
-            }
-            return;
-        }
-
-        this.notice(i18n.t('import.folder-unrecognized'));
-    }
-
-    /** File and file-list mode: route whatever was picked or dropped. */
-    private async acceptFiles(files: File[], names?: string[]) {
-        const filenames = names ?? files.map(f => f.name);
-        const lower = filenames.map(f => f.toLowerCase());
-
-        if (files.length === 1) {
-            const file = files[0];
-            const name = lower[0];
-            if (file.type.startsWith('video/') || ['.mp4', '.mov', '.webm', '.mkv'].some(ext => name.endsWith(ext))) {
-                if (await ingestVideo(file, this.events)) this.markAwaitingPoses();
-            } else if (name.endsWith('.zip') || name.endsWith('.ply')) {
-                const bytes = new Uint8Array(await file.arrayBuffer());
-                this.setDataset({ kind: 'bytes', bytes, name: file.name }, file.name);
-            } else if (isImageSet([name])) {
-                this.notice(i18n.t('import.single-image'));
-            } else {
-                this.notice(i18n.t('import.dataset-needs-images'));
-            }
-            return;
-        }
-
-        if (looksLikeDataset(filenames)) {
-            // several files forming one dataset: pack them into a zip
-            this.events.fire('startSpinner');
-            try {
-                const { bytes, name } = await packDataset(files.map((f, i) => ({ filename: filenames[i], contents: f })));
-                this.setDataset({ kind: 'bytes', bytes, name: `${name}.zip` }, name);
-            } finally {
-                this.events.fire('stopSpinner');
-            }
-            return;
-        }
-
-        if (isImageSet(lower)) {
-            // bare photos: copy them out with the COLMAP kit
-            if (await ingestImages(files, this.events)) {
-                this.markAwaitingPoses();
-            }
-            return;
-        }
-
-        this.notice(i18n.t('import.folder-unrecognized'));
-    }
-
-    /** The dataset is out being posed; the node waits for its return. */
-    private markAwaitingPoses() {
-        if (this.op) {
-            this.op.awaitingPoses = true;
-            this.op.settings.datasetName = i18n.t('training.awaiting-poses');
-            this.events.fire('edit.changed');
-        }
-        this.refresh();
-    }
-
     private notice(text: string) {
         this.noticeLine.textContent = text;
         this.noticeLine.hidden = false;
-    }
-
-    private setDataset(dataset: TrainSource, name: string) {
-        if (!this.op) return;
-        this.op.dataset = dataset;
-        this.op.settings.datasetName = name;
-        this.events.fire('edit.changed');
-        this.refresh();
     }
 
     /** settings -> controls */
@@ -341,10 +199,11 @@ class TrainingFace extends Container {
         const op = this.op;
         if (!op) return;
 
-        this.sourceLabel.textContent = op.dataset ?
-            op.settings.datasetName :
-            i18n.t(op.awaitingPoses ? 'training.awaiting-poses' :
-                op.settings.finalSplats > 0 ? 'training.reattach-dataset' : 'training.no-dataset');
+        this.sourceLabel.textContent = op.datasetOp ?
+            (op.datasetOp.awaitingPoses ?
+                i18n.t('training.awaiting-poses') :
+                op.datasetOp.sourceName) :
+            i18n.t('training.needs-import');
 
         const state = this.events.invoke('training.state', op) as { phase: TrainPhase, progress: TrainProgress | null, active: boolean };
         const paused = this.events.invoke('training.isPaused', op);

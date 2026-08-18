@@ -1,7 +1,7 @@
 import { Container } from '@playcanvas/pcui';
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { AddVoxelsOp, CleanupOp, CropOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { AddVoxelsOp, CleanupOp, CropOp, DatasetOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -213,6 +213,16 @@ class NodePanel extends Container {
             this.stat('cell size', grid.cellSize.toFixed(4));
             this.stat('filled', op.output.filled.toLocaleString());
             return;
+        }
+
+        if (op instanceof DatasetOp) {
+            const panel = this.mounts.get('dataset');
+            if (panel) {
+                this.empty.hidden = true;
+                (panel as any).bindNode?.(op, index);
+                this.body.appendChild(panel);
+                return;
+            }
         }
 
         if (op instanceof TrainOp) {

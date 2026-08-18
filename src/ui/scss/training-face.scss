@@ -1,9 +1,11 @@
 @use 'colors.scss' as *;
 
-// The train node's face, mounted inside the node pane. Dataset at the
-// top, the run's numbers below - the viewport itself is the preview.
+// The train node's face and the dataset import node's face, mounted
+// inside the node pane. They share one vocabulary of parts - the import
+// face is the pickers, the train face is the run.
 
-#training-face {
+#training-face,
+#import-face {
     display: flex;
     flex-direction: column;
     background-color: $ink-1;

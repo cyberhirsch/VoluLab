@@ -1261,6 +1261,73 @@ class AddVoxelsOp {
     }
 }
 
+/**
+ * The lane marker a dataset import node produces. Not a scene element -
+ * it exists so the graph machinery, which lanes by outputs and draws
+ * edges from inputs, treats the dataset exactly like any other produced
+ * thing: its own lane, and an edge into the train node that consumes it.
+ */
+type DatasetHandle = {
+    name: string;
+    dataset: true;
+};
+
+/**
+ * An import node whose cargo is a capture dataset rather than a scene
+ * object. The one import node concept covers both: importing a splat file
+ * yields a loaded object, importing a dataset yields this - a node holding
+ * the source (bytes, a directory handle) that a train node consumes as its
+ * input. The source is session state, not history: handles and dropped
+ * files cannot be serialised, so a later session re-attaches via the
+ * node's face.
+ */
+class DatasetOp {
+    name = 'dataset';
+
+    inputs: Splat[] = [];
+    /** the lane marker the train node consumes as its input */
+    output: DatasetHandle;
+    /** bytes / directory handle / url for the trainer */
+    source: unknown | null;
+    sourceName: string;
+    /** photos ingested, poses still being estimated outside the app */
+    awaitingPoses?: boolean;
+    bypassed?: boolean;
+
+    constructor(source: unknown | null, sourceName: string) {
+        this.source = source;
+        this.sourceName = sourceName;
+        this.output = { name: sourceName, dataset: true };
+    }
+
+    /** what the graph labels this node with */
+    get sourceLabel() {
+        return this.sourceName;
+    }
+
+    setSource(source: unknown, name: string) {
+        this.source = source;
+        this.sourceName = name;
+        this.output.name = name;
+        this.awaitingPoses = false;
+    }
+
+    /** the dataset left the app to be posed; the node waits for its return */
+    markAwaiting(label: string) {
+        this.awaitingPoses = true;
+        this.sourceName = label;
+        this.output.name = label;
+    }
+
+    do() {}
+
+    undo() {}
+
+    destroy() {
+        this.source = null;
+    }
+}
+
 /** The record a train node keeps: what was trained, how, and what came out. */
 type TrainSettings = {
     datasetName: string;
@@ -1289,15 +1356,13 @@ class TrainOp {
     name = 'train';
 
     scene: Scene;
-    /** trained from a dataset, not from scene objects */
-    inputs: Splat[] = [];
+    /** the import node whose dataset this node trains from */
+    inputs: (Splat | DatasetHandle)[] = [];
     /** null until the first snapshot of the first run */
     output: Splat | null;
     settings: TrainSettings;
-    /** held so retrain can reuse the dataset within this session */
-    dataset?: unknown;
-    /** photos ingested, poses still being estimated outside the app */
-    awaitingPoses?: boolean;
+    /** the import node feeding this one - the graph edge made concrete */
+    datasetOp?: DatasetOp;
     bypassed?: boolean;
 
     constructor(scene: Scene, output: Splat | null, settings: TrainSettings) {
@@ -1306,9 +1371,14 @@ class TrainOp {
         this.settings = settings;
     }
 
+    /** the trainer's source, read through the connected import node */
+    get dataset(): unknown {
+        return this.datasetOp?.source ?? undefined;
+    }
+
     /** what the graph labels this node with */
     get sourceLabel() {
-        return this.settings.datasetName;
+        return this.datasetOp?.sourceName ?? this.settings.datasetName;
     }
 
     async do() {
@@ -1322,7 +1392,7 @@ class TrainOp {
     destroy() {
         this.output?.destroy();
         this.output = null;
-        this.dataset = null;
+        this.datasetOp = undefined;
     }
 }
 
@@ -1389,6 +1459,8 @@ export {
     MergeOp,
     VoxeliseOp,
     AddVoxelsOp,
+    DatasetOp,
+    type DatasetHandle,
     TrainOp,
     type TrainSettings,
     principalOp,
