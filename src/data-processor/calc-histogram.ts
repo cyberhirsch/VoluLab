@@ -68,6 +68,7 @@ class CalcHistogram {
     private tileShaders: Map<number, Shader> = new Map();
     private binShaders: Map<number, Shader> = new Map();
     private reduceShader: Shader = null;
+    private clearShader: Shader = null;
 
     private tileTex: Texture = null;
     private tileRT: RenderTarget = null;
@@ -100,6 +101,15 @@ class CalcHistogram {
                 attributes: { vertex_position: SEMANTIC_POSITION },
                 vertexGLSL: fullscreenVS,
                 fragmentGLSL: finalReduceFS
+            });
+        }
+
+        if (!this.clearShader) {
+            this.clearShader = ShaderUtils.createShader(device, {
+                uniqueName: 'histClear',
+                attributes: { vertex_position: SEMANTIC_POSITION },
+                vertexGLSL: fullscreenVS,
+                fragmentGLSL: 'void main(void) { gl_FragColor = vec4(0.0); }'
             });
         }
 
@@ -233,22 +243,12 @@ class CalcHistogram {
         return numSplats;
     }
 
+    // clear by drawing zeros: updateBegin/updateEnd and raw viewport pokes are
+    // WebGL-only device internals, while a quad draw goes through the same
+    // path on both backends
     private clearRT(rt: RenderTarget) {
-        const d = this.device as any;
-        const oldRt = d.renderTarget;
-        const oldVx = d.vx, oldVy = d.vy, oldVw = d.vw, oldVh = d.vh;
-        const oldSx = d.sx, oldSy = d.sy, oldSw = d.sw, oldSh = d.sh;
-
-        d.setRenderTarget(rt);
-        d.updateBegin();
-        d.setViewport(0, 0, rt.width, rt.height);
-        d.setScissor(0, 0, rt.width, rt.height);
-        d.clear({ color: [0, 0, 0, 0], flags: 1 });
-        d.updateEnd();
-
-        d.setRenderTarget(oldRt);
-        d.setViewport(oldVx, oldVy, oldVw, oldVh);
-        d.setScissor(oldSx, oldSy, oldSw, oldSh);
+        this.device.setBlendState(BlendState.NOBLEND);
+        drawQuadWithShader(this.device, rt, this.clearShader);
     }
 
     // release all GPU resources owned by this instance. peer data-processor
@@ -271,6 +271,7 @@ class CalcHistogram {
         this.tileShaders.clear();
         this.binShaders.clear();
         this.reduceShader = null;
+        this.clearShader = null;
     }
 
     async run(splat: Splat, mode: number, options?: CalcHistogramOptions): Promise<CalcHistogramResult> {
@@ -292,7 +293,7 @@ class CalcHistogram {
         device.setBlendState(BlendState.NOBLEND);
         drawQuadWithShader(device, this.tileRT, tileShader);
 
-        // pass 2: final reduce 64x64 → 1x1
+        // pass 2: final reduce 64x64 â†’ 1x1
         scope.resolve('inputTex').setValue(this.tileTex);
         scope.resolve('gridDim').setValue(GRID_DIM);
         device.setBlendState(BlendState.NOBLEND);
@@ -312,13 +313,13 @@ class CalcHistogram {
         await this.minMaxTex.read(0, 0, 1, 1, {
             renderTarget: this.minMaxRT,
             data: this.minMaxData,
-            immediate: false
+            immediate: this.device.isWebGPU
         });
 
         await this.binTex.read(0, 0, NUM_BINS, 1, {
             renderTarget: this.binRT,
             data: this.binData,
-            immediate: false
+            immediate: this.device.isWebGPU
         });
 
         let min = this.minMaxData[0];

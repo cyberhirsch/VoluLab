@@ -176,22 +176,22 @@ class CalcBound {
             resources.selectedMinTexture.read(0, 0, transformA.width, 1, {
                 renderTarget: resources.selectedMinRenderTarget,
                 data: resources.selectedMinData,
-                immediate: false
+                immediate: this.device.isWebGPU
             }),
             resources.selectedMaxTexture.read(0, 0, transformA.width, 1, {
                 renderTarget: resources.selectedMaxRenderTarget,
                 data: resources.selectedMaxData,
-                immediate: false
+                immediate: this.device.isWebGPU
             }),
             resources.visibleMinTexture.read(0, 0, transformA.width, 1, {
                 renderTarget: resources.visibleMinRenderTarget,
                 data: resources.visibleMinData,
-                immediate: false
+                immediate: this.device.isWebGPU
             }),
             resources.visibleMaxTexture.read(0, 0, transformA.width, 1, {
                 renderTarget: resources.visibleMaxRenderTarget,
                 data: resources.visibleMaxData,
-                immediate: false
+                immediate: this.device.isWebGPU
             })
         ]);
 

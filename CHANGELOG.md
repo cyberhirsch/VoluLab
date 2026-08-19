@@ -9,6 +9,51 @@ months finds out why before they change it.
 
 ---
 
+## The WebGPU viewport
+
+WebGPU is the default device now; `?device=webgl2` keeps the old path as
+the escape hatch. The port was a catalogue of five breakages, each found
+by driving headless Chrome over CDP - the embedded test pane has no
+WebGPU adapter, which is how the first two field reports were
+misdiagnosed as stale caches while every import silently fell back to
+WebGL2 locally.
+
+The catalogue, for the next porter:
+
+1. **`instance.orderTexture` does not exist on WebGPU** - the sort order
+   lives in a storage buffer there. The centers overlay read
+   `orderTexture.width` and killed every import with *reading 'width'*.
+   Points are order-independent, so the overlay now indexes splats by
+   vertex ID and culls deleted ones in the shader - no sort dependency
+   on either backend.
+2. **GLSL chunk overrides are invisible to WebGPU.** The engine composes
+   gsplat materials from `shaderChunks.wgsl` there, so the splat
+   shader's grading, selection tint, state culling and second MRT output
+   silently reverted to engine defaults - and the missing second output
+   invalidated the whole splat pipeline. The three overridden chunks now
+   have hand-written WGSL twins set alongside the GLSL.
+3. **`device.updateBegin` is WebGL-only.** The point-dispatch helper the
+   histogram uses poked raw device internals; it is now a RenderPass
+   built on the engine's QuadRender (processed shader, bind groups),
+   which is what makes a custom draw legal on WebGPU.
+4. **Deferred `texture.read` returns zeros on WebGPU** in an app that
+   renders on demand - there is no next frame to flush the copy. Every
+   data-processor and picker readback now passes
+   `immediate: device.isWebGPU`. This was the quiet one: no error
+   anywhere, calcBound wrote a zero-size bound, and the splat was
+   frustum-culled into invisibility.
+5. **Writing `gl_PointSize` makes the GLSL→WGSL transpiler drop the
+   entry point** - the module still compiles, so the only symptom is a
+   misleading *entry point "main" doesn't exist* at pipeline creation.
+   WGSL has no point size; the writes are now guarded with
+   `#ifndef WEBGPU`.
+
+Verified: import, bound, histogram and select-all produce numerically
+identical results on both backends; the flame captures render
+pixel-identically. Still owed: splatSize on the centers overlay
+(one-pixel points on WebGPU until a quad-expansion pass exists), and one
+lost frame at startup from an engine backbuffer-resize race.
+
 ## The COLMAP bridge
 
 Pose estimation without leaving the app. `npm run bridge` starts a small

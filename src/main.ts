@@ -126,14 +126,14 @@ const main = async () => {
 
     const urlArgs = getURLArgs();
 
-    // The viewport runs on WebGL2; `?device=webgpu` opts into the WebGPU
-    // path, which is still bedding in - the engine's gsplat resource there
-    // does not expose the per-splat textures the data-processor reads
-    // (getTexture('transformA') is undefined), so every splat import dies
-    // in the bound calculation. Until that is ported, WebGPU stays behind
-    // the flag. The custom GLSL shaders are transpiled at load by
-    // glslang + twgsl, served alongside the app.
-    const deviceTypes = (urlArgs as any).device === 'webgpu' ? ['webgpu', 'webgl2'] : ['webgl2'];
+    // The viewport runs on WebGPU, falling back to WebGL2 when the browser
+    // has no WebGPU - and `?device=webgl2` forces the fallback as the escape
+    // hatch. The port that made this real: WGSL twins for the gsplat chunk
+    // overrides, a RenderPass-based point dispatch, immediate readbacks, and
+    // point-size writes guarded out (WGSL has none, and writing it makes the
+    // transpiler silently drop the entry point). The remaining custom GLSL is
+    // transpiled at load by glslang + twgsl, served alongside the app.
+    const deviceTypes = (urlArgs as any).device === 'webgl2' ? ['webgl2'] : ['webgpu', 'webgl2'];
     const graphicsDevice = await createGraphicsDevice(editorUI.canvas, {
         deviceTypes,
         glslangUrl: new URL('static/lib/glslang/glslang.js', document.baseURI).toString(),

@@ -208,7 +208,7 @@ class Intersect {
         const data = await resources.texture.read(0, 0, resources.texture.width, resources.texture.height, {
             renderTarget: resources.renderTarget,
             data: buffer,
-            immediate: false
+            immediate: this.device.isWebGPU
         });
 
         return data as Uint8Array;

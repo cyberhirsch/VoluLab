@@ -5,7 +5,6 @@ import {
     TYPE_FLOAT32,
     Color,
     Entity,
-    EventHandler,
     GSplatResource,
     ShaderMaterial,
     Mesh,
@@ -26,10 +25,6 @@ class SplatOverlay extends Element {
     material: ShaderMaterial;
     meshInstance: MeshInstance;
     splat: Splat;
-    onSorterUpdated: (count: number) => void;
-    // the sorter we subscribed to in attach(); cached so detach() unsubscribes
-    // from it directly (splat.entity may have been swapped out by replaceData)
-    sorter: EventHandler;
 
     constructor() {
         super(ElementType.debug);
@@ -109,13 +104,10 @@ class SplatOverlay extends Element {
 
         const { mesh, material } = this;
         const instance = splat.entity.gsplat.instance;
-        const orderTexture = instance.orderTexture;
 
-        // set up order texture uniforms
-        material.setParameter('splatOrder', orderTexture);
-        material.setParameter('splatTextureSize', orderTexture.width);
-
-        // set up other uniforms
+        // set up uniforms. The shader indexes splats directly by vertex ID -
+        // points need no sort order, and on WebGPU the order is a storage
+        // buffer rather than a texture anyway.
         const resource = instance.resource as GSplatResource;
         material.setParameter('splatState', splat.stateTexture);
         material.setParameter('splatPosition', (resource as any).getTexture('transformA'));
@@ -139,30 +131,14 @@ class SplatOverlay extends Element {
 
         material.update();
 
-        // subscribe to sorter updates for dynamic count, caching the sorter so
-        // detach() can unsubscribe from this exact instance
-        this.onSorterUpdated = () => {
-            mesh.primitive[0].count = instance.sorter.pendingSorted?.count ?? mesh.primitive[0].count;
-        };
-        this.sorter = instance.sorter;
-        this.sorter.on('updated', this.onSorterUpdated);
-
-        // initialize count - numSplats is the current visible count (excluding deleted)
-        mesh.primitive[0].count = splat.numSplats;
+        // every splat gets a vertex; the shader culls deleted and locked ones
+        mesh.primitive[0].count = splat.splatData.numSplats;
 
         splat.entity.addChild(this.entity);
         this.splat = splat;
     }
 
     detach() {
-        // unsubscribe from the cached sorter (not splat.entity, which replaceData
-        // may have already swapped to a new entity/instance)
-        if (this.sorter && this.onSorterUpdated) {
-            this.sorter.off('updated', this.onSorterUpdated);
-        }
-        this.sorter = null;
-        this.onSorterUpdated = null;
-
         this.entity.remove();
         this.splat = null;
     }

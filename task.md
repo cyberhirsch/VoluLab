@@ -125,23 +125,23 @@ bridge running, and a posed dataset is still loadable by hand.
 
 ---
 
-## WebGPU viewport — spiked, first breakage catalogued
+## WebGPU viewport — ported, now the default
 
-Move the viewport off WebGL2 so the app and the trainer share one device.
-Estimated twice: the first estimate, in the training plan, called it *its own
-project* and listed three blockers. All three checked out cheaper than that,
-and the correction is the point of this entry.
+Done: WebGPU is the default device, WebGL2 the `?device=webgl2` escape
+hatch. The five breakages and their fixes are in the changelog; splat
+rendering, bound calculation, histogram and selection were verified
+numerically identical across both backends in headless Chrome (which,
+unlike the embedded test pane, has a WebGPU adapter with subgroups -
+driven over CDP, the debugging loop that made this port possible).
 
-**Spike result (the flip is reverted to opt-in).** With
-`?device=webgpu` the device comes up and renders, but the first splat
-import dies: the engine's WebGPU gsplat resource does not expose the
-per-splat textures the data-processor reads -
-`resource.getTexture('transformA')` returns undefined and the bound
-calculation crashes with *reading 'width'*. Everything in
-`src/data-processor` and the picker leans on those textures, so the port
-is: move the data-processor onto whatever the unified gsplat path
-exposes (or maintain the textures ourselves). Until then WebGL2 is the
-default again and WebGPU sits behind the flag.
+What remains on this front: the centers overlay draws one-pixel points
+on WebGPU (WGSL has no point size; restoring splatSize wants a
+quad-expansion pass); the engine loses one frame at startup to a
+backbuffer-resize race (*Destroyed texture WebgpuFramebuffer*,
+engine-side, cosmetic); a click-through in the user's real Chrome is
+still owed; and the original payoff - sharing the device with the Brush
+trainer so training renders in the viewport without the PLY round-trip -
+is now actually reachable.
 
 **Sharing the device works untouched.** The question was whether PlayCanvas's
 WebGPU device could carry what Brush needs. `createDevice` in the 2.21 engine

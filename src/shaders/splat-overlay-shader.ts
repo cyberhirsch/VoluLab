@@ -2,9 +2,6 @@ const vertexShader = /* glsl */ `
     uniform mat4 matrix_model;
     uniform mat4 matrix_viewProjection;
 
-    uniform highp usampler2D splatOrder;            // order texture mapping render order to splat ID
-    uniform uint splatTextureSize;                  // width of order texture
-
     uniform sampler2D splatState;
     uniform highp usampler2D splatPosition;
     uniform highp usampler2D splatTransform;        // per-splat index into transform palette
@@ -91,18 +88,22 @@ const vertexShader = /* glsl */ `
     #endif
 
     void main(void) {
-        // look up splat ID from order texture using gl_VertexID
-        ivec2 orderUV = ivec2(gl_VertexID % int(splatTextureSize), gl_VertexID / int(splatTextureSize));
-        uint splatId = texelFetch(splatOrder, orderUV, 0).r;
+        // points are order-independent, so the vertex ID is the splat ID
+        // directly - no sort-order lookup, which also keeps this working on
+        // WebGPU where the order lives in a storage buffer, not a texture
+        uint splatId = uint(gl_VertexID);
 
         ivec2 splatUV = calcSplatUV(splatId, texParams.x);
         uint splatState = uint(texelFetch(splatState, splatUV, 0).r * 255.0);
 
-        // check for locked splats (deleted splats are already excluded from order texture)
-        if ((splatState & 2u) != 0u) {
-            // locked
+        // cull locked and deleted splats
+        if ((splatState & 6u) != 0u) {
             gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
-            gl_PointSize = 0.0;
+            // WGSL has no point size - writing it makes the transpiler
+            // drop the entry point; culling by position is enough there
+            #ifndef WEBGPU
+                gl_PointSize = 0.0;
+            #endif
         } else {
             mat4 model = matrix_model;
 
@@ -155,7 +156,11 @@ const vertexShader = /* glsl */ `
             // disable depth clipping
             gl_Position.z = 0.0;
 
-            gl_PointSize = splatSize;
+            // on WebGPU points are fixed at one pixel - splatSize cannot
+            // apply (a later quad-expansion pass could restore it)
+            #ifndef WEBGPU
+                gl_PointSize = splatSize;
+            #endif
         }
     }
 `;

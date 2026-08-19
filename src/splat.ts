@@ -19,7 +19,7 @@ import { gradeMatrix } from './color-grade';
 import { Element, ElementType } from './element';
 import { GradePalette } from './grade-palette';
 import { Serializer } from './serializer';
-import { vertexShader, fragmentShader, gsplatCenter } from './shaders/splat-shader';
+import { vertexShader, fragmentShader, gsplatCenter, vertexShaderWGSL, fragmentShaderWGSL, gsplatCenterWGSL } from './shaders/splat-shader';
 import { State, SplatState } from './splat-state';
 import { Transform } from './transform';
 import { TransformPalette } from './transform-palette';
@@ -119,10 +119,16 @@ class Splat extends Element {
         this.rebuildMaterial = (bands: number) => {
             const instance = this.entity.gsplat.instance;
             const { material } = instance;
-            const { glsl } = material.shaderChunks;
+            // both dialects: WebGL2 composes from the glsl map, WebGPU from
+            // the wgsl map - an override present in only one silently reverts
+            // to the engine default on the other backend
+            const { glsl, wgsl } = material.shaderChunks;
             glsl.set('gsplatVS', vertexShader);
             glsl.set('gsplatPS', fragmentShader);
             glsl.set('gsplatCenterVS', gsplatCenter);
+            wgsl.set('gsplatVS', vertexShaderWGSL);
+            wgsl.set('gsplatPS', fragmentShaderWGSL);
+            wgsl.set('gsplatCenterVS', gsplatCenterWGSL);
 
             // three limits meet here: what the view asks for, what this object
             // has been capped to by an sh-bands node, and what the data holds

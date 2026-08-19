@@ -86,7 +86,11 @@ const binVS = /* glsl */ `
 
         if (!include) {
             gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
-            gl_PointSize = 0.0;
+            // WGSL has no point size (points are always one pixel) and
+            // writing it makes the transpiler drop the entry point
+            #ifndef WEBGPU
+                gl_PointSize = 0.0;
+            #endif
             return;
         }
 
@@ -98,7 +102,9 @@ const binVS = /* glsl */ `
 
         float xNDC = (float(bin) + 0.5) / float(numBins) * 2.0 - 1.0;
         gl_Position = vec4(xNDC, 0.0, 0.0, 1.0);
-        gl_PointSize = 1.0;
+        #ifndef WEBGPU
+            gl_PointSize = 1.0;
+        #endif
     }
 `;
 
