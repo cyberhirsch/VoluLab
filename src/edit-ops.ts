@@ -1330,6 +1330,85 @@ class DatasetOp {
     }
 }
 
+/**
+ * What a camera node holds: the exposure, the lens, and the depth of field.
+ *
+ * Distances are scene units, `exposure` is EV stops, and the lens numbers
+ * are the usual radial-distortion coefficients. `aperture` is the lens
+ * diameter rather than an f-stop: a splat scene has no sensor size, so a
+ * focal-ratio would be a number with no meaning attached to it, while a
+ * diameter in scene units is exactly what sets the circle of confusion.
+ */
+type CameraSettings = {
+    /** EV stops, applied to gaussians before tonemapping */
+    exposure: number;
+    /** scene units; where the lens is focused */
+    focusDistance: number;
+    /** lens diameter in scene units; 0 means a pinhole - everything sharp */
+    aperture: number;
+    /** clamp on the blur radius, in pixels, so a stray splat cannot cover the screen */
+    maxBlur: number;
+    /** radial distortion: negative barrels, positive pincushions */
+    k1: number;
+    k2: number;
+    /** lateral chromatic aberration, as a fraction of the radius */
+    chromatic: number;
+    /** corner darkening, 0..1 */
+    vignette: number;
+    /** how gradually the vignette comes on */
+    vignetteSoftness: number;
+};
+
+const defaultCameraSettings = (): CameraSettings => ({
+    exposure: 0,
+    focusDistance: 5,
+    aperture: 0,
+    maxBlur: 64,
+    k1: 0,
+    k2: 0,
+    chromatic: 0,
+    vignette: 0,
+    vignetteSoftness: 0.6
+});
+
+/**
+ * A camera node: exposure, depth of field and lens shaping, recorded in
+ * history like any other edit.
+ *
+ * It owns no scene object, so `do` and `undo` have nothing to move -
+ * `src/camera-effects.ts` reads the last applied camera node out of
+ * history whenever history changes, which is what makes undo, redo and
+ * bypass work on it for free. Several camera nodes may exist; the last
+ * applied one wins, the way a stack of edits normally resolves.
+ */
+class CameraOp {
+    name = 'camera';
+
+    /** settings-only: nothing flows in, nothing flows out */
+    inputs: Splat[] = [];
+    settings: CameraSettings;
+    bypassed?: boolean;
+
+    constructor(settings: CameraSettings) {
+        this.settings = settings;
+    }
+
+    /** what the graph writes under the node's title */
+    get sourceLabel() {
+        const { exposure, aperture, k1, vignette } = this.settings;
+        const parts = [];
+        if (exposure !== 0) parts.push(`${exposure > 0 ? '+' : ''}${exposure} EV`);
+        if (aperture > 0) parts.push('dof');
+        if (k1 !== 0) parts.push('lens');
+        if (vignette > 0) parts.push('vignette');
+        return parts.length ? parts.join(' · ') : 'default';
+    }
+
+    do() {}
+
+    undo() {}
+}
+
 /** The record a train node keeps: what was trained, how, and what came out. */
 type TrainSettings = {
     datasetName: string;
@@ -1463,6 +1542,9 @@ export {
     AddVoxelsOp,
     DatasetOp,
     type DatasetHandle,
+    CameraOp,
+    type CameraSettings,
+    defaultCameraSettings,
     TrainOp,
     type TrainSettings,
     principalOp,

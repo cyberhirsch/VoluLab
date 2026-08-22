@@ -1,6 +1,6 @@
 import { WebPCodec } from '@playcanvas/splat-transform';
 import { BufferTarget, EncodedPacket, EncodedVideoPacketSource, MkvOutputFormat, MovOutputFormat, Mp4OutputFormat, Output, StreamTarget, WebMOutputFormat } from 'mediabunny';
-import { Color, path, Quat, Vec3 } from 'playcanvas';
+import { Color, GraphicsDevice, path, Quat, Vec3 } from 'playcanvas';
 
 import { ElementType } from './element';
 import { EquirectRenderer } from './equirect-renderer';
@@ -76,6 +76,29 @@ const sortSplatsAndWait = (scene: Scene, splats: Splat[]) => {
     }));
 };
 
+/**
+ * Turn a framebuffer read into top-down image rows.
+ *
+ * WebGL hands back rows bottom-up, so the flip is required there. WebGPU
+ * already reads top-down, and flipping it too would export every image
+ * upside down - which is exactly what happened once WebGPU became the
+ * default. Same asymmetry the picker handles when it converts a screen
+ * rect into a texture rect.
+ */
+const orientRows = (device: GraphicsDevice, data: Uint8Array, width: number, height: number) => {
+    if (device.isWebGPU) {
+        return;
+    }
+    const line = new Uint8Array(width * 4);
+    for (let y = 0; y < height / 2; y++) {
+        const top = y * width * 4;
+        const bottom = (height - y - 1) * width * 4;
+        line.set(data.subarray(top, top + width * 4));
+        data.copyWithin(top, bottom, bottom + width * 4);
+        data.set(line, bottom);
+    }
+};
+
 const downloadFile = (data: ArrayBuffer | Uint8Array<ArrayBuffer>, filename: string, type = 'application/octet-stream') => {
     const blob = new Blob([data], { type });
     const url = window.URL.createObjectURL(blob);
@@ -134,20 +157,14 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             // cpu-side buffer to read pixels into
             const data = new Uint8Array(width * height * 4);
 
-            const { mainTarget, workTarget } = scene.camera;
+            const { workTarget } = scene.camera;
 
-            scene.dataProcessor.copyRt(mainTarget, workTarget);
+            scene.camera.blitWithLens(workTarget);
 
             // read the rendered frame
-            await workTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workTarget, data });
+            await workTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workTarget, data, immediate: scene.graphicsDevice.isWebGPU });
 
-            // flip y positions to have 0,0 at the top
-            let line = new Uint8Array(width * 4);
-            for (let y = 0; y < height / 2; y++) {
-                line = data.slice(y * width * 4, (y + 1) * width * 4);
-                data.copyWithin(y * width * 4, (height - y - 1) * width * 4, (height - y) * width * 4);
-                data.set(line, (height - y - 1) * width * 4);
-            }
+            orientRows(scene.graphicsDevice, data, width, height);
 
             return data;
         } finally {
@@ -238,22 +255,16 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
 
                 const { mainTarget, workTarget } = scene.camera;
 
-                scene.dataProcessor.copyRt(mainTarget, workTarget);
+                // through the camera node's lens, so the export matches the
+                // viewport rather than quietly dropping the look
+                scene.camera.blitWithLens(workTarget);
 
                 // read the rendered frame
-                await workTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workTarget, data });
+                await workTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workTarget, data, immediate: scene.graphicsDevice.isWebGPU });
             }
 
-            // flip the buffer vertically: the framebuffer read is bottom-up
-            // but webp (and image files generally) expect top-down rows
-            const line = new Uint8Array(width * 4);
-            for (let y = 0; y < height / 2; y++) {
-                const top = y * width * 4;
-                const bottom = (height - y - 1) * width * 4;
-                line.set(data.subarray(top, top + width * 4));
-                data.copyWithin(top, bottom, bottom + width * 4);
-                data.set(line, bottom);
-            }
+            // image files expect top-down rows
+            orientRows(scene.graphicsDevice, data, width, height);
 
             let bytes: Uint8Array<ArrayBuffer>;
             let extension: string;
@@ -473,7 +484,6 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
 
                 // cpu-side buffer to read pixels into
                 const data = new Uint8Array(width * height * 4);
-                const line = new Uint8Array(width * 4);
 
                 // remember last camera position so we can skip sorting if the camera didn't move
                 const last_pos = new Vec3(0, 0, 0);
@@ -519,14 +529,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
 
                 // flip, wrap and submit the pixels currently in the data buffer
                 const encodeFrame = async (frameTime: number) => {
-                    // flip the buffer vertically
-                    for (let y = 0; y < height / 2; y++) {
-                        const top = y * width * 4;
-                        const bottom = (height - y - 1) * width * 4;
-                        line.set(data.subarray(top, top + width * 4));
-                        data.copyWithin(top, bottom, bottom + width * 4);
-                        data.set(line, bottom);
-                    }
+                    orientRows(scene.graphicsDevice, data, width, height);
 
                     // construct the video frame
                     const videoFrame = new VideoFrame(data, {
@@ -572,10 +575,12 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                 const captureFrame = async (frameTime: number) => {
                     const { mainTarget, workTarget } = scene.camera;
 
-                    scene.dataProcessor.copyRt(mainTarget, workTarget);
+                    // through the camera node's lens, so the export matches
+                    // the viewport rather than quietly dropping the look
+                    scene.camera.blitWithLens(workTarget);
 
                     // read the rendered frame
-                    await workTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workTarget, data });
+                    await workTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workTarget, data, immediate: scene.graphicsDevice.isWebGPU });
 
                     await encodeFrame(frameTime);
                 };

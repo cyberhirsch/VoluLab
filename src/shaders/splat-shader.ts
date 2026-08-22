@@ -1,7 +1,76 @@
+const gsplatModify = /* glsl*/`
+// The camera node's depth of field.
+//
+// Defocus is not a screen blur here: a gaussian seen out of focus is a
+// gaussian convolved with the lens point-spread function, which is just a
+// wider gaussian. So the blur is applied by growing each splat, in
+// quadrature, by the circle of confusion at its depth - the projection
+// then carries it to screen space for free, splats stay correctly sorted,
+// and bokeh falls out of the shape rather than being faked on top.
+//
+// This chunk is included before gsplatCenterVS, which is why the view
+// depth is declared here and filled in there.
+
+// x: aperture (scene units), y: focus distance, z: max blur (pixels),
+// w: pixels per scene unit at unit depth
+uniform vec4 camDof;
+
+// the splat's view depth, written by our gsplatCenterVS override
+float camViewDepth = 0.0;
+
+// energy conservation for the defocus, read by the vertex shader: a
+// spread-out gaussian must lose the amplitude it gained in area
+float camDofAlpha = 1.0;
+
+void modifySplatCenter(inout vec3 center) {
+}
+
+void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout vec4 rotation, inout vec3 scale) {
+    camDofAlpha = 1.0;
+
+    // picking must stay sharp - a defocused splat would answer for a
+    // pixel it only covers because of the blur
+    #ifndef PICK_PASS
+        float aperture = camDof.x;
+        float z = camViewDepth;
+        if (aperture > 0.0 && z > 1e-4) {
+            float focus = max(camDof.y, 1e-4);
+
+            // thin lens: the blur circle of a point at depth z, measured
+            // back at its own depth, has this radius
+            float sigma = 0.5 * aperture * abs(z - focus) / focus;
+
+            // the pixel clamp, carried to a world radius at this depth
+            float maxSigma = camDof.z * z / max(camDof.w, 1e-4);
+            sigma = min(sigma, maxSigma);
+
+            if (sigma > 0.0) {
+                vec3 s = scale;
+                float hi = max(s.x, max(s.y, s.z));
+                float lo = min(s.x, min(s.y, s.z));
+                float mid = s.x + s.y + s.z - hi - lo;
+
+                float sg2 = sigma * sigma;
+                scale = sqrt(s * s + vec3(sg2));
+
+                // the two dominant axes carry the footprint, so they set
+                // how much amplitude the spread costs
+                camDofAlpha = (hi * mid) / sqrt((hi * hi + sg2) * (mid * mid + sg2));
+            }
+        }
+    #endif
+}
+
+void modifySplatColor(vec3 center, inout vec4 color) {
+}
+`;
+
 const vertexShader = /* glsl*/`
 #include "gsplatCommonVS"
 
 uniform sampler2D splatState;
+
+uniform float camExposure;      // camera node exposure, linear (2^EV)
 
 uniform vec4 selectedClr;
 uniform vec4 lockedClr;
@@ -134,6 +203,9 @@ void main(void) {
         // read color
         color = getColor();
 
+        // a defocused gaussian covers more screen, so it must be fainter
+        color.a *= camDofAlpha;
+
         // evaluate spherical harmonics
         #if SH_BANDS > 0
         // calculate the model-space view direction
@@ -154,6 +226,13 @@ void main(void) {
 
         // don't allow out-of-range alpha
         color.a = clamp(color.a, 0.0, 1.0);
+
+        // camera exposure is the last thing before the sensor, so it lands
+        // on scene-referred colour - after the object's grade, before the
+        // tonemap. Doing it in a post pass instead would be a brightness
+        // slider on already-tonemapped pixels, which is a different (and
+        // worse) thing entirely.
+        color.xyz *= camExposure;
 
         // apply tonemapping
         color = vec4(prepareOutputFromGamma(max(color.xyz, 0.0), -center.view.z), color.w);
@@ -275,6 +354,10 @@ bool initCenter(vec3 modelCenter, inout SplatCenter center) {
     mat4 modelView = matrix_view * applyPaletteTransform(matrix_model);
     vec4 centerView = modelView * vec4(modelCenter, 1.0);
 
+    // hand the depth to the depth of field, which is asked for it later
+    // (initCorner) but declared earlier (gsplatModifyVS)
+    camViewDepth = -centerView.z / max(centerView.w, 1e-6);
+
     #ifndef GSPLAT_CENTER_NOPROJ
 
         // early out if splat is behind the camera (perspective only)
@@ -311,10 +394,61 @@ bool initCenter(vec3 modelCenter, inout SplatCenter center) {
 // expects two, invalidating the whole pipeline).
 // ---------------------------------------------------------------------------
 
+const gsplatModifyWGSL = /* wgsl */`
+// The camera node's depth of field - see the GLSL twin above for why the
+// blur is a widening of the gaussian rather than a screen-space pass.
+
+// x: aperture (scene units), y: focus distance, z: max blur (pixels),
+// w: pixels per scene unit at unit depth
+uniform camDof: vec4f;
+
+// the splat's view depth, written by our gsplatCenterVS override
+var<private> camViewDepth: f32 = 0.0;
+
+// energy conservation for the defocus, read by the vertex shader
+var<private> camDofAlpha: f32 = 1.0;
+
+fn modifySplatCenter(center: ptr<function, vec3f>) {
+}
+
+fn modifySplatRotationScale(originalCenter: vec3f, modifiedCenter: vec3f, rotation: ptr<function, vec4f>, scale: ptr<function, vec3f>) {
+    camDofAlpha = 1.0;
+
+    // picking must stay sharp
+    #ifndef PICK_PASS
+        let aperture = uniform.camDof.x;
+        let z = camViewDepth;
+        if (aperture > 0.0 && z > 1e-4) {
+            let focus = max(uniform.camDof.y, 1e-4);
+            var sigma = 0.5 * aperture * abs(z - focus) / focus;
+            let maxSigma = uniform.camDof.z * z / max(uniform.camDof.w, 1e-4);
+            sigma = min(sigma, maxSigma);
+
+            if (sigma > 0.0) {
+                let s = *scale;
+                let hi = max(s.x, max(s.y, s.z));
+                let lo = min(s.x, min(s.y, s.z));
+                let mid = s.x + s.y + s.z - hi - lo;
+
+                let sg2 = sigma * sigma;
+                *scale = sqrt(s * s + vec3f(sg2));
+
+                camDofAlpha = (hi * mid) / sqrt((hi * hi + sg2) * (mid * mid + sg2));
+            }
+        }
+    #endif
+}
+
+fn modifySplatColor(center: vec3f, color: ptr<function, vec4f>) {
+}
+`;
+
 const vertexShaderWGSL = /* wgsl */`
 #include "gsplatCommonVS"
 
 var splatState: texture_2d<f32>;
+
+uniform camExposure: f32;       // camera node exposure, linear (2^EV)
 
 uniform selectedClr: vec4f;
 uniform lockedClr: vec4f;
@@ -438,6 +572,9 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
     #else
         var color: vec4f = getColor();
 
+        // a defocused gaussian covers more screen, so it must be fainter
+        color.a = color.a * camDofAlpha;
+
         #if SH_BANDS > 0
             let modelView3x3 = mat3x3f(center.modelView[0].xyz, center.modelView[1].xyz, center.modelView[2].xyz);
             let dir = normalize(center.view * modelView3x3);
@@ -451,6 +588,9 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
         color = applyGrade(color);
 
         color.a = clamp(color.a, 0.0, 1.0);
+
+        // camera exposure: scene-referred, before the tonemap
+        color = vec4f(color.xyz * uniform.camExposure, color.a);
 
         // apply tonemapping
         color = vec4f(prepareOutputFromGamma(max(color.xyz, vec3f(0.0)), -center.view.z), color.a);
@@ -577,6 +717,10 @@ fn initCenter(modelCenter: vec3f, center: ptr<function, SplatCenter>) -> bool {
     let modelView: mat4x4f = uniform.matrix_view * applyPaletteTransform(uniform.matrix_model);
     let centerView: vec4f = modelView * vec4f(modelCenter, 1.0);
 
+    // hand the depth to the depth of field (declared in gsplatModifyVS,
+    // which is included before this chunk but runs after it)
+    camViewDepth = -centerView.z / max(centerView.w, 1e-6);
+
     #ifndef GSPLAT_CENTER_NOPROJ
         // early out if splat is behind the camera (perspective only)
         if (uniform.camera_params.w != 1.0 && centerView.z > 0.0) {
@@ -598,4 +742,7 @@ fn initCenter(modelCenter: vec3f, center: ptr<function, SplatCenter>) -> bool {
 }
 `;
 
-export { vertexShader, fragmentShader, gsplatCenter, vertexShaderWGSL, fragmentShaderWGSL, gsplatCenterWGSL };
+export {
+    vertexShader, fragmentShader, gsplatCenter, gsplatModify,
+    vertexShaderWGSL, fragmentShaderWGSL, gsplatCenterWGSL, gsplatModifyWGSL
+};

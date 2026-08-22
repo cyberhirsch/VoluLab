@@ -5,7 +5,8 @@
 // face is the pickers, the train face is the run.
 
 #training-face,
-#import-face {
+#import-face,
+#camera-face {
     display: flex;
     flex-direction: column;
     background-color: $ink-1;

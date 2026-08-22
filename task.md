@@ -143,6 +143,17 @@ still owed; and the original payoff - sharing the device with the Brush
 trainer so training renders in the viewport without the PLY round-trip -
 is now actually reachable.
 
+**One of our quad passes renders nothing into an offscreen target on
+WebGPU.** Found while building the camera node's lens: a
+`SimpleRenderPass` + `ShaderQuad` writing to a render target executes
+(the pass runs, the draw is issued, no validation error) and the target
+reads back empty, while the identical quad to the backbuffer works and
+the engine's own `drawQuadWithShader` works to targets. Until this is
+understood, in-frame post effects are not available - the lens had to
+move into the final blit, which is why it warps the gizmos too. Worth
+solving: it also blocks any future effect that must run before the
+overlays.
+
 **Sharing the device works untouched.** The question was whether PlayCanvas's
 WebGPU device could carry what Brush needs. `createDevice` in the 2.21 engine
 calls `requireFeature("subgroups")` and copies every adapter limit into

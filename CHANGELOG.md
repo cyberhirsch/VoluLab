@@ -9,6 +9,71 @@ months finds out why before they change it.
 
 ---
 
+## The camera node
+
+Exposure, depth of field and a lens, as a node in the graph. It owns no
+object and sits in its own lane; the last applied, non-bypassed camera
+node is the one the renderer obeys, so undo, redo and bypass work on it
+without the op moving any state around.
+
+The three parts live in three different places, each where it is
+physically true rather than where it is cheapest:
+
+**Exposure** is in the splat shader, applied to scene-referred colour
+*before* the tonemap. Done afterwards it would be a brightness slider on
+already-compressed pixels, which rolls off differently and cannot
+recover highlights. ±2 EV measures as 175 → 212 / 89 mean luminance.
+
+**Depth of field** is not a screen blur - it could not be, since splats
+write no usable depth. A gaussian seen out of focus *is* a gaussian
+convolved with the lens point-spread function, so each splat is widened
+in quadrature by the circle of confusion at its depth and dimmed by the
+area it gained. Bokeh then falls out of the shape, sorting still works,
+and picking stays sharp because the widening is skipped in the pick
+pass. The blur rides the engine's `modifySplatRotationScale` hook, which
+is included *before* `gsplatCenterVS` - hence the view depth is declared
+in the modify chunk and filled in by the center chunk.
+
+**The lens** - radial distortion, lateral chromatic aberration,
+vignetting - is a screen-space pass, because that is what glass does to
+a finished image. It runs in the final blit, and the exporters call the
+same shader through the engine's imperative quad helper, so a render
+carries the look instead of quietly dropping it.
+
+Two traps worth writing down:
+
+*WGSL forbids implicit-derivative sampling in non-uniform control flow.*
+The lens samples after a conditional return, so `texture2D` made the
+whole shader module invalid - silently: the GLSL→WGSL transpile
+succeeds, only pipeline creation fails, and every draw using it
+vanishes. `texture2DLod` needs no derivatives and is legal anywhere. On
+WebGL2 the same shader was always fine, which is what made this look
+like a pass-plumbing bug for far too long.
+
+*The lens was meant to run inside the frame*, between the splats and the
+gizmos, so the picture would warp while the handles you click stayed
+put. That does not survive WebGPU: a quad pass of ours rendering into an
+offscreen target draws nothing at all - the pass runs, the draw is
+issued, the target reads back empty - while the same quad to the
+backbuffer works. Unresolved; the consequence is that gizmos warp along
+with the picture, and 360 exports skip the lens entirely (a distortion
+applied per cube face would seam).
+
+## Exports on WebGPU
+
+Found while proving the camera node reaches renders: **image and video
+export produced empty, and then upside-down, frames on WebGPU** - both
+pre-existing, both exposed by making WebGPU the default, neither
+specific to the camera node.
+
+The readbacks in `src/render.ts` were deferred, and a deferred read has
+no next frame to flush it in an app that renders on demand - the same
+breakage the data-processor hit during the WebGPU port, in the one file
+that port never touched. And the vertical flip was unconditional, which
+is right only for WebGL's bottom-up reads; WebGPU reads top-down, so
+every exported image came out inverted. Both are now backend-aware, and
+the two backends export byte-identical frames.
+
 ## The WebGPU viewport
 
 WebGPU is the default device now; `?device=webgl2` keeps the old path as

@@ -4,6 +4,7 @@ import { Mat4 } from 'playcanvas';
 import { DataPanel } from './data-panel';
 import { Events } from '../events';
 import { BottomToolbar } from './bottom-toolbar';
+import { CameraFace } from './camera-face';
 import { CameraInfoOverlay } from './camera-info-overlay';
 import { ColorPanel } from './color-panel';
 import { ExportPopup } from './export-popup';
@@ -130,6 +131,9 @@ class EditorUI {
         nodePanel.mount('train', trainingFace.dom);
         const importFace = new ImportFace(events);
         nodePanel.mount('dataset', importFace.dom);
+        // the camera node's exposure, depth of field and lens
+        const cameraFace = new CameraFace(events);
+        nodePanel.mount('camera', cameraFace.dom);
         // the colour controls are a node's parameters now, so they live inside
         // the node pane rather than in a pane of their own
         nodePanel.mount('colour', colorPanel.dom);

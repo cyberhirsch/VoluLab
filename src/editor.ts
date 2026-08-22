@@ -1,8 +1,9 @@
 import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Quat, Texture, Vec3, Vec4 } from 'playcanvas';
 
+import { registerCameraEffects } from './camera-effects';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp } from './edit-ops';
+import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp, defaultCameraSettings } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -1002,6 +1003,20 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     /**
+     * A camera node: exposure, depth of field and the lens. It owns no
+     * object, so it stands on its own in the graph, and the last applied
+     * one is the one the renderer obeys.
+     */
+    events.function('camera.addNode', () => {
+        const op = new CameraOp(defaultCameraSettings());
+        const index = history().cursor;
+        events.fire('edit.add', op);
+        openInGraph(index);
+        events.fire('workspace.reveal', 'node');
+        return op;
+    });
+
+    /**
      * A dataset entering the graph as an import node of its own. Nothing
      * is wired automatically - the user drags its output into a train
      * node's input.
@@ -1032,6 +1047,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     registerTraining(events, scene);
+    registerCameraEffects(events, scene);
 
     /**
      * Resample an object onto a grid.

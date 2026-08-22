@@ -75,6 +75,7 @@ const OP_LABELS: Record<string, string> = {
     voxelise: 'voxelise',
     addVoxels: 'import voxels',
     dataset: 'import',
+    camera: 'camera',
     train: 'train',
     crop: 'crop',
     cleanup: 'cleanup',
@@ -585,11 +586,13 @@ class GraphPanel extends Container {
             }
 
             const splat = opSplat(op);
-            // A pending producer (a train node before its first run) is not a
-            // scene-wide entry - it stands free in a lane of its own, its only
-            // wire the one from the import node feeding it. The scene lane is
-            // for ops that genuinely belong to no object at all.
-            const pendingProducer = op.name === 'train';
+            // Some nodes belong to no object and to no chain: a train node
+            // before its first run, whose only wire is the one from the
+            // import node feeding it, and a camera node, which shapes the
+            // picture rather than editing anything. Both stand free in a
+            // lane of their own. The scene lane is for the rest - ops that
+            // act on the scene but own nothing in it.
+            const pendingProducer = op.name === 'train' || op.name === 'camera';
             const key = splat && splats.includes(splat) ? splat : (pendingProducer ? op : null);
             if (key === null && laneOf(null).length === 0) {
                 add(null, { index: -1, kind: 'scene', name: '', applied: true, splat: null, key: lanes });
@@ -1075,6 +1078,12 @@ class GraphPanel extends Container {
                 // node arrives pending, and its face in the node pane runs it
                 label: 'add training node',
                 action: () => this.events.invoke('training.addNode')
+            },
+            {
+                // the camera node shapes the picture rather than the objects,
+                // so it needs nothing selected
+                label: 'add camera node',
+                action: () => this.events.invoke('camera.addNode')
             },
             {
                 label: 'add select node',

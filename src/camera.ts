@@ -2,6 +2,7 @@ import {
     math,
     ADDRESS_CLAMP_TO_EDGE,
     ASPECT_MANUAL,
+    FILTER_LINEAR,
     FILTER_NEAREST,
     PIXELFORMAT_RGBA8,
     PIXELFORMAT_RGBA16F,
@@ -14,6 +15,8 @@ import {
     TONEMAP_HEJL,
     TONEMAP_LINEAR,
     TONEMAP_NEUTRAL,
+    drawQuadWithShader,
+    BlendState,
     BoundingBox,
     Color,
     Entity,
@@ -32,9 +35,10 @@ import { PointerController } from './controllers';
 import { Element, ElementType } from './element';
 import { Picker } from './picker';
 import { Serializer } from './serializer';
-import { vertexShader, fragmentShader } from './shaders/blit-shader';
+import { vertexShader as lensVertexShader, fragmentShader as lensFragmentShader } from './shaders/lens-shader';
 import { Splat } from './splat';
 import { TweenValue } from './tween-value';
+import { resolve } from './utils/resolve';
 import { ShaderQuad, SimpleRenderPass } from './utils/simple-render-pass';
 
 // work globals
@@ -100,7 +104,9 @@ class Camera extends Element {
     mainPass: RenderPassForward;
     splatPass: RenderPassForward;
     gizmoPass: RenderPassForward;
+    // the final blit, which is also the camera node's lens
     finalPass: SimpleRenderPass;
+    lensQuad: ShaderQuad;
 
     // overridden target size
     targetSizeOverride: { width: number, height: number } = null;
@@ -331,14 +337,24 @@ class Camera extends Element {
         this.mainPass = new RenderPassForward(device, composition, app.scene, renderer);
         this.splatPass = new RenderPassForward(device, composition, app.scene, renderer);
         this.gizmoPass = new RenderPassForward(device, composition, app.scene, renderer);
-        this.finalPass = new SimpleRenderPass(device,
-            new ShaderQuad(device, vertexShader, fragmentShader, 'final-blit'), {
-                vars: () => {
-                    return {
-                        srcTexture: this.mainTarget.colorBuffer
-                    };
-                }
-            });
+        // The final blit is where the lens lives.
+        //
+        // It began as a pair of passes inside the frame - copy the frame
+        // aside, warp it back in - which is the tidier place for it, since
+        // the gizmos would then stay unwarped. That does not survive
+        // WebGPU: a quad pass of ours rendering into an offscreen target
+        // drew nothing at all (the pass ran, the draw was issued, the
+        // target read back empty), while the very same quad rendering to
+        // the backbuffer works, and so does the engine's own imperative
+        // quad helper. So the lens goes where the frame is already being
+        // resampled, and the exporters call the same shader through that
+        // imperative helper. Neutral settings sample texel centres, so an
+        // unshaped lens is bit-for-bit the old blit.
+        this.lensQuad = new ShaderQuad(device, lensVertexShader, lensFragmentShader, 'lens-blit');
+
+        this.finalPass = new SimpleRenderPass(device, this.lensQuad, {
+            vars: () => this.lensVars()
+        });
 
         const target = document.getElementById('canvas-container');
         this.controller = new PointerController(this, target);
@@ -473,6 +489,30 @@ class Camera extends Element {
         );
     }
 
+    /** the lens shader's inputs, shared by the viewport blit and the exporters */
+    private lensVars() {
+        const s = this.scene.events.invoke('camera.effects');
+        const { width, height } = this.mainTarget;
+        return {
+            srcTexture: this.mainTarget.colorBuffer,
+            texSize: [width, height],
+            lensParams: s ? [s.k1, s.k2, s.chromatic, s.vignette] : [0, 0, 0, 0],
+            lensParams2: [s?.vignetteSoftness ?? 0, 0, 0, 0]
+        };
+    }
+
+    /**
+     * Put the frame through the lens into `target`. The exporters read the
+     * work buffer rather than the screen, so this is how a render comes out
+     * looking like the viewport.
+     */
+    blitWithLens(target: RenderTarget) {
+        const { graphicsDevice } = this.scene;
+        resolve(graphicsDevice.scope, this.lensVars());
+        graphicsDevice.setBlendState(BlendState.NOBLEND);
+        drawQuadWithShader(graphicsDevice, target, this.lensQuad.shader);
+    }
+
     // handle the viewer canvas resizing
     rebuildRenderTargets() {
         const { width, height } = this.targetSize;
@@ -504,6 +544,11 @@ class Camera extends Element {
             const colorBuffer = createTexture('cameraColor', width, height, PIXELFORMAT_RGBA16F);
             const workBuffer = createTexture('workColor', width, height, PIXELFORMAT_RGBA8);
             const depthBuffer = createTexture('cameraDepth', width, height, PIXELFORMAT_DEPTH);
+
+            // the lens samples between texels as it warps, so the frame it
+            // reads has to filter where the others deliberately do not
+            colorBuffer.minFilter = FILTER_LINEAR;
+            colorBuffer.magFilter = FILTER_LINEAR;
 
             // create main render target
             this.mainTarget = new RenderTarget({

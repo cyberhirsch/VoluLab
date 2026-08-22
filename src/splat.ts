@@ -16,10 +16,11 @@ import {
 } from 'playcanvas';
 
 import { gradeMatrix } from './color-grade';
+import { CameraSettings } from './edit-ops';
 import { Element, ElementType } from './element';
 import { GradePalette } from './grade-palette';
 import { Serializer } from './serializer';
-import { vertexShader, fragmentShader, gsplatCenter, vertexShaderWGSL, fragmentShaderWGSL, gsplatCenterWGSL } from './shaders/splat-shader';
+import { vertexShader, fragmentShader, gsplatCenter, gsplatModify, vertexShaderWGSL, fragmentShaderWGSL, gsplatCenterWGSL, gsplatModifyWGSL } from './shaders/splat-shader';
 import { State, SplatState } from './splat-state';
 import { Transform } from './transform';
 import { TransformPalette } from './transform-palette';
@@ -126,9 +127,11 @@ class Splat extends Element {
             glsl.set('gsplatVS', vertexShader);
             glsl.set('gsplatPS', fragmentShader);
             glsl.set('gsplatCenterVS', gsplatCenter);
+            glsl.set('gsplatModifyVS', gsplatModify);
             wgsl.set('gsplatVS', vertexShaderWGSL);
             wgsl.set('gsplatPS', fragmentShaderWGSL);
             wgsl.set('gsplatCenterVS', gsplatCenterWGSL);
+            wgsl.set('gsplatModifyVS', gsplatModifyWGSL);
 
             // three limits meet here: what the view asks for, what this object
             // has been capped to by an sh-bands node, and what the data holds
@@ -495,6 +498,19 @@ class Splat extends Element {
         material.setParameter('transformPalette', this.transformPalette.texture);
         material.setParameter('gradePalette', this.gradePalette.texture);
         material.setParameter('splatGrade', this.gradeTexture);
+
+        // the camera node's exposure and depth of field. The blur needs to
+        // know how a scene unit maps to pixels, which is a property of the
+        // projection and the target, so it is worked out here rather than
+        // guessed at in the shader.
+        const cam = events.invoke('camera.effects') as CameraSettings;
+        if (cam) {
+            const { camera } = this.scene;
+            const pxPerUnit = 0.5 * camera.mainTarget.width * camera.camera.projectionMatrix.data[0];
+
+            material.setParameter('camExposure', Math.pow(2, cam.exposure));
+            material.setParameter('camDof', [cam.aperture, cam.focusDistance, cam.maxBlur, pxPerUnit]);
+        }
 
         if (this.visible && selected) {
             // render bounding box

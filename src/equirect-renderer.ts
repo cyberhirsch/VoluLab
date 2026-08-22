@@ -103,7 +103,10 @@ class EquirectRenderer {
         const { equirectTarget } = this;
         return equirectTarget.colorBuffer.read(0, 0, equirectTarget.width, equirectTarget.height, {
             renderTarget: equirectTarget,
-            data
+            data,
+            // WebGPU renders on demand here, so a deferred read has no next
+            // frame to flush it and comes back empty
+            immediate: this.device.isWebGPU
         });
     }
 
