@@ -40,6 +40,23 @@ Saving always writes .vlp. Opening still accepts .ssproj: the container
 is identical, so an old project's splats, camera and view still load,
 and the parts that did not exist then come back at their defaults.
 
+## Datasets the trainer can actually open
+
+Every dataset packed from a dropped set was unreadable by the trainer.
+The zip came from a streaming writer, which cannot know an entry's size
+before writing it and so puts the size and checksum in a trailing data
+descriptor - and Brush, reading the archive as a stream, rejects exactly
+that: *"stream reading entries with data descriptors & Stored
+compression mode"*.
+
+Since the whole archive is built in memory anyway, the size and checksum
+are known before the header is written, so the zip is now written by
+hand with complete local headers and no descriptors. Stored, because a
+dataset is jpegs and they do not compress.
+
+This was invisible until training was driven end to end for the first
+time - the failure lived one step past where anything had been checked.
+
 ## Keyframes are not graph nodes
 
 Setting a key put a node in the graph - a chain of `addkey addkey

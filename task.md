@@ -99,6 +99,32 @@ the one above would only move the surprise later.
 
 ---
 
+## Training panics inside Brush on WASM
+
+Training has now been driven end to end for the first time, headless,
+with a synthetic four-view nerfstudio dataset. It gets further than it
+ever did and stops in the trainer's own code:
+
+```
+panicked at wgpu/src/backend/webgpu.rs:85: Unexpected error
+panicked at cubecl-environment/src/future/reader.rs:9:
+  Failed to read tensor data synchronously. This can happen on platforms
+  that don't support blocking futures like WASM. If possible, try using
+  an async variant of this function instead.
+```
+
+So the phase order is initializing → idle → loading, and then the wasm
+panics; no gaussians are ever produced. The archive is no longer the
+problem (see the changelog entry on the zip writer) - this is Brush and
+cubecl doing a blocking tensor read that WASM cannot serve.
+
+Leads, in the order worth trying: find the synchronous read on the
+dataset-loading path in the fork (`Repos/brush`) and see whether an
+async variant exists upstream; check whether it is reached only for
+datasets without a sparse point cloud, since the test set had none; and
+check whether the wgpu "Unexpected error" above it is the cause rather
+than a consequence. This is Rust-side work in the fork, not app work.
+
 ## COLMAP bridge — built, needs a real-COLMAP run
 
 The bridge exists (`bridge/server.mjs`, `npm run bridge`): a zero-dependency
