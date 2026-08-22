@@ -206,6 +206,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                 savedOrtho = scene.camera.ortho;
                 equirect = new EquirectRenderer(scene.graphicsDevice, faceSize, width, height);
                 scene.camera.ortho = false;
+                scene.camera.setLensSuspended(true);
 
                 // snapshot the current camera pose. volulab cameras never
                 // roll, so with level horizon the capture frame is the
@@ -350,6 +351,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                 scene.camera.setPoseOverride(null);
                 scene.camera.fov = savedFov;
                 scene.camera.ortho = savedOrtho;
+                scene.camera.setLensSuspended(false);
                 equirect.destroy();
                 equirect = null;
             }
@@ -480,6 +482,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                     savedOrtho = scene.camera.ortho;
                     equirect = new EquirectRenderer(scene.graphicsDevice, faceSize, width, height);
                     scene.camera.ortho = false;
+                    scene.camera.setLensSuspended(true);
                 }
 
                 // cpu-side buffer to read pixels into

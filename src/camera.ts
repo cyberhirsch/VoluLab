@@ -35,6 +35,7 @@ import { PointerController } from './controllers';
 import { Element, ElementType } from './element';
 import { Picker } from './picker';
 import { Serializer } from './serializer';
+import { vertexShader, fragmentShader } from './shaders/blit-shader';
 import { vertexShader as lensVertexShader, fragmentShader as lensFragmentShader } from './shaders/lens-shader';
 import { Splat } from './splat';
 import { TweenValue } from './tween-value';
@@ -104,9 +105,17 @@ class Camera extends Element {
     mainPass: RenderPassForward;
     splatPass: RenderPassForward;
     gizmoPass: RenderPassForward;
-    // the final blit, which is also the camera node's lens
     finalPass: SimpleRenderPass;
+    // the camera node's lens: a copy out of the frame, then a warped copy
+    // back into it, before the gizmos are drawn
+    lensTarget: RenderTarget;
+    lensCopyPass: SimpleRenderPass;
+    lensPass: SimpleRenderPass;
     lensQuad: ShaderQuad;
+    private lensEnabled = false;
+    // 360 capture renders six cube faces: a lens applied per face would
+    // distort each one separately and seam at the joins, so it stands down
+    private lensSuspended = false;
 
     // overridden target size
     targetSizeOverride: { width: number, height: number } = null;
@@ -337,22 +346,43 @@ class Camera extends Element {
         this.mainPass = new RenderPassForward(device, composition, app.scene, renderer);
         this.splatPass = new RenderPassForward(device, composition, app.scene, renderer);
         this.gizmoPass = new RenderPassForward(device, composition, app.scene, renderer);
-        // The final blit is where the lens lives.
-        //
-        // It began as a pair of passes inside the frame - copy the frame
-        // aside, warp it back in - which is the tidier place for it, since
-        // the gizmos would then stay unwarped. That does not survive
-        // WebGPU: a quad pass of ours rendering into an offscreen target
-        // drew nothing at all (the pass ran, the draw was issued, the
-        // target read back empty), while the very same quad rendering to
-        // the backbuffer works, and so does the engine's own imperative
-        // quad helper. So the lens goes where the frame is already being
-        // resampled, and the exporters call the same shader through that
-        // imperative helper. Neutral settings sample texel centres, so an
-        // unshaped lens is bit-for-bit the old blit.
-        this.lensQuad = new ShaderQuad(device, lensVertexShader, lensFragmentShader, 'lens-blit');
+        this.finalPass = new SimpleRenderPass(device,
+            new ShaderQuad(device, vertexShader, fragmentShader, 'final-blit'), {
+                vars: () => {
+                    return {
+                        srcTexture: this.mainTarget.colorBuffer
+                    };
+                }
+            });
 
-        this.finalPass = new SimpleRenderPass(device, this.lensQuad, {
+        /**
+         * The lens: copy the frame aside, then warp it back into place.
+         *
+         * A pass cannot read the texture it renders to, hence the pair. It
+         * sits after the scene and before the gizmos, so the picture warps
+         * while the handles you click stay where you clicked them - and
+         * because it writes back into the main target, the exporters read
+         * the lensed frame without knowing the lens exists.
+         *
+         * This arrangement was abandoned once on the belief that our quad
+         * passes could not render into an offscreen target on WebGPU. They
+         * can. What actually happened was the lens shader being invalid
+         * (see the shader's own note), and an invalid pipeline discards the
+         * whole command buffer it was submitted in - taking the innocent
+         * copy pass with it and making the target look unwritable.
+         */
+        this.lensQuad = new ShaderQuad(device, lensVertexShader, lensFragmentShader, 'lens');
+
+        this.lensCopyPass = new SimpleRenderPass(device,
+            new ShaderQuad(device, vertexShader, fragmentShader, 'lens-copy'), {
+                vars: () => {
+                    return {
+                        srcTexture: this.mainTarget.colorBuffer
+                    };
+                }
+            });
+
+        this.lensPass = new SimpleRenderPass(device, this.lensQuad, {
             vars: () => this.lensVars()
         });
 
@@ -460,6 +490,8 @@ class Camera extends Element {
         this.splatPass?.destroy();
         this.gizmoPass?.destroy();
         this.finalPass?.destroy();
+        this.lensCopyPass?.destroy();
+        this.lensPass?.destroy();
         this.camera.framePasses = null;
 
         scene.cameraRoot.removeChild(this.mainCamera);
@@ -494,7 +526,7 @@ class Camera extends Element {
         const s = this.scene.events.invoke('camera.effects');
         const { width, height } = this.mainTarget;
         return {
-            srcTexture: this.mainTarget.colorBuffer,
+            srcTexture: this.lensTarget.colorBuffer,
             texSize: [width, height],
             lensParams: s ? [s.k1, s.k2, s.chromatic, s.vignette] : [0, 0, 0, 0],
             lensParams2: [s?.vignetteSoftness ?? 0, 0, 0, 0]
@@ -502,15 +534,46 @@ class Camera extends Element {
     }
 
     /**
-     * Put the frame through the lens into `target`. The exporters read the
-     * work buffer rather than the screen, so this is how a render comes out
-     * looking like the viewport.
+     * Copy the finished frame into `target`, for the exporters. The lens is
+     * already in it - it ran inside the frame - so this is a plain copy.
      */
     blitWithLens(target: RenderTarget) {
-        const { graphicsDevice } = this.scene;
-        resolve(graphicsDevice.scope, this.lensVars());
-        graphicsDevice.setBlendState(BlendState.NOBLEND);
-        drawQuadWithShader(graphicsDevice, target, this.lensQuad.shader);
+        this.scene.dataProcessor.copyRt(this.mainTarget, target);
+    }
+
+    /**
+     * The frame's pass list. The lens drops out entirely when the camera
+     * node has no shaping to do, which is the common case and should cost
+     * nothing.
+     */
+    private applyFramePasses() {
+        if (!this.mainTarget) {
+            return;
+        }
+        this.camera.framePasses = [
+            this.clearPass,
+            this.mainPass,
+            this.splatPass,
+            ...((this.lensEnabled && !this.lensSuspended) ? [this.lensCopyPass, this.lensPass] : []),
+            this.gizmoPass,
+            this.finalPass
+        ];
+    }
+
+    /** called by the camera-effects controller as camera nodes come and go */
+    setLensEnabled(enabled: boolean) {
+        if (this.lensEnabled !== enabled) {
+            this.lensEnabled = enabled;
+            this.applyFramePasses();
+        }
+    }
+
+    /** held by 360 capture, which cannot use a lens (see lensSuspended) */
+    setLensSuspended(suspended: boolean) {
+        if (this.lensSuspended !== suspended) {
+            this.lensSuspended = suspended;
+            this.applyFramePasses();
+        }
     }
 
     // handle the viewer canvas resizing
@@ -545,10 +608,20 @@ class Camera extends Element {
             const workBuffer = createTexture('workColor', width, height, PIXELFORMAT_RGBA8);
             const depthBuffer = createTexture('cameraDepth', width, height, PIXELFORMAT_DEPTH);
 
-            // the lens samples between texels as it warps, so the frame it
-            // reads has to filter where the others deliberately do not
-            colorBuffer.minFilter = FILTER_LINEAR;
-            colorBuffer.magFilter = FILTER_LINEAR;
+            // the lens reads a copy of the frame and samples between its
+            // texels as it warps, so that one filters where the rest
+            // deliberately do not
+            const lensBuffer = new Texture(graphicsDevice, {
+                name: 'lensColor',
+                width,
+                height,
+                format: PIXELFORMAT_RGBA16F,
+                mipmaps: false,
+                minFilter: FILTER_LINEAR,
+                magFilter: FILTER_LINEAR,
+                addressU: ADDRESS_CLAMP_TO_EDGE,
+                addressV: ADDRESS_CLAMP_TO_EDGE
+            });
 
             // create main render target
             this.mainTarget = new RenderTarget({
@@ -582,6 +655,12 @@ class Camera extends Element {
                 autoResolve: false
             });
 
+            this.lensTarget = new RenderTarget({
+                colorBuffer: lensBuffer,
+                depth: false,
+                autoResolve: false
+            });
+
             // set picker render targets
             this.picker.setRenderTargets(this.colorTarget, this.workTarget);
 
@@ -611,16 +690,25 @@ class Camera extends Element {
 
             this.finalPass.init(null);
 
-            // assign render passes to camera
-            this.camera.framePasses = [this.clearPass, this.mainPass, this.splatPass, this.gizmoPass, this.finalPass];
+            // the lens copies out of the frame and warps back into it,
+            // neither step clearing what is already there
+            this.lensCopyPass.init(this.lensTarget);
+            this.lensCopyPass.colorOps.clear = false;
+            this.lensPass.init(this.mainTarget);
+            this.lensPass.colorOps.clear = false;
+            this.lensPass.depthStencilOps.clearDepth = false;
+            this.lensPass.depthStencilOps.clearStencil = false;
+
+            this.applyFramePasses();
         } else {
             // resize existing render targets
-            const { splatTarget, colorTarget, workTarget } = this;
+            const { splatTarget, colorTarget, workTarget, lensTarget } = this;
 
             mainTarget.resize(width, height);
             workTarget.resize(width, height);
             colorTarget.resize(width, height);
             splatTarget.resize(width, height);
+            lensTarget.resize(width, height);
         }
 
         this.camera.horizontalFov = width > height;

@@ -28,6 +28,10 @@ import { Scene } from './scene';
 const registerCameraEffects = (events: Events, scene: Scene) => {
     let active: CameraSettings = defaultCameraSettings();
 
+    const isNeutralLens = (s: CameraSettings) => {
+        return s.k1 === 0 && s.k2 === 0 && s.chromatic === 0 && s.vignette === 0;
+    };
+
     const recompute = () => {
         // the exposure and lens belong to a camera, so the camera you are
         // looking through is the one that shapes the picture. With no
@@ -37,6 +41,9 @@ const registerCameraEffects = (events: Events, scene: Scene) => {
         // a bypassed or undone node takes its camera out of the scene, so
         // asking the scene is already asking history
         active = camera?.settings ?? defaultCameraSettings();
+
+        // the lens passes only exist while they have something to do
+        scene.camera?.setLensEnabled(!isNeutralLens(active));
 
         scene.forceRender = true;
         events.fire('camera.effects.changed', active);
