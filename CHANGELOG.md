@@ -40,6 +40,18 @@ Saving always writes .vlp. Opening still accepts .ssproj: the container
 is identical, so an old project's splats, camera and view still load,
 and the parts that did not exist then come back at their defaults.
 
+## Keyframes are not graph nodes
+
+Setting a key put a node in the graph - a chain of `addkey addkey
+movekey` growing along the scene lane, because the graph is a view over
+the edit history and every key edit is a history entry.
+
+They are still history entries, and undo still reaches them; the graph
+simply does not draw them. Keyframing is timeline work, the timeline
+already shows the keys, and a node saying "movekey" tells you nothing
+about how the scene is built - which is the only question the graph is
+meant to answer.
+
 ## The camera, as an object
 
 The camera node stopped being a settings panel and became a thing in the

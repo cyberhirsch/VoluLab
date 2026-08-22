@@ -1,6 +1,6 @@
 import { Container } from '@playcanvas/pcui';
 
-import { EditOp, MultiOp, SelectOp, SelectStep, principalOp } from '../edit-ops';
+import { AnimTrackEditOp, EditOp, MultiOp, SelectOp, SelectStep, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -563,6 +563,15 @@ class GraphPanel extends Container {
         const crossLinks: { op: EditOp, node: NodeModel }[] = [];
 
         ops.forEach((op, i) => {
+            // Keyframes are timeline work, not graph structure. Every key
+            // edit is an undoable history entry, but drawing one as a node
+            // fills the graph with a chain of addkey/movekey that says
+            // nothing about how the scene is built - and the timeline
+            // already shows the keys themselves.
+            if (op instanceof AnimTrackEditOp) {
+                return;
+            }
+
             const produces = (op as any).output as Splat;
             if (produces) {
                 // a dataset import produces a lane marker, not a scene
