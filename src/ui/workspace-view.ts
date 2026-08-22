@@ -14,6 +14,7 @@ import {
     defaultLayout,
     dockAllFloats,
     dockFloat,
+    kindIsPresent,
     listPanes,
     listSurfaces,
     loadLayout,
@@ -178,6 +179,31 @@ class WorkspaceView extends Container {
         };
         const target = panes.reduce((a, b) => (areaOf(b.id) > areaOf(a.id) ? b : a));
         this.mutate(assignKind(this.state, target.id, kind));
+    }
+
+    /**
+     * The layout as document data.
+     *
+     * A project carries the workspace it was built in - which panes were
+     * open and how they were split - so opening a .vlp puts you in front
+     * of the arrangement the author was working in. Detached windows are
+     * docked first: a window cannot be reopened on load (window.open needs
+     * a user gesture), so storing one would describe a window that will
+     * never exist.
+     */
+    serializeLayout(): WorkspaceState {
+        return dockAllFloats(this.state, () => 1);
+    }
+
+    /** Adopt a layout from a document, replacing the current arrangement. */
+    deserializeLayout(state: WorkspaceState) {
+        const docked = dockAllFloats(state, () => 1);
+        if (!kindIsPresent(docked, 'viewport')) {
+            // a layout without the viewport would strand the canvas
+            return;
+        }
+        this.closeAllWindows();
+        this.mutate(docked);
     }
 
     private mutate(next: WorkspaceState) {

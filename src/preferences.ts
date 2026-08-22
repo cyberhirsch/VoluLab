@@ -200,6 +200,33 @@ const registerPreferences = (events: Events, config: SceneConfig, urlArgs: any) 
         apply();
     });
 
+    /**
+     * Preferences as document data.
+     *
+     * A .vlp carries the settings it was authored with, so opening someone
+     * else's project shows what they saw rather than what your browser
+     * happens to remember. Only stored values travel - a setting the user
+     * never touched stays at its default rather than being frozen into
+     * every file that passes through.
+     */
+    events.function('docSerialize.preferences', () => {
+        return JSON.parse(JSON.stringify(values));
+    });
+
+    events.on('docDeserialize.preferences', (stored: Record<string, PrefValue>) => {
+        if (!stored || typeof stored !== 'object') {
+            return;
+        }
+        for (const descriptor of descriptors) {
+            const value = stored[descriptor.key];
+            if (value !== undefined && descriptor.validate(value)) {
+                values[descriptor.key] = value;
+            }
+        }
+        scheduleWrite();
+        apply();
+    });
+
     // clear stored preferences and restore defaults. language lives in its
     // own store (i18nextLng) but its default is 'automatic', so reset it too.
     events.on('preferences.reset', () => {

@@ -172,6 +172,15 @@ class EditorUI {
             workspace.reveal(kind);
         });
 
+        // the workspace travels in the document, so a project opens in the
+        // arrangement it was built in
+        events.function('docSerialize.layout', () => workspace.serializeLayout());
+        events.on('docDeserialize.layout', (state: any) => {
+            if (state) {
+                workspace.deserializeLayout(state);
+            }
+        });
+
         // the viewport header says which backend is drawing it. Fired from
         // main.ts once the device exists, which is after this UI is built.
         events.on('graphicsDevice.created', (deviceType: string) => {

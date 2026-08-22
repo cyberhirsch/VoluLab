@@ -66,6 +66,51 @@ class SceneCamera extends Element {
         this.scene?.events.fire('camera.sceneCameraMoved', this);
     }
 
+    /** everything a project needs to bring this camera back */
+    docSerialize() {
+        return {
+            name: this.name,
+            position: [this.position.x, this.position.y, this.position.z],
+            target: [this.target.x, this.target.y, this.target.z],
+            fov: this.fov,
+            locked: this.locked,
+            visible: this.visible,
+            settings: { ...this.settings },
+            // a track snapshot holds Vec3 instances, which JSON cannot bring
+            // back with their methods - so keys travel as plain numbers
+            keys: ((this.track?.snapshot() ?? []) as any[]).map(k => ({
+                name: k.name,
+                frame: k.frame,
+                position: [k.position.x, k.position.y, k.position.z],
+                target: [k.target.x, k.target.y, k.target.z],
+                fov: k.fov
+            }))
+        };
+    }
+
+    docDeserialize(doc: any) {
+        if (!doc) return;
+        this.name = doc.name ?? this.name;
+        if (Array.isArray(doc.position)) this.position.set(doc.position[0], doc.position[1], doc.position[2]);
+        if (Array.isArray(doc.target)) this.target.set(doc.target[0], doc.target[1], doc.target[2]);
+        this.fov = doc.fov ?? this.fov;
+        this.locked = !!doc.locked;
+        this.visible = doc.visible !== false;
+        if (doc.settings) {
+            // assign in place: the op's record and this camera share the object
+            Object.assign(this.settings, doc.settings);
+        }
+        if (this.track && Array.isArray(doc.keys)) {
+            this.track.restore(doc.keys.map((k: any) => ({
+                name: k.name,
+                frame: k.frame,
+                position: new Vec3(k.position[0], k.position[1], k.position[2]),
+                target: new Vec3(k.target[0], k.target[1], k.target[2]),
+                fov: k.fov
+            })));
+        }
+    }
+
     destroy() {
         super.destroy();
     }

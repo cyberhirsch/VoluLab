@@ -4,6 +4,7 @@ import { Events } from './events';
 import { BrowserFileSystem, BlobReadSource } from './io';
 import { recentFiles } from './recent-files';
 import { Scene } from './scene';
+import { SceneCamera } from './scene-camera';
 import { Splat } from './splat';
 import { writeSplatFile } from './splat-serialize';
 import { Transform } from './transform';
@@ -12,10 +13,29 @@ import { i18n } from './ui/localization';
 // ts compiler and vscode find this type, but eslint does not
 type FilePickerAcceptType = unknown;
 
-// NOTE: the .ssproj extension and its MIME type are deliberately unchanged from
-// upstream so that existing SuperSplat project files remain loadable.
+/**
+ * VoluLab projects are .vlp.
+ *
+ * The inherited .ssproj format described a scene this app no longer has:
+ * no camera objects, no node settings, no workspace. Rather than keep
+ * widening a format under someone else's name, .vlp is our own - and it
+ * carries the whole session, settings and workspace included, so opening
+ * a project puts you back exactly where you left off.
+ *
+ * Saving always writes .vlp. Opening still accepts .ssproj, because the
+ * container is the same zip and an old project's splats, camera and view
+ * still load - the parts that did not exist then simply come back at
+ * their defaults.
+ */
+const VLP_EXTENSION = '.vlp';
+
 const VoluLabFileType: FilePickerAcceptType[] = [{
-    description: 'VoluLab document',
+    description: 'VoluLab project',
+    accept: {
+        'application/x-volulab': [VLP_EXTENSION]
+    }
+}, {
+    description: 'SuperSplat document (legacy)',
     accept: {
         'application/x-supersplat': ['.ssproj']
     }
@@ -32,7 +52,7 @@ class FileSelector {
         const fileSelector = document.createElement('input');
         fileSelector.setAttribute('id', 'document-file-selector');
         fileSelector.setAttribute('type', 'file');
-        fileSelector.setAttribute('accept', '.ssproj');
+        fileSelector.setAttribute('accept', '.vlp,.ssproj');
         fileSelector.setAttribute('multiple', 'false');
 
         document.body.append(fileSelector);
@@ -133,6 +153,25 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             events.invoke('docDeserialize.view', document.view);
             scene.camera.docDeserialize(document.camera);
 
+            // camera objects come back as camera nodes, so they land in the
+            // graph and in history the same way a fresh one does
+            if (Array.isArray(document.cameras)) {
+                for (const stored of document.cameras) {
+                    const op = events.invoke('camera.addNode');
+                    op?.output?.docDeserialize(stored);
+                }
+                events.fire('edit.changed');
+                events.fire('camera.effects.refresh');
+            }
+
+            // the session around the scene. Preferences are applied inside a
+            // suspend window already opened by the caller, so applying them
+            // cannot be captured back as user changes.
+            if (document.ui) {
+                events.fire('docDeserialize.preferences', document.ui.preferences);
+                events.fire('docDeserialize.layout', document.ui.layout);
+            }
+
             // refresh the pivot to reflect the loaded transform
             const currentSelection = events.invoke('selection');
             if (currentSelection) {
@@ -164,13 +203,28 @@ const registerDocEvents = (scene: Scene, events: Events) => {
         try {
             const splats = events.invoke('scene.allSplats') as Splat[];
 
+            const cameras = (events.invoke('camera.list') ?? []) as SceneCamera[];
+
             const document = {
-                version: 0,
+                // .vlp starts its own numbering; an .ssproj is version 0 of a
+                // different format and is detected by what it lacks
+                format: 'vlp',
+                version: 1,
                 camera: scene.camera.docSerialize(),
                 view: events.invoke('docSerialize.view'),
                 poseSets: events.invoke('docSerialize.poseSets'),
                 timeline: events.invoke('docSerialize.timeline'),
-                splats: splats.map(s => s.docSerialize())
+                splats: splats.map(s => s.docSerialize()),
+
+                // the camera objects: pose, lens, lock and their animation
+                cameras: cameras.map(c => c.docSerialize()),
+
+                // the session around the scene, so a project reopens in the
+                // workspace it was authored in
+                ui: {
+                    layout: events.invoke('docSerialize.layout'),
+                    preferences: events.invoke('docSerialize.preferences')
+                }
             };
 
             const serializeSettings = {
@@ -332,7 +386,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 const handle = await window.showSaveFilePicker({
                     id: 'VoluLabDocumentSave',
                     types: VoluLabFileType,
-                    suggestedName: 'scene.ssproj'
+                    suggestedName: `scene${VLP_EXTENSION}`
                 });
                 await saveDocument({ stream: await handle.createWritable() });
                 documentFileHandle = handle;
@@ -346,7 +400,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             }
         } else {
             await saveDocument({
-                filename: 'scene.ssproj'
+                filename: `scene${VLP_EXTENSION}`
             });
             events.fire('doc.saved');
         }

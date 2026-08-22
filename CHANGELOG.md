@@ -9,6 +9,37 @@ months finds out why before they change it.
 
 ---
 
+## .vlp: the project format
+
+Projects are `.vlp` now. The inherited `.ssproj` described a scene this
+app no longer has - no camera objects, no node settings, no workspace -
+and widening a format under someone else's name was the wrong way to fix
+that.
+
+A .vlp is the same zip container (`document.json` plus a PLY per splat),
+but the document carries the whole session:
+
+- the scene: splats, the viewport camera, view settings, poses, timeline
+- **the camera objects**: pose, fov, lock, visibility, the full lens and
+  depth-of-field settings, and each camera's animation keys
+- **the session around it**: the workspace layout - which panes were
+  open and how they were split - and the user's stored preferences
+
+So opening a project puts you back in the arrangement it was authored
+in, seeing what its author saw, rather than in whatever your browser
+happened to remember.
+
+Two details that matter when reading the code. Animation keys hold Vec3
+instances, which JSON returns as plain objects without their methods, so
+keys travel as arrays of numbers and are rebuilt on load. And only
+preferences the user actually changed are written - an untouched setting
+stays at its default rather than being frozen into every file that
+passes through.
+
+Saving always writes .vlp. Opening still accepts .ssproj: the container
+is identical, so an old project's splats, camera and view still load,
+and the parts that did not exist then come back at their defaults.
+
 ## The camera, as an object
 
 The camera node stopped being a settings panel and became a thing in the

@@ -418,7 +418,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         } else {
             // check for unrecognized file types
             const known = [
-                '.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz', '.npz',
+                '.vlp', '.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz', '.npz',
                 '.zip', '.csv', '.mp4', '.mov', '.webm', '.mkv', '.jpg', '.jpeg', '.png',
                 '.las', '.laz', '.pcd', '.xyz', '.pts', '.vox'
             ];
@@ -463,8 +463,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             for (let i = 0; i < files.length; i++) {
                 const filename = filenames[i].toLowerCase();
 
-                if (filename.endsWith('.ssproj')) {
-                    // load ssproj document
+                if (filename.endsWith('.vlp') || filename.endsWith('.ssproj')) {
+                    // load a project: .vlp, or a legacy .ssproj
                     await events.invoke('doc.load', files[i].contents ?? (await fetch(files[i].url)).arrayBuffer(), files[i].handle);
                 } else if (['.ply', '.splat', '.sog', '.ksplat', '.spz', '.las', '.laz', '.pcd', '.xyz', '.pts'].some(ext => filename.endsWith(ext))) {
                     // gaussian splats, and point clouds arriving as tiny gaussians
@@ -547,7 +547,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         fileSelector = document.createElement('input');
         fileSelector.setAttribute('id', 'file-selector');
         fileSelector.setAttribute('type', 'file');
-        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz,.npz,.zip,.csv,.mp4,.mov,.webm,.mkv,.jpg,.jpeg,.png,.las,.laz,.pcd,.xyz,.pts,.vox');
+        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.vlp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz,.npz,.zip,.csv,.mp4,.mov,.webm,.mkv,.jpg,.jpeg,.png,.las,.laz,.pcd,.xyz,.pts,.vox');
         fileSelector.setAttribute('multiple', 'true');
 
         fileSelector.onchange = () => {
