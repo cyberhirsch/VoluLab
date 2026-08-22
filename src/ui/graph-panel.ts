@@ -1,6 +1,6 @@
 import { Container } from '@playcanvas/pcui';
 
-import { AnimTrackEditOp, EditOp, MultiOp, SelectOp, SelectStep, principalOp } from '../edit-ops';
+import { AnimTrackEditOp, EditOp, MultiOp, PlacePivotOp, SelectOp, SelectStep, ShapeTransformOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -116,6 +116,25 @@ const releasePointer = (el: Element, pointerId: number) => {
     } catch (e) {
         // already gone
     }
+};
+
+/**
+ * Edits that exist only so a gesture can be undone.
+ *
+ * The graph answers one question - how was this scene built - and these
+ * answer a different one. Placing the pivot, dragging the selection
+ * sphere, moving a keyframe: all real history entries, all undoable, and
+ * none of them structure. Drawing them fills the graph with a chain of
+ * nodes that a reader has to look past to find the edits that matter.
+ *
+ * A bundled edit is not caught here: a transform arrives wrapped with the
+ * pivot placement that went with it, and the transform is the point of
+ * the bundle.
+ */
+const isGestureOnly = (op: EditOp) => {
+    return op instanceof AnimTrackEditOp ||
+        op instanceof PlacePivotOp ||
+        op instanceof ShapeTransformOp;
 };
 
 // The object an op belongs to, or null for ops that act on the scene at large
@@ -563,12 +582,7 @@ class GraphPanel extends Container {
         const crossLinks: { op: EditOp, node: NodeModel }[] = [];
 
         ops.forEach((op, i) => {
-            // Keyframes are timeline work, not graph structure. Every key
-            // edit is an undoable history entry, but drawing one as a node
-            // fills the graph with a chain of addkey/movekey that says
-            // nothing about how the scene is built - and the timeline
-            // already shows the keys themselves.
-            if (op instanceof AnimTrackEditOp) {
+            if (isGestureOnly(op)) {
                 return;
             }
 
