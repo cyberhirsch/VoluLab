@@ -99,31 +99,50 @@ the one above would only move the surprise later.
 
 ---
 
-## Training panics inside Brush on WASM
+## Training stops in Burn's autotuner, which cannot run on wasm
 
-Training has now been driven end to end for the first time, headless,
-with a synthetic four-view nerfstudio dataset. It gets further than it
-ever did and stops in the trainer's own code:
+Training has been driven end to end for the first time, headless, with a
+synthetic four-view nerfstudio dataset. Two blockers on our side were
+found and fixed on the way - the zip the dataset was packed into, and the
+missing `enable subgroups;` on the sort kernels, both in
+[CHANGELOG.md](CHANGELOG.md). What remains is upstream, and the stack
+names it exactly:
 
 ```
-panicked at wgpu/src/backend/webgpu.rs:85: Unexpected error
-panicked at cubecl-environment/src/future/reader.rs:9:
-  Failed to read tensor data synchronously. This can happen on platforms
-  that don't support blocking futures like WASM. If possible, try using
-  an async variant of this function instead.
+cubecl_environment::future::base::block_on
+  cubecl_std::throughput::runners::compute_direct::build_kernel
+  cubecl_runtime::throughput::benchmarker::ThroughputBenchmarker::measure
+  cubecl_std::throughput::base::measure_peak_throughput
+  burn_cubecl::kernel::autotune_bounds::with_bounds<ReduceDimAutotuneKey>
 ```
 
-So the phase order is initializing → idle → loading, and then the wasm
-panics; no gaussians are ever produced. The archive is no longer the
-problem (see the changelog entry on the zip writer) - this is Brush and
-cubecl doing a blocking tensor read that WASM cannot serve.
+Burn picks a reduce kernel by benchmarking candidates, and the benchmark
+measures peak throughput by *blocking* on the device. A browser cannot
+block, so `read_sync` panics with "Failed to read tensor data
+synchronously", the future driving `trainSteps` never settles, and the
+run sits at "loading" forever with no error anyone can see.
 
-Leads, in the order worth trying: find the synchronous read on the
-dataset-loading path in the fork (`Repos/brush`) and see whether an
-async variant exists upstream; check whether it is reached only for
-datasets without a sparse point cloud, since the test set had none; and
-check whether the wgpu "Unexpected error" above it is the cause rather
-than a consequence. This is Rust-side work in the fork, not app work.
+This is not a dataset problem and not a plumbing problem: any reduce -
+which means any loss - takes that path. `measure_peak_throughput` is a
+plain `fn` all the way down, so making it work on wasm means making the
+autotune-bounds path async through cubecl and burn. That is upstream
+work in `Repos/brush`'s dependency tree, not app work.
+
+Two smaller things fall out of it. There is a second panic just before,
+in `WgpuServer::create_module`, where wgpu pops an error scope and gets
+a `GPUError` that is neither validation nor out-of-memory and panics
+with "Unexpected error" rather than reporting it - worth a look once
+autotune runs. And note the trainer swallows panics: the wasm future
+stops, the promise never resolves, and the UI shows "loading". A
+watchdog on `trainSteps` that surfaces a stall as an error would have
+saved most of this investigation.
+
+How to reproduce, since it took some doing: run the training probe under
+headless Chrome with `--enable-unsafe-webgpu`, hook
+`GPUDevice.createShaderModule` and read `getCompilationInfo()` for the
+real shader errors (wgpu only says "invalid due to a previous error"),
+set `Error.stackTraceLimit` high, and build the trainer with
+`wasm-pack build --profiling` so panic stacks carry names.
 
 ## COLMAP bridge — built, needs a real-COLMAP run
 
