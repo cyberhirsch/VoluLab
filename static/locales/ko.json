@@ -307,6 +307,8 @@
     "status-bar.timeline": "타임라인",
     "status-bar.splat-data": "스플랫 데이터",
 
+    "camera.view-perspective": "원근",
+    "camera.view-camera": "카메라",
     "camera.exposure-group": "노출",
     "camera.exposure": "노출 (EV)",
     "camera.dof-group": "피사계 심도",
@@ -365,6 +367,7 @@
     "tooltip.right-toolbar.fly-camera": "플라이 카메라",
     "tooltip.right-toolbar.frame-selection": "프레임 선택",
     "tooltip.right-toolbar.reset-camera": "카메라 재설정",
+    "tooltip.right-toolbar.lock-camera": "카메라 잠금",
     "tooltip.right-toolbar.colors": "색상",
     "tooltip.right-toolbar.settings": "설정",
 

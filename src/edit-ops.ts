@@ -7,6 +7,7 @@ import { composeGrades, toGrade } from './grade-palette';
 import { IndexRanges } from './index-ranges';
 import { Pivot } from './pivot';
 import { Scene } from './scene';
+import { SceneCamera } from './scene-camera';
 import { SelectQuery, resolveHits } from './select-query';
 import { SphereShape } from './sphere-shape';
 import { Splat } from './splat';
@@ -1386,27 +1387,34 @@ class CameraOp {
 
     /** settings-only: nothing flows in, nothing flows out */
     inputs: Splat[] = [];
+    /** the camera object this node puts in the scene */
+    output: SceneCamera;
+    scene: Scene;
     settings: CameraSettings;
     bypassed?: boolean;
 
-    constructor(settings: CameraSettings) {
+    constructor(scene: Scene, output: SceneCamera, settings: CameraSettings) {
+        this.scene = scene;
+        this.output = output;
         this.settings = settings;
     }
 
     /** what the graph writes under the node's title */
     get sourceLabel() {
-        const { exposure, aperture, k1, vignette } = this.settings;
-        const parts = [];
-        if (exposure !== 0) parts.push(`${exposure > 0 ? '+' : ''}${exposure} EV`);
-        if (aperture > 0) parts.push('dof');
-        if (k1 !== 0) parts.push('lens');
-        if (vignette > 0) parts.push('vignette');
-        return parts.length ? parts.join(' · ') : 'default';
+        return this.output?.name ?? 'camera';
     }
 
-    do() {}
+    async do() {
+        await this.scene.add(this.output);
+    }
 
-    undo() {}
+    undo() {
+        this.scene.remove(this.output);
+    }
+
+    destroy() {
+        this.output?.destroy();
+    }
 }
 
 /** The record a train node keeps: what was trained, how, and what came out. */

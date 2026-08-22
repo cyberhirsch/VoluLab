@@ -653,6 +653,13 @@ class Camera extends Element {
             cameraPosition.add(this.focalPointTween.value);
         }
 
+        // hand the settled pose to the view controller, which decides
+        // whether it feeds a scene camera or pulls the view out of one
+        // (camera-view.ts). These are working vectors - it copies.
+        if (!this.poseOverride) {
+            this.scene.events.fire('camera.viewSync', cameraPosition, this.focalPointTween.value);
+        }
+
         if (this.poseOverride) {
             // cameraRoot has identity transform, so local space is world space
             const { position, rotation, fov, near, far } = this.poseOverride;

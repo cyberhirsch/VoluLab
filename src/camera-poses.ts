@@ -24,8 +24,20 @@ class CameraAnimTrack implements AnimTrack {
     private events: Events;
     private onTimelineChange: ((frame: number) => void) | null = null;
 
-    constructor(events: Events) {
+    /**
+     * Whether this track may drive the view right now.
+     *
+     * Every track applies through the one viewport camera, so once there
+     * is more than one - the view's own plus a track per scene camera -
+     * they would all write the same pose every frame. The gate decides
+     * which one is speaking: a camera's track only when you are looking
+     * through that camera, the view's own only when you are not.
+     */
+    private canApply: () => boolean;
+
+    constructor(events: Events, canApply: () => boolean = () => true) {
         this.events = events;
+        this.canApply = canApply;
 
         // Evaluate on timeline playback and scrub
         events.on('timeline.time', (time: number) => {
@@ -140,6 +152,7 @@ class CameraAnimTrack implements AnimTrack {
     }
 
     evaluate(frame: number): void {
+        if (!this.canApply()) return;
         this.onTimelineChange?.(frame);
     }
 
@@ -269,7 +282,9 @@ class CameraAnimTrack implements AnimTrack {
  * so this function only needs to create it, expose it, and handle serialization.
  */
 const registerCameraPosesEvents = (events: Events) => {
-    const track = new CameraAnimTrack(events);
+    // the view's own track: the camera animation this app has always
+    // had, which now yields whenever a scene camera is being looked through
+    const track = new CameraAnimTrack(events, () => events.invoke('camera.viewMode') !== 'camera');
 
     // Expose the camera animation track
     events.function('camera.animTrack', () => {

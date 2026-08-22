@@ -23,6 +23,7 @@ import { Events } from './events';
 import { InfiniteGrid as Grid } from './infinite-grid';
 import { Outline } from './outline';
 import { PCApp } from './pc-app';
+import { SceneCameraGizmos } from './scene-camera-gizmos';
 import { SceneConfig } from './scene-config';
 import { SceneState } from './scene-state';
 import { Splat } from './splat';
@@ -96,6 +97,7 @@ class Scene {
     assetLoader: AssetLoader;
     camera: Camera;
     cameraPoseGizmos: CameraPoseGizmos;
+    sceneCameraGizmos: SceneCameraGizmos;
     splatOverlay: SplatOverlay;
     grid: Grid;
     outline: Outline;
@@ -235,6 +237,9 @@ class Scene {
 
         this.cameraPoseGizmos = new CameraPoseGizmos();
         this.add(this.cameraPoseGizmos);
+
+        this.sceneCameraGizmos = new SceneCameraGizmos();
+        this.add(this.sceneCameraGizmos);
 
         this.splatOverlay = new SplatOverlay();
         this.add(this.splatOverlay);

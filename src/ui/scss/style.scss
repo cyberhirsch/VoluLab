@@ -304,3 +304,42 @@ body {
     font-weight: 600;
     font-style: normal;
 }
+
+// The viewport's view-mode readout: free perspective, or looking through a
+// scene camera. Sits opposite the camera info readout so the two never
+// collide, and shifts colour when the view is not your own any more.
+#view-mode-overlay {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    padding: 2px 8px;
+    border: $border-width solid $ink-3;
+    background-color: rgba(0, 0, 0, 0.35);
+    color: $ink-5;
+    font-family: $font-mono;
+    font-size: 11px;
+    cursor: pointer;
+    user-select: none;
+
+    &:hover {
+        border-color: $ink-4;
+        color: $ink-6;
+    }
+
+    &.through-camera {
+        border-color: #00b7c3;
+        color: #6fe4ec;
+    }
+
+    &.locked {
+        border-color: #ffb040;
+        color: #ffc978;
+    }
+
+    .view-mode-label {
+        margin: 0;
+        font-family: inherit;
+        font-size: inherit;
+        color: inherit;
+    }
+}

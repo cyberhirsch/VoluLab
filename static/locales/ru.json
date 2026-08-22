@@ -307,6 +307,8 @@
     "status-bar.timeline": "Временная шкала",
     "status-bar.splat-data": "Данные сплатов",
 
+    "camera.view-perspective": "перспектива",
+    "camera.view-camera": "камера",
     "camera.exposure-group": "Экспозиция",
     "camera.exposure": "экспозиция (EV)",
     "camera.dof-group": "Глубина резкости",
@@ -365,6 +367,7 @@
     "tooltip.right-toolbar.fly-camera": "Камера полёта",
     "tooltip.right-toolbar.frame-selection": "Обрамить выделение",
     "tooltip.right-toolbar.reset-camera": "Сбросить камеру",
+    "tooltip.right-toolbar.lock-camera": "Заблокировать камеру",
     "tooltip.right-toolbar.colors": "Цвета",
     "tooltip.right-toolbar.settings": "Настройки",
 

@@ -28,6 +28,7 @@ import { TrainingFace } from './training-face';
 import { TransformPanel } from './transform-panel';
 import { VideoSettingsDialog } from './video-settings-dialog';
 import { ViewCube } from './view-cube';
+import { ViewModeOverlay } from './view-mode-overlay';
 import logo from './volulab-logo.png';
 import { PaneKind } from '../workspace';
 import { WorkspaceView } from './workspace-view';
@@ -104,6 +105,7 @@ class EditorUI {
         // they are pane kinds now, registered with the workspace below.
         canvasContainer.dom.appendChild(canvas);
         canvasContainer.append(cameraInfoOverlay);
+        canvasContainer.append(new ViewModeOverlay(events));
         canvasContainer.append(toolsContainer);
         canvasContainer.append(bottomToolbar);
         canvasContainer.append(rightToolbar);

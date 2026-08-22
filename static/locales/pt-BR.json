@@ -307,6 +307,8 @@
     "status-bar.timeline": "Linha do Tempo",
     "status-bar.splat-data": "Dados de Splat",
 
+    "camera.view-perspective": "perspectiva",
+    "camera.view-camera": "câmera",
     "camera.exposure-group": "Exposição",
     "camera.exposure": "exposição (EV)",
     "camera.dof-group": "Profundidade de campo",
@@ -365,6 +367,7 @@
     "tooltip.right-toolbar.fly-camera": "Câmera de Voo",
     "tooltip.right-toolbar.frame-selection": "Selecionar Quadro",
     "tooltip.right-toolbar.reset-camera": "Redefinir Câmera",
+    "tooltip.right-toolbar.lock-camera": "Bloquear câmera",
     "tooltip.right-toolbar.colors": "Cores",
     "tooltip.right-toolbar.settings": "Configurações",
 

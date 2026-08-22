@@ -3,6 +3,7 @@ import { Container, Label, Element as PcuiElement, TextInput } from '@playcanvas
 import { SplatRenameOp } from '../edit-ops';
 import { Element, ElementType } from '../element';
 import { Events } from '../events';
+import { SceneCamera } from '../scene-camera';
 import { Splat } from '../splat';
 import deleteSvg from './svg/delete.svg';
 import hiddenSvg from './svg/hidden.svg';
@@ -211,7 +212,46 @@ class SplatList extends Container {
             }
         });
 
+        // Cameras share the outliner with objects: they are things in the
+        // scene you point at and switch between, so hiding them in a
+        // separate list would only make you look in two places. The row
+        // visuals are the same; what a click means is not - selecting a
+        // camera makes it the one the viewport can look through.
+        const cameraItems = new Map<SceneCamera, SplatItem>();
+
+        events.on('scene.elementAdded', (element: Element) => {
+            // the viewport's own camera is an element of this type as well,
+            // and it is not a thing the outliner should list
+            if (!(element instanceof SceneCamera)) return;
+            const camera = element as SceneCamera;
+            const item = new SplatItem(camera.name, edit);
+            item.class.add('camera-item');
+            this.append(item);
+            cameraItems.set(camera, item);
+
+            item.on('visible', () => {
+                camera.visible = true;
+                events.fire('camera.sceneCameraChanged', camera);
+            });
+            item.on('invisible', () => {
+                camera.visible = false;
+                events.fire('camera.sceneCameraChanged', camera);
+            });
+            item.on('rename', (value: string) => {
+                camera.name = value;
+                events.fire('camera.sceneCameraChanged', camera);
+                events.fire('edit.changed');
+            });
+        });
+
         events.on('scene.elementRemoved', (element: Element) => {
+            if (element instanceof SceneCamera) {
+                const item = cameraItems.get(element as SceneCamera);
+                if (item) {
+                    this.remove(item);
+                    cameraItems.delete(element as SceneCamera);
+                }
+            }
             if (element.type === ElementType.splat) {
                 const splat = element as Splat;
                 const item = items.get(splat);
@@ -271,14 +311,40 @@ class SplatList extends Container {
         });
 
         this.on('click', (item: SplatItem) => {
+            for (const [key, value] of cameraItems) {
+                if (item === value) {
+                    // one highlight in the list, so picking a camera drops
+                    // the object selection and vice versa
+                    events.fire('selection', null);
+                    events.fire('camera.select', key);
+                    return;
+                }
+            }
+
             for (const [key, value] of items) {
                 if (item === value) {
                     if (soloMode && !key.visible) {
                         key.visible = true;
                     }
+                    events.fire('camera.select', null);
                     events.fire('selection', key);
                     break;
                 }
+            }
+        });
+
+        // the selected camera is highlighted like a selected object
+        events.on('camera.selectionChanged', (camera: SceneCamera | null) => {
+            cameraItems.forEach((value, key) => {
+                value.selected = key === camera;
+            });
+        });
+
+        events.on('camera.sceneCameraChanged', (camera: SceneCamera) => {
+            const item = cameraItems.get(camera);
+            if (item) {
+                item.name = camera.name;
+                item.visible = camera.visible;
             }
         });
 

@@ -12,6 +12,8 @@ const defaultShortcuts: Record<string, ShortcutBinding> = {
     'camera.reset': { keys: ['f'], shift: 'required' },
     'camera.focus': { keys: ['f'] },
     'camera.toggleControlMode': { keys: ['v'] },
+    'camera.viewPerspective': { keys: ['p'] },
+    'camera.viewCamera': { keys: ['c'] },
 
     // Show
     'camera.toggleOverlay': { keys: ['Tab'] },

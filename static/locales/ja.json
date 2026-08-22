@@ -307,6 +307,8 @@
     "status-bar.timeline": "タイムライン",
     "status-bar.splat-data": "スプラットデータ",
 
+    "camera.view-perspective": "透視投影",
+    "camera.view-camera": "カメラ",
     "camera.exposure-group": "露出",
     "camera.exposure": "露出 (EV)",
     "camera.dof-group": "被写界深度",
@@ -365,6 +367,7 @@
     "tooltip.right-toolbar.fly-camera": "フライカメラ",
     "tooltip.right-toolbar.frame-selection": "選択をフレームイン",
     "tooltip.right-toolbar.reset-camera": "カメラをリセット",
+    "tooltip.right-toolbar.lock-camera": "カメラをロック",
     "tooltip.right-toolbar.colors": "色",
     "tooltip.right-toolbar.settings": "設定",
 

@@ -2,6 +2,8 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Quat, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { registerCameraEffects } from './camera-effects';
+import { CameraAnimTrack } from './camera-poses';
+import { registerCameraViewEvents } from './camera-view';
 import { EditHistory } from './edit-history';
 import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp, defaultCameraSettings } from './edit-ops';
 import { Element, ElementType } from './element';
@@ -10,6 +12,7 @@ import { IndexRanges } from './index-ranges';
 import type { GridPlane } from './infinite-grid';
 import { MappedReadFileSystem } from './io';
 import { Scene } from './scene';
+import { SceneCamera } from './scene-camera';
 import { RangeQuery, SelectQuery } from './select-query';
 import { Splat } from './splat';
 import { writeSplatFile } from './splat-serialize';
@@ -1008,7 +1011,30 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
      * one is the one the renderer obeys.
      */
     events.function('camera.addNode', () => {
-        const op = new CameraOp(defaultCameraSettings());
+        const settings = defaultCameraSettings();
+
+        // a new camera starts where you are looking, which is nearly always
+        // the shot you were about to frame
+        const pose = events.invoke('camera.getPose');
+        const cameras = (events.invoke('camera.list') as unknown[]).length;
+        const camera = new SceneCamera(`camera ${cameras + 1}`, settings);
+        if (pose) {
+            camera.position.set(pose.position.x, pose.position.y, pose.position.z);
+            camera.target.set(pose.target.x, pose.target.y, pose.target.z);
+            camera.fov = pose.fov;
+        }
+
+        // focus distance defaults to what the camera is actually looking at
+        settings.focusDistance = Math.max(0.01, camera.position.distance(camera.target));
+
+        // its own animation track, which speaks only while the viewport is
+        // actually looking through this camera
+        camera.track = new CameraAnimTrack(
+            events,
+            () => events.invoke('camera.viewMode') === 'camera' && events.invoke('camera.active') === camera
+        );
+
+        const op = new CameraOp(scene, camera, settings);
         const index = history().cursor;
         events.fire('edit.add', op);
         openInGraph(index);
@@ -1048,6 +1074,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     registerTraining(events, scene);
     registerCameraEffects(events, scene);
+    registerCameraViewEvents(events, scene);
 
     /**
      * Resample an object onto a grid.
@@ -1160,6 +1187,17 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     events.on('camera.toggleControlMode', () => {
         setControlMode(controlMode === 'orbit' ? 'fly' : 'orbit');
+    });
+
+    // P and C are the two views, not a toggle: pressing the key for the
+    // view you are already in should keep you there rather than flip you
+    // out of it
+    events.on('camera.viewPerspective', () => {
+        events.fire('camera.setViewMode', 'perspective');
+    });
+
+    events.on('camera.viewCamera', () => {
+        events.fire('camera.setViewMode', 'camera');
     });
 
     // camera overlay

@@ -22,6 +22,12 @@ float camViewDepth = 0.0;
 // spread-out gaussian must lose the amplitude it gained in area
 float camDofAlpha = 1.0;
 
+// how far this splat is into defocus: 0 in focus, approaching 1 when the
+// blur circle is all that is left of it. The fragment shader uses it to
+// take the falloff from a gaussian toward a disc, because that is the
+// difference between a blur and bokeh.
+float camDofMix = 0.0;
+
 void modifySplatCenter(inout vec3 center) {
 }
 
@@ -56,6 +62,14 @@ void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout ve
                 // the two dominant axes carry the footprint, so they set
                 // how much amplitude the spread costs
                 camDofAlpha = (hi * mid) / sqrt((hi * hi + sg2) * (mid * mid + sg2));
+
+                // the blur circle against the splat's own footprint
+                float own = sqrt(max(hi * mid, 1e-12));
+                camDofMix = clamp(sigma / (sigma + own), 0.0, 1.0);
+
+                // a flat disc carries far more light than a gaussian of the
+                // same radius, so hand back what the shape is about to gain
+                camDofAlpha *= mix(1.0, 0.26, camDofMix);
             }
         }
     #endif
@@ -113,6 +127,7 @@ vec4 applyGrade(vec4 color) {
 
 varying mediump vec4 texCoord_flags;            // xy: texCoord, z: selected, w: locked
 varying mediump vec4 color;
+varying mediump float defocus;                  // 0 sharp, ->1 fully out of focus
 
 #if PICK_PASS
     uniform uint pickOp;                        // 0: add, 1: remove, 2: set
@@ -178,6 +193,10 @@ void main(void) {
     }
 
     gl_Position = center.proj + vec4(corner.offset, 0.0);
+
+    // hand the defocus to the fragment shader, which is where the shape
+    // of an out-of-focus point is actually decided
+    defocus = camDofMix;
 
     // store texture coord and locked state
     texCoord_flags = vec4(
@@ -252,6 +271,7 @@ void main(void) {
 const fragmentShader = /* glsl*/`
 varying mediump vec4 texCoord_flags;
 varying mediump vec4 color;
+varying mediump float defocus;
 
 uniform bool outlineMode;
 uniform float ringSize;
@@ -265,6 +285,28 @@ const float INV_EXP4 = 1.0 / (1.0 - EXP4);
 
 float normExp(float x) {
     return (exp(x * -4.0) - EXP4) * INV_EXP4;
+}
+
+/**
+ * The shape of a defocused point.
+ *
+ * A lens images an out-of-focus point as its aperture - a disc with an
+ * edge - not as a gaussian. Widening the gaussian alone therefore gives a
+ * blur, however physically the widening was derived; the bokeh only
+ * appears once the falloff itself flattens out and gains a rim. So the
+ * profile is crossfaded from gaussian to disc as the blur circle takes
+ * over the splat, which also keeps splats near focus from developing
+ * hard edges they should not have.
+ */
+float dofFalloff(float A, float mix01) {
+    float g = normExp(A);
+    if (mix01 <= 0.0) {
+        return g;
+    }
+    // flat across the circle, soft only at the very rim to stay anti-aliased
+    float r = sqrt(A);
+    float disc = 1.0 - smoothstep(0.82, 1.0, r);
+    return mix(g, disc, mix01);
 }
 
 void main(void) {
@@ -289,7 +331,7 @@ void main(void) {
             gl_FragColor = color;
         }
     #else
-        mediump float norm = normExp(A);
+        mediump float norm = dofFalloff(A, defocus);
         mediump float alpha = norm * color.a;
 
         if (texCoord_flags.w == 0.0 && ringSize > 0.0) {
@@ -408,6 +450,10 @@ var<private> camViewDepth: f32 = 0.0;
 // energy conservation for the defocus, read by the vertex shader
 var<private> camDofAlpha: f32 = 1.0;
 
+// 0 in focus, approaching 1 when only the blur circle is left - see the
+// GLSL twin for why the falloff has to change shape, not just width
+var<private> camDofMix: f32 = 0.0;
+
 fn modifySplatCenter(center: ptr<function, vec3f>) {
 }
 
@@ -434,6 +480,14 @@ fn modifySplatRotationScale(originalCenter: vec3f, modifiedCenter: vec3f, rotati
                 *scale = sqrt(s * s + vec3f(sg2));
 
                 camDofAlpha = (hi * mid) / sqrt((hi * hi + sg2) * (mid * mid + sg2));
+
+                // the blur circle against the splat's own footprint
+                let own = sqrt(max(hi * mid, 1e-12));
+                camDofMix = clamp(sigma / (sigma + own), 0.0, 1.0);
+
+                // a flat disc carries far more light than a gaussian of
+                // the same radius, so hand back what the shape gains
+                camDofAlpha = camDofAlpha * mix(1.0, 0.26, camDofMix);
             }
         }
     #endif
@@ -462,6 +516,7 @@ var gradePalette: texture_2d<f32>;  // palette of colour grades
 
 varying vTexCoordFlags: vec4f;      // xy: texCoord, z: selected, w: locked
 varying vColor: vec4f;
+varying vDefocus: f32;              // 0 sharp, ->1 fully out of focus
 
 #ifdef PICK_PASS
     uniform pickOp: u32;            // 0: add, 1: remove, 2: set
@@ -550,6 +605,9 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
 
     output.position = center.proj + vec4f(corner.offset.xyz, 0.0);
 
+    // the shape of an out-of-focus point is decided in the fragment shader
+    output.vDefocus = camDofMix;
+
     // store texture coord and selected/locked state
     output.vTexCoordFlags = vec4f(
         vec2f(corner.uv),
@@ -612,6 +670,7 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
 const fragmentShaderWGSL = /* wgsl */`
 varying vTexCoordFlags: vec4f;
 varying vColor: vec4f;
+varying vDefocus: f32;
 
 uniform outlineMode: f32;
 uniform ringSize: f32;
@@ -625,6 +684,19 @@ const INV_EXP4: f32 = 1.0 / (1.0 - EXP4);
 
 fn normExp(x: f32) -> f32 {
     return (exp(x * -4.0) - EXP4) * INV_EXP4;
+}
+
+// a lens images an out-of-focus point as its aperture - a disc with an
+// edge - so the falloff crossfades from gaussian to disc as the blur
+// circle takes the splat over. See the GLSL twin for the reasoning.
+fn dofFalloff(A: f32, mix01: f32) -> f32 {
+    let g = normExp(A);
+    if (mix01 <= 0.0) {
+        return g;
+    }
+    let r = sqrt(A);
+    let disc = 1.0 - smoothstep(0.82, 1.0, r);
+    return mix(g, disc, mix01);
 }
 
 @fragment
@@ -650,7 +722,7 @@ fn fragmentMain(input: FragmentInput) -> FragmentOutput {
             output.color = vColor;
         }
     #else
-        let norm: f32 = normExp(A);
+        let norm: f32 = dofFalloff(A, vDefocus);
         var alpha: f32 = norm * vColor.a;
 
         if (vTexCoordFlags.w == 0.0 && uniform.ringSize > 0.0) {

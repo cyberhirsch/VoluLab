@@ -4,11 +4,12 @@ import { Events } from '../events';
 import { ShortcutManager } from '../shortcut-manager';
 import { i18n } from './localization';
 import cameraFrameSelectionSvg from './svg/camera-frame-selection.svg';
-import cameraResetSvg from './svg/camera-reset.svg';
 import centersSvg from './svg/centers.svg';
 import flyCameraSvg from './svg/fly-camera.svg';
 import orbitCameraSvg from './svg/orbit-camera.svg';
 import ringsSvg from './svg/rings.svg';
+import selectLockSvg from './svg/select-lock.svg';
+import selectUnlockSvg from './svg/select-unlock.svg';
 import showHideSplatsSvg from './svg/show-hide-splats.svg';
 import { Tooltips } from './tooltips';
 
@@ -55,9 +56,13 @@ class RightToolbar extends Container {
             class: 'right-toolbar-button'
         });
 
-        const cameraReset = new Button({
-            id: 'right-toolbar-camera-origin',
-            class: 'right-toolbar-button'
+        // The camera lock replaces the old reset button: with P and C
+        // switching views, resetting the view is no longer the thing you
+        // reach for mid-shot - keeping a framing you like is. Shift+F still
+        // resets from the keyboard.
+        const cameraLock = new Button({
+            id: 'right-toolbar-camera-lock',
+            class: 'right-toolbar-toggle'
         });
 
         const centersDom = createSvg(centersSvg);
@@ -70,7 +75,11 @@ class RightToolbar extends Container {
         orbitMode.dom.appendChild(createSvg(orbitCameraSvg));
         flyMode.dom.appendChild(createSvg(flyCameraSvg));
         cameraFrameSelection.dom.appendChild(createSvg(cameraFrameSelectionSvg));
-        cameraReset.dom.appendChild(createSvg(cameraResetSvg));
+        const lockedDom = createSvg(selectLockSvg);
+        const unlockedDom = createSvg(selectUnlockSvg);
+        lockedDom.style.display = 'none';
+        cameraLock.dom.appendChild(unlockedDom);
+        cameraLock.dom.appendChild(lockedDom);
 
         this.append(ringsModeToggle);
         this.append(showHideSplats);
@@ -79,7 +88,7 @@ class RightToolbar extends Container {
         this.append(flyMode);
         this.append(new Element({ class: 'right-toolbar-separator' }));
         this.append(cameraFrameSelection);
-        this.append(cameraReset);
+        this.append(cameraLock);
 
         // Helper to compose localized tooltip text with shortcut
         const shortcutManager: ShortcutManager = events.invoke('shortcutManager');
@@ -99,7 +108,7 @@ class RightToolbar extends Container {
         tooltips.register(orbitMode, tooltip('tooltip.right-toolbar.orbit-camera', 'camera.toggleControlMode'), 'left');
         tooltips.register(flyMode, tooltip('tooltip.right-toolbar.fly-camera', 'camera.toggleControlMode'), 'left');
         tooltips.register(cameraFrameSelection, tooltip('tooltip.right-toolbar.frame-selection', 'camera.focus'), 'left');
-        tooltips.register(cameraReset, tooltip('tooltip.right-toolbar.reset-camera', 'camera.reset'), 'left');
+        tooltips.register(cameraLock, tooltip('tooltip.right-toolbar.lock-camera'), 'left');
 
         // add event handlers
 
@@ -111,7 +120,7 @@ class RightToolbar extends Container {
         orbitMode.on('click', () => events.fire('camera.setControlMode', 'orbit'));
         flyMode.on('click', () => events.fire('camera.setControlMode', 'fly'));
         cameraFrameSelection.on('click', () => events.fire('camera.focus'));
-        cameraReset.on('click', () => events.fire('camera.reset'));
+        cameraLock.on('click', () => events.fire('camera.toggleLock'));
 
         events.on('camera.mode', (mode: string) => {
             ringsModeToggle.class[mode === 'rings' ? 'add' : 'remove']('active');
@@ -122,6 +131,22 @@ class RightToolbar extends Container {
         events.on('camera.overlay', (value: boolean) => {
             showHideSplats.class[value ? 'add' : 'remove']('active');
         });
+
+        const refreshLock = () => {
+            const camera = (events.invoke('camera.selected') ?? events.invoke('camera.active')) as { locked: boolean } | null;
+            const locked = !!camera?.locked;
+            cameraLock.class[locked ? 'add' : 'remove']('active');
+            cameraLock.dom.classList.toggle('disabled', !camera);
+            lockedDom.style.display = locked ? 'block' : 'none';
+            unlockedDom.style.display = locked ? 'none' : 'block';
+        };
+
+        events.on('camera.sceneCameraChanged', refreshLock);
+        events.on('camera.activeChanged', refreshLock);
+        events.on('camera.selectionChanged', refreshLock);
+        events.on('scene.elementAdded', refreshLock);
+        events.on('scene.elementRemoved', refreshLock);
+        refreshLock();
 
         events.on('camera.controlMode', (mode: 'orbit' | 'fly') => {
             orbitMode.class[mode === 'orbit' ? 'add' : 'remove']('active');

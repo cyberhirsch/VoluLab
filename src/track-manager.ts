@@ -7,15 +7,17 @@ import { Events } from './events';
  * key operations. Resolves which track the user is interacting
  * with and ensures all mutations are undoable.
  *
- * For now, the active track is always the camera track.
- * When selection-based switching is added, getActiveTrack()
- * will inspect the current selection.
+ * Selecting a camera aims the timeline at that camera: its keys are the
+ * ones drawn, and Add Key stores the pose you are currently looking at.
+ * With nothing selected the timeline still edits the view's own track,
+ * which is what it always did and what the video exporter follows.
  */
 const registerTrackManagerEvents = (events: Events) => {
-    // Get the animation track of the currently active element.
-    // For now, always returns the camera animation track.
+    // The track the timeline is pointed at: the selected camera's, if a
+    // camera is selected, otherwise the view's own.
     const getActiveTrack = (): AnimTrack | null => {
-        return events.invoke('camera.animTrack') ?? null;
+        const camera = events.invoke('camera.selected') as { track?: AnimTrack } | null;
+        return camera?.track ?? events.invoke('camera.animTrack') ?? null;
     };
 
     // Helper: execute an edit on the active track wrapped in undo.

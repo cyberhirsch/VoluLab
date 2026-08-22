@@ -9,6 +9,55 @@ months finds out why before they change it.
 
 ---
 
+## The camera, as an object
+
+The camera node stopped being a settings panel and became a thing in the
+scene: listed in the outliner, drawn as a frustum in the viewport,
+selectable, and animatable on its own timeline track. There can be
+several; the one you select is the one the viewport can look through.
+
+**Two views, P and C.** The top-left readout says which one you are in -
+free perspective, or through a named camera - because a viewport that
+quietly changes what it means is disorienting. P and C pick a view
+rather than toggling, so pressing the key for the view you are already
+in leaves you there.
+
+**The lock is the interesting half.** Unlocked, navigating in camera view
+writes back into the camera: moving the view *is* framing the shot.
+Locked, the framing is fixed, so the first navigation drops you back to
+perspective rather than dragging the camera along - you cannot disturb a
+shot you have set. That asymmetry is the whole feature, which is why the
+sync lives in `camera-view.ts` rather than in the camera: it is a
+question about intent, not about matrices. The right toolbar's lock
+button replaces Reset Camera, which the view switch made redundant
+(Shift+F still resets from the keyboard).
+
+Animation: each camera owns a track, and every track applies through the
+one viewport camera - so they are gated, and only the camera you are
+looking through may drive the view. The view's own legacy track, which
+the video exporter follows, stands down while a scene camera has the
+view. Selecting a camera aims the timeline at its keys.
+
+Worth knowing: the viewport camera is itself an element of type
+`camera`, so every list of scene cameras filters by class rather than by
+type. Missing that put a nameless row in the outliner and made the first
+camera call itself "camera 2".
+
+## Bokeh, not blur
+
+The first depth of field widened each gaussian by its circle of
+confusion, which is a defensible convolution and looked exactly like
+what it was: a gaussian blur. A lens does not image an out-of-focus
+point as a gaussian - it images it as the aperture, a disc with an edge,
+which is where bokeh comes from.
+
+So the falloff itself now changes shape: the fragment shader crossfades
+from the gaussian profile to a flat disc as the blur circle takes the
+splat over, and the alpha is scaled by the ratio of the two profiles'
+integrals (~0.26) so the frame does not brighten as it defocuses.
+Widening alone was never going to produce discs, however carefully the
+widening was derived.
+
 ## The camera node
 
 Exposure, depth of field and a lens, as a node in the graph. It owns no

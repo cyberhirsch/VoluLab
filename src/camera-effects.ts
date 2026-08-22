@@ -1,4 +1,4 @@
-import { CameraOp, CameraSettings, EditOp, defaultCameraSettings } from './edit-ops';
+import { CameraSettings, defaultCameraSettings } from './edit-ops';
 import { Events } from './events';
 import { Scene } from './scene';
 
@@ -29,13 +29,14 @@ const registerCameraEffects = (events: Events, scene: Scene) => {
     let active: CameraSettings = defaultCameraSettings();
 
     const recompute = () => {
-        const history = events.invoke('edit.history') as { ops: EditOp[], cursor: number };
-        const ops = (history?.ops ?? []).slice(0, history?.cursor ?? 0);
+        // the exposure and lens belong to a camera, so the camera you are
+        // looking through is the one that shapes the picture. With no
+        // camera in the scene the defaults apply and nothing changes.
+        const camera = events.invoke('camera.active') as { settings: CameraSettings } | null;
 
-        // the last applied camera node wins, the way a stack of edits
-        // normally resolves
-        const op = [...ops].reverse().find(o => o instanceof CameraOp && !o.bypassed) as CameraOp | undefined;
-        active = op ? op.settings : defaultCameraSettings();
+        // a bypassed or undone node takes its camera out of the scene, so
+        // asking the scene is already asking history
+        active = camera?.settings ?? defaultCameraSettings();
 
         scene.forceRender = true;
         events.fire('camera.effects.changed', active);
@@ -49,6 +50,9 @@ const registerCameraEffects = (events: Events, scene: Scene) => {
     // a node's own face edits its settings in place, so it asks for the
     // recompute itself rather than reshaping history
     events.on('camera.effects.refresh', recompute);
+
+    // the active camera changing changes the whole look
+    events.on('camera.activeChanged', recompute);
 
     recompute();
 };
