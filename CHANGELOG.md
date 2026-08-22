@@ -40,6 +40,30 @@ Saving always writes .vlp. Opening still accepts .ssproj: the container
 is identical, so an old project's splats, camera and view still load,
 and the parts that did not exist then come back at their defaults.
 
+## The trainer's sort kernels, compiling at last
+
+Training never got past "loading", and the reason was three layers down.
+Brush's radix sort uses subgroup builtins, and WGSL requires `enable
+subgroups;` at the top of any module that calls one - having the feature
+on the device is not enough. The kernel generator omits the directive
+because it asks wgpu what the device supports, and a device handed to
+wgpu as a raw JS handle - which is how ours goes in, so the trainer and
+the viewport can share buffers - reports no features back.
+
+So every sort kernel failed to compile, every pipeline built from one
+was invalid, and what surfaced was a wasm panic about reading tensor
+data synchronously: three steps removed from the cause, and unreadable.
+
+The directive is now prepended when the trainer's device compiles a
+module that uses subgroups and lacks the line. It is scoped to that one
+device, which belongs to the trainer alone.
+
+Getting there needed the browser's own compilation messages: wgpu only
+reports "invalid due to a previous error", which names nothing. Hooking
+`createShaderModule` and reading `getCompilationInfo()` gave the actual
+line - worth remembering the next time a pipeline is mysteriously
+invalid.
+
 ## Datasets the trainer can actually open
 
 Every dataset packed from a dropped set was unreadable by the trainer.

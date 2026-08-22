@@ -56,6 +56,38 @@ const STEPS_PER_BATCH = 5;
 // sliding window of TrainStep arrivals for the steps/s readout
 const PERF_WINDOW = 32;
 
+/**
+ * Let the trainer's sort kernels compile.
+ *
+ * The kernels use subgroup builtins, and WGSL demands `enable subgroups;`
+ * at the top of any module that calls one - the device feature alone is
+ * not enough. The generator omits the directive because it asks wgpu what
+ * the device supports, and a device handed to wgpu as a raw JS handle (as
+ * ours is, so trainer and viewport can share buffers) reports no features
+ * back. So every sort kernel failed to compile with "cannot call built-in
+ * function 'subgroupAdd' without extension 'subgroups'", the pipelines
+ * built from them were invalid, and training stopped at "loading" with a
+ * wasm panic instead of an error anyone could read.
+ *
+ * Prepending the directive here is the smallest place to put it: it is a
+ * property of the module text, this device belongs to the trainer alone,
+ * and the guard only fires for modules that use subgroups and are missing
+ * the line.
+ */
+type ShaderModuleDesc = Parameters<GPUDevice['createShaderModule']>[0];
+
+const enableSubgroupsInWgsl = (device: GPUDevice) => {
+    const create = device.createShaderModule.bind(device);
+    device.createShaderModule = (desc: ShaderModuleDesc) => {
+        const code = desc.code;
+        if (typeof code !== 'string' || !/subgroup[A-Z]/.test(code) || /enable\s+subgroups\s*;/.test(code)) {
+            return create(desc);
+        }
+        return create({ ...desc, code: `enable subgroups;\n${code}` });
+    };
+};
+
+
 class BrushEngine {
     private pkg: BrushPkg | null = null;
     private app: BrushApp | null = null;
@@ -117,6 +149,7 @@ class BrushEngine {
             if (typeof v === 'number') requiredLimits[k] = v;
         }
         const device = await adapter.requestDevice({ requiredFeatures: features, requiredLimits });
+        enableSubgroupsInWgsl(device);
 
         const base = new URL('static/brush/pkg/', document.baseURI).toString();
         const pkg = await import(`${base}brush_js.js`) as BrushPkg;
