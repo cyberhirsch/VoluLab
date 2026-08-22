@@ -1417,6 +1417,35 @@ class CameraOp {
     }
 }
 
+/** Moving a camera, as an undoable edit. */
+class CameraPoseOp {
+    name = 'cameraPose';
+
+    camera: SceneCamera;
+    oldPose: { position: Vec3, target: Vec3 };
+    newPose: { position: Vec3, target: Vec3 };
+
+    constructor(camera: SceneCamera, oldPose: { position: Vec3, target: Vec3 }, newPose: { position: Vec3, target: Vec3 }) {
+        this.camera = camera;
+        this.oldPose = { position: oldPose.position.clone(), target: oldPose.target.clone() };
+        this.newPose = { position: newPose.position.clone(), target: newPose.target.clone() };
+    }
+
+    private apply(pose: { position: Vec3, target: Vec3 }) {
+        this.camera.position.copy(pose.position);
+        this.camera.target.copy(pose.target);
+        this.camera.scene?.events.fire('camera.sceneCameraMoved', this.camera);
+    }
+
+    do() {
+        this.apply(this.newPose);
+    }
+
+    undo() {
+        this.apply(this.oldPose);
+    }
+}
+
 /** The record a train node keeps: what was trained, how, and what came out. */
 type TrainSettings = {
     datasetName: string;
@@ -1551,6 +1580,7 @@ export {
     DatasetOp,
     type DatasetHandle,
     CameraOp,
+    CameraPoseOp,
     type CameraSettings,
     defaultCameraSettings,
     TrainOp,

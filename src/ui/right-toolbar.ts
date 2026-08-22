@@ -4,12 +4,12 @@ import { Events } from '../events';
 import { ShortcutManager } from '../shortcut-manager';
 import { i18n } from './localization';
 import cameraFrameSelectionSvg from './svg/camera-frame-selection.svg';
+import cameraLockSvg from './svg/camera-lock.svg';
+import cameraUnlockSvg from './svg/camera-unlock.svg';
 import centersSvg from './svg/centers.svg';
 import flyCameraSvg from './svg/fly-camera.svg';
 import orbitCameraSvg from './svg/orbit-camera.svg';
 import ringsSvg from './svg/rings.svg';
-import selectLockSvg from './svg/select-lock.svg';
-import selectUnlockSvg from './svg/select-unlock.svg';
 import showHideSplatsSvg from './svg/show-hide-splats.svg';
 import { Tooltips } from './tooltips';
 
@@ -75,8 +75,8 @@ class RightToolbar extends Container {
         orbitMode.dom.appendChild(createSvg(orbitCameraSvg));
         flyMode.dom.appendChild(createSvg(flyCameraSvg));
         cameraFrameSelection.dom.appendChild(createSvg(cameraFrameSelectionSvg));
-        const lockedDom = createSvg(selectLockSvg);
-        const unlockedDom = createSvg(selectUnlockSvg);
+        const lockedDom = createSvg(cameraLockSvg);
+        const unlockedDom = createSvg(cameraUnlockSvg);
         lockedDom.style.display = 'none';
         cameraLock.dom.appendChild(unlockedDom);
         cameraLock.dom.appendChild(lockedDom);

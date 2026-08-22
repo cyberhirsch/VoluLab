@@ -153,9 +153,27 @@ class Transform extends Container {
             input.on('slider:mouseup', mouseup);
         });
 
-        // toggle ui availability based on selection
+        // toggle ui availability based on selection. A camera counts: it has
+        // a position and an orientation, but no scale - so that input stays
+        // off rather than pretending a camera can be stretched.
+        const setEnabled = (hasSelection: boolean, scalable: boolean) => {
+            positionVector.enabled = rotationVector.enabled = hasSelection;
+            scaleInput.enabled = hasSelection && scalable;
+        };
+
         events.on('selection.changed', (selection) => {
-            positionVector.enabled = rotationVector.enabled = scaleInput.enabled = !!selection;
+            setEnabled(!!selection, true);
+        });
+
+        // deselecting a camera restores whatever the object selection says -
+        // it cannot wait for selection.changed, which stays silent when the
+        // same object was selected all along
+        events.on('camera.selectionChanged', (camera) => {
+            if (camera) {
+                setEnabled(true, false);
+            } else {
+                setEnabled(!!events.invoke('selection'), true);
+            }
         });
 
         events.on('pivot.placed', (pivot: Pivot) => {

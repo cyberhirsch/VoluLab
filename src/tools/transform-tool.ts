@@ -38,7 +38,10 @@ class TransformTool {
 
         // reattach the gizmo to the pivot
         const reattach = () => {
-            if (!active || !events.invoke('selection')) {
+            // a camera is a transform target too, so the gizmo shows for
+            // either kind of selection
+            const hasTarget = events.invoke('selection') || events.invoke('camera.selected');
+            if (!active || !hasTarget) {
                 if (gizmo.enabled) {
                     gizmo.detach();
                 }
@@ -80,6 +83,7 @@ class TransformTool {
             events.on('pivot.placed', reattach);
             events.on('pivot.moved', reattach);
             events.on('selection.changed', reattach);
+            events.on('camera.selectionChanged', reattach);
         };
 
         this.deactivate = () => {
@@ -89,6 +93,7 @@ class TransformTool {
             events.off('pivot.placed', reattach);
             events.off('pivot.moved', reattach);
             events.off('selection.changed', reattach);
+            events.off('camera.selectionChanged', reattach);
         };
 
         // initialize coodinate space

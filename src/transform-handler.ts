@@ -1,3 +1,4 @@
+import { CameraTransformHandler } from './camera-transform-handler';
 import { EntityTransformHandler } from './entity-transform-handler';
 import { Events } from './events';
 import { registerPivotEvents } from './pivot';
@@ -35,6 +36,7 @@ const registerTransformHandlerEvents = (events: Events) => {
     // bind transform target when selection changes
     const entityTransformHandler = new EntityTransformHandler(events);
     const splatsTransformHandler = new SplatsTransformHandler(events);
+    const cameraTransformHandler = new CameraTransformHandler(events);
 
     const update = (splat: Splat) => {
         pop();
@@ -49,6 +51,15 @@ const registerTransformHandlerEvents = (events: Events) => {
 
     events.on('selection.changed', update);
     events.on('splat.stateChanged', update);
+
+    // a camera is transformable too, through the same pivot - selecting one
+    // simply swaps which handler is listening
+    events.on('camera.selectionChanged', (camera: unknown) => {
+        pop();
+        if (camera) {
+            push(cameraTransformHandler);
+        }
+    });
 
     events.on('transformHandler.push', (handler: TransformHandler) => {
         push(handler);

@@ -69,10 +69,22 @@ looking through may drive the view. The view's own legacy track, which
 the video exporter follows, stands down while a scene camera has the
 view. Selecting a camera aims the timeline at its keys.
 
+A camera transforms like anything else: everything transformable in this
+app goes through the pivot, and a handler decides what a pivot move
+means, so cameras got a handler of their own. Position comes from the
+pivot, aim from its rotation with the distance to the target preserved -
+rotating turns the camera on the spot rather than dragging its focus
+around - and scale is ignored, so the transform panel greys that input
+out rather than pretending a camera can be stretched. Starting a drag on
+the camera you are looking through steps you out to perspective first,
+because the view and the gizmo would otherwise argue over the same pose.
+
 Worth knowing: the viewport camera is itself an element of type
 `camera`, so every list of scene cameras filters by class rather than by
 type. Missing that put a nameless row in the outliner and made the first
-camera call itself "camera 2".
+camera call itself "camera 2". And toolbar icons draw in a 38-unit
+viewBox that is mostly padding - a 12-unit icon dropped in renders about
+three times too large, which is what happened to the lock button.
 
 ## Bokeh, not blur
 
