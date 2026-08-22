@@ -1,6 +1,6 @@
 import {
     BLEND_NORMAL,
-    PRIMITIVE_POINTS,
+    PRIMITIVE_TRIANGLES,
     SEMANTIC_POSITION,
     TYPE_FLOAT32,
     Color,
@@ -56,9 +56,11 @@ class SplatOverlay extends Element {
         vb.unlock();
         this.mesh.vertexBuffer = vb;
 
+        // two triangles per centre: the size has to be geometry, since
+        // WGSL has no point size (see the overlay shader)
         this.mesh.primitive[0] = {
             baseVertex: 0,
-            type: PRIMITIVE_POINTS,
+            type: PRIMITIVE_TRIANGLES,
             base: 0,
             count: 0
         };
@@ -131,8 +133,8 @@ class SplatOverlay extends Element {
 
         material.update();
 
-        // every splat gets a vertex; the shader culls deleted and locked ones
-        mesh.primitive[0].count = splat.splatData.numSplats;
+        // six vertices per splat; the shader culls deleted and locked ones
+        mesh.primitive[0].count = splat.splatData.numSplats * 6;
 
         splat.entity.addChild(this.entity);
         this.splat = splat;
@@ -157,6 +159,11 @@ class SplatOverlay extends Element {
             const useGaussianColor = events.invoke('view.centersUseGaussianColor') ? 1.0 : 0.0;
 
             material.setParameter('splatSize', splatSize * window.devicePixelRatio);
+
+            // the quad expansion works in clip space, so it needs the target
+            // it is being drawn into
+            const target = scene.camera.mainTarget;
+            material.setParameter('viewportSize', [target.width, target.height]);
             material.setParameter('selectedClr', [selectedClr.r, selectedClr.g, selectedClr.b, selectedClr.a]);
             material.setParameter('unselectedClr', [unselectedClr.r, unselectedClr.g, unselectedClr.b, unselectedClr.a]);
             material.setParameter('useGaussianColor', useGaussianColor);

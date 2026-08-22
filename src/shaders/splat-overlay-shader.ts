@@ -25,6 +25,7 @@ const vertexShader = /* glsl */ `
     uniform uvec2 texParams;
 
     uniform float splatSize;
+    uniform vec2 viewportSize;      // pixels, to size the quad in clip space
     uniform float useGaussianColor;                 // 0.0 = use selection colors, 1.0 = use gaussian color
     uniform vec4 selectedClr;
     uniform vec4 unselectedClr;
@@ -88,10 +89,20 @@ const vertexShader = /* glsl */ `
     #endif
 
     void main(void) {
-        // points are order-independent, so the vertex ID is the splat ID
-        // directly - no sort-order lookup, which also keeps this working on
-        // WebGPU where the order lives in a storage buffer, not a texture
-        uint splatId = uint(gl_VertexID);
+        // Each centre is a two-triangle quad rather than a point.
+        //
+        // GL point size does not exist in WGSL - a point is one pixel there
+        // and writing gl_PointSize invalidates the shader - so the size has
+        // to be geometry. Six vertices per splat, expanded below in clip
+        // space, which costs nothing on either backend and gives the same
+        // square the old points drew.
+        //
+        // Splats are order-independent here, so the vertex id addresses them
+        // directly: no sort-order lookup, which is also what keeps this
+        // working on WebGPU where the order lives in a storage buffer.
+        int vertexIndex = gl_VertexID;
+        uint splatId = uint(vertexIndex / 6);
+        int corner = vertexIndex % 6;
 
         ivec2 splatUV = calcSplatUV(splatId, texParams.x);
         uint splatState = uint(texelFetch(splatState, splatUV, 0).r * 255.0);
@@ -99,11 +110,6 @@ const vertexShader = /* glsl */ `
         // cull locked and deleted splats
         if ((splatState & 6u) != 0u) {
             gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
-            // WGSL has no point size - writing it makes the transpiler
-            // drop the entry point; culling by position is enough there
-            #ifndef WEBGPU
-                gl_PointSize = 0.0;
-            #endif
         } else {
             mat4 model = matrix_model;
 
@@ -156,11 +162,13 @@ const vertexShader = /* glsl */ `
             // disable depth clipping
             gl_Position.z = 0.0;
 
-            // on WebGPU points are fixed at one pixel - splatSize cannot
-            // apply (a later quad-expansion pass could restore it)
-            #ifndef WEBGPU
-                gl_PointSize = splatSize;
-            #endif
+            // expand to a quad of splatSize pixels. The offset is scaled by
+            // w so the perspective divide leaves a constant size on screen.
+            vec2 quad = vec2(
+                (corner == 0 || corner == 3 || corner == 5) ? -1.0 : 1.0,
+                (corner == 0 || corner == 1 || corner == 3) ? -1.0 : 1.0
+            );
+            gl_Position.xy += quad * splatSize / viewportSize * gl_Position.w;
         }
     }
 `;
