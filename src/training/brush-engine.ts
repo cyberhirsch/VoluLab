@@ -13,6 +13,8 @@
  * until done, paused by not pumping, and cancelled by dropping it.
  */
 
+import { listDirectory } from './dataset';
+
 type BrushPkg = typeof import('brush-pkg');
 type BrushApp = import('brush-pkg').BrushApp;
 type Training = import('brush-pkg').Training;
@@ -39,6 +41,39 @@ type TrainProgress = {
     ssim?: number;
 };
 
+type TrainLogLevel = 'info' | 'warn' | 'error';
+
+/** One line of the run's account of itself, for the node's log. */
+type TrainLogLine = {
+    /** performance.now() when the line was written */
+    at: number;
+    level: TrainLogLevel;
+    text: string;
+};
+
+/**
+ * What can be seen of a load in flight.
+ *
+ * The trainer says nothing until its first batch returns (see pump), so
+ * everything here is measured from outside it: the clock, the wasm heap,
+ * and the dataset files it has opened. Zero means not known for this
+ * kind of source rather than none.
+ */
+type TrainLoad = {
+    /** the dataset handed over */
+    name: string;
+    /** bytes handed over, for an in-memory source */
+    sizeBytes: number;
+    /** files in the dataset, for a directory source */
+    fileCount: number;
+    /** files the trainer has opened so far, for a directory source */
+    filesOpened: number;
+    /** ms since the load began */
+    elapsedMs: number;
+    /** the trainer's wasm heap, which grows as the dataset decodes */
+    heapBytes: number;
+};
+
 type SplatBuffers = {
     transforms: GPUBuffer;
     shCoeffs: GPUBuffer;
@@ -55,6 +90,11 @@ const STEPS_PER_BATCH = 5;
 
 // sliding window of TrainStep arrivals for the steps/s readout
 const PERF_WINDOW = 32;
+
+// how often the load is measured from outside, and how often that
+// measurement is worth a line in the log
+const LOAD_TICK_MS = 1000;
+const LOAD_REPORT_S = 30;
 
 /**
  * Let the trainer's sort kernels compile.
@@ -87,11 +127,96 @@ const enableSubgroupsInWgsl = (device: GPUDevice) => {
     };
 };
 
+// what the wasm side sounds like when it dies: the panic hook's output,
+// and the trap that follows it back out through the executor
+const WASM_FAILURE_RE = /panicked at|RuntimeError|unreachable executed|memory allocation of/i;
+
+const failureHandlers = new Set<(text: string) => void>();
+let failureCaptureInstalled = false;
+
+/**
+ * Listen for the trainer dying.
+ *
+ * A Rust panic inside the training future does not reject the trainSteps
+ * promise: the task is simply dropped, so the await never settles, and
+ * the run sits on "loading dataset" until the tab is closed. The only
+ * trace it leaves is the panic hook's console.error - the wasm has no
+ * other channel out, this build binds nothing else to the console - plus
+ * the trap that surfaces as an unhandled rejection. Reading both is what
+ * turns that silence into a message with a cause in it.
+ */
+const captureWasmFailures = (handler: (text: string) => void) => {
+    failureHandlers.add(handler);
+    if (failureCaptureInstalled) return;
+    failureCaptureInstalled = true;
+
+    const report = (text: string) => {
+        if (text && WASM_FAILURE_RE.test(text)) {
+            failureHandlers.forEach(h => h(text));
+        }
+    };
+    const describe = (value: any) => {
+        return (value instanceof Error) ? (value.stack ?? value.message) : String(value);
+    };
+
+    const consoleError = console.error.bind(console);
+    console.error = (...args: any[]) => {
+        consoleError(...args);
+        report(args.map(describe).join(' '));
+    };
+
+    window.addEventListener('unhandledrejection', (event) => {
+        report(describe(event.reason));
+    });
+    window.addEventListener('error', (event) => {
+        report(event.message ?? describe(event.error));
+    });
+};
+
+/** The message a panic carries, without the stack dump behind it. */
+const summarise = (text: string) => {
+    return text.split(/\n\s*Stack:/)[0].replace(/\s+/g, ' ').trim().slice(0, 300);
+};
+
+/**
+ * Count the dataset files the trainer opens.
+ *
+ * A picked directory is read through the very handles we hand over -
+ * getFile() per entry, called from inside the wasm - so the prototype is
+ * the one place a host can watch that loader move. Zip and url sources
+ * are read inside wasm and stay opaque; for those the heap and the clock
+ * are all there is. The patch lives only as long as the load.
+ */
+const countFileOpens = (onOpen: () => void) => {
+    // the constructor is a runtime global the dom typings do not have to
+    // carry, while the interface it builds is one they do
+    const proto = (window as any).FileSystemFileHandle?.prototype as FileSystemFileHandle;
+    const original = proto?.getFile;
+    if (!original) return () => {};
+
+    proto.getFile = function getFile(this: FileSystemFileHandle) {
+        onOpen();
+        return original.call(this);
+    };
+    return () => {
+        proto.getFile = original;
+    };
+};
+
+const sourceName = (source: TrainSource) => {
+    switch (source.kind) {
+        case 'directory': return `${source.handle.name}/`;
+        case 'bytes': return source.name;
+        case 'url': return source.url;
+    }
+};
+
 
 class BrushEngine {
     private pkg: BrushPkg | null = null;
     private app: BrushApp | null = null;
     private _device: GPUDevice | null = null;
+    private memory: WebAssembly.Memory | null = null;
 
     private training: Training | null = null;
     private paused = false;
@@ -100,10 +225,24 @@ class BrushEngine {
     private progress: TrainProgress = null;
     private steps: { iter: number, at: number }[] = [];
 
+    private _phase: TrainPhase = 'idle';
+
+    // the run's abort channel: what a panic pulls to end a pump that is
+    // waiting on a promise nothing will ever settle
+    private aborted: Promise<never> | null = null;
+    private abortFn: ((error: Error) => void) | null = null;
+    private abandoned = false;
+
+    private load: TrainLoad | null = null;
+    private loadTimer: number | null = null;
+    private unhookFiles: (() => void) | null = null;
+
     onPhase: (phase: TrainPhase) => void = () => {};
     onProgress: (progress: TrainProgress) => void = () => {};
     onSplatsUpdated: () => void = () => {};
     onWarning: (text: string) => void = () => {};
+    onLog: (line: TrainLogLine) => void = () => {};
+    onLoad: (load: TrainLoad | null) => void = () => {};
 
     get device() {
         return this._device;
@@ -117,6 +256,10 @@ class BrushEngine {
         return this.paused;
     }
 
+    get phase() {
+        return this._phase;
+    }
+
     /**
      * Load the wasm package and acquire the WebGPU device. Throws
      * WebGPUTrainingUnavailableError when the browser cannot train -
@@ -126,7 +269,7 @@ class BrushEngine {
     async ensureInit() {
         if (this.app) return;
 
-        this.onPhase('initializing');
+        this.setPhase('initializing');
 
         if (!('gpu' in navigator)) {
             throw new WebGPUTrainingUnavailableError('WebGPU is not available in this browser');
@@ -151,17 +294,26 @@ class BrushEngine {
         const device = await adapter.requestDevice({ requiredFeatures: features, requiredLimits });
         enableSubgroupsInWgsl(device);
 
+        const info = (adapter as any).info;
+        this.write('info', `gpu: ${[info?.vendor, info?.architecture, info?.description].filter(Boolean).join(' ') || 'unknown'}`);
+
         const base = new URL('static/brush/pkg/', document.baseURI).toString();
         const pkg = await import(`${base}brush_js.js`) as BrushPkg;
-        await pkg.default();
+        // the trainer's heap: the one number that says a silent load is
+        // still eating its dataset rather than sitting dead
+        this.memory = (await pkg.default())?.memory ?? null;
 
         const app = new pkg.BrushApp();
         app.initExisting(adapter, device, device.queue);
 
+        captureWasmFailures((text) => {
+            this.fail(summarise(text));
+        });
+
         this.pkg = pkg;
         this.app = app;
         this._device = device;
-        this.onPhase('idle');
+        this.setPhase('idle');
     }
 
     /**
@@ -170,7 +322,13 @@ class BrushEngine {
      * Resolves when training finishes or is stopped.
      */
     async start(source: TrainSource, editConfig: (defaults: BrushConfig) => Promise<BrushConfig | null>) {
-        await this.ensureInit();
+        try {
+            await this.ensureInit();
+        } catch (error) {
+            this.write('error', String(error?.message ?? error));
+            this.setPhase('error');
+            throw error;
+        }
         this.stop();
 
         this.progress = {
@@ -178,6 +336,13 @@ class BrushEngine {
         };
         this.steps = [];
         this.paused = false;
+        this.abandoned = false;
+        this.aborted = new Promise<never>((resolve, reject) => {
+            this.abortFn = reject;
+        });
+        // nothing races it until the pump does; keep it from counting as
+        // an unhandled rejection in the gap
+        this.aborted.catch(() => {});
 
         const configFn = (defaults: BrushConfig) => editConfig(defaults);
 
@@ -195,7 +360,9 @@ class BrushEngine {
         }
         this.training = training;
 
-        this.onPhase('loading');
+        this.write('info', `training ${sourceName(source)}`);
+        this.setPhase('loading');
+        this.watchLoad(source);
         await this.pump(training);
     }
 
@@ -203,7 +370,7 @@ class BrushEngine {
     pause() {
         if (!this.training || this.paused) return;
         this.paused = true;
-        this.onPhase('paused');
+        this.setPhase('paused');
     }
 
     resume() {
@@ -212,19 +379,24 @@ class BrushEngine {
         this.resumeFn?.();
         this.resumeFn = null;
         if (this.training) {
-            this.onPhase('training');
+            this.setPhase('training');
         }
     }
 
     /** Cancel the run; dropping the stream cancels in-flight work. */
     stop() {
         if (!this.training) return;
-        this.training.free();
+        const training = this.training;
         this.training = null;
-        // unblock a paused pump so it can observe the cleared training
+        training.free();
+        this.stopLoadWatch();
+        // unblock a paused pump so it can observe the cleared training,
+        // and a pump waiting on a batch that may never come back
         this.paused = false;
         this.resumeFn?.();
         this.resumeFn = null;
+        this.abortFn?.(new Error('stopped'));
+        this.abortFn = null;
     }
 
     /**
@@ -255,7 +427,105 @@ class BrushEngine {
         return await this.training.exportPly();
     }
 
+    private write(level: TrainLogLevel, text: string) {
+        this.onLog({ at: performance.now(), level, text });
+    }
+
+    private setPhase(phase: TrainPhase) {
+        // the load is only measurable while it is the thing happening
+        if (phase !== 'loading' && phase !== 'initializing') {
+            this.stopLoadWatch();
+        }
+        this._phase = phase;
+        this.onPhase(phase);
+    }
+
+    /**
+     * End a run the wasm has walked out on.
+     *
+     * The pump is waiting on a batch whose task no longer exists, so the
+     * only way out is from this side: reject what it is waiting on, with
+     * the panic text as the reason.
+     */
+    private fail(text: string) {
+        if (!this.training || !this.abortFn) return;
+        this.abandoned = true;
+        const abort = this.abortFn;
+        this.abortFn = null;
+        abort(new Error(text));
+    }
+
+    private heapBytes() {
+        return this.memory?.buffer?.byteLength ?? 0;
+    }
+
+    /**
+     * Measure a load from outside, since it says nothing from inside: the
+     * clock, the heap, and - for a directory - the files it has opened
+     * against the files there are.
+     */
+    private watchLoad(source: TrainSource) {
+        this.stopLoadWatch();
+
+        this.load = {
+            name: sourceName(source),
+            sizeBytes: source.kind === 'bytes' ? source.bytes.length : 0,
+            fileCount: 0,
+            filesOpened: 0,
+            elapsedMs: 0,
+            heapBytes: this.heapBytes()
+        };
+
+        if (source.kind === 'directory') {
+            this.unhookFiles = countFileOpens(() => {
+                if (this.load) this.load.filesOpened++;
+            });
+            listDirectory(source.handle).then((entries) => {
+                if (this.load) this.load.fileCount = entries.length;
+            }).catch(() => {});
+        }
+
+        const startedAt = performance.now();
+        let reportedAt = 0;
+
+        this.loadTimer = window.setInterval(() => {
+            const load = this.load;
+            if (!load) return;
+            load.elapsedMs = performance.now() - startedAt;
+            load.heapBytes = this.heapBytes();
+            this.onLoad({ ...load });
+
+            // a real dataset can take minutes, so this says where the load
+            // has got to rather than calling it a failure
+            const seconds = Math.round(load.elapsedMs / 1000);
+            if (seconds - reportedAt >= LOAD_REPORT_S) {
+                reportedAt = seconds;
+                const opened = load.fileCount ?
+                    `${load.filesOpened}/${load.fileCount} files opened` :
+                    `${load.filesOpened} files opened`;
+                this.write('info', `still loading after ${seconds}s - ${opened}, ${Math.round(load.heapBytes / 1e6)} MB heap`);
+            }
+        }, LOAD_TICK_MS);
+    }
+
+    private stopLoadWatch() {
+        if (this.loadTimer !== null) {
+            window.clearInterval(this.loadTimer);
+            this.loadTimer = null;
+        }
+        this.unhookFiles?.();
+        this.unhookFiles = null;
+        if (this.load) {
+            this.load = null;
+            this.onLoad(null);
+        }
+    }
+
     private async pump(training: Training) {
+        // the first batch carries the whole loading phase with it, so it
+        // asks for a single step: the run leaves "loading" as soon as one
+        // has actually been taken, not five
+        let first = true;
         try {
             for (;;) {
                 while (this.paused) {
@@ -266,7 +536,9 @@ class BrushEngine {
                 // stopped (or replaced) while paused - don't touch a freed object
                 if (this.training !== training) return;
 
-                const messages = await training.trainSteps(STEPS_PER_BATCH);
+                const batch = training.trainSteps(first ? 1 : STEPS_PER_BATCH);
+                first = false;
+                const messages = await Promise.race([batch, this.aborted]);
                 if (this.training !== training) return;
                 if (messages.length === 0) break;
                 for (const message of messages) {
@@ -276,12 +548,21 @@ class BrushEngine {
             // the stream is exhausted but the Training object stays alive:
             // its splat view still answers currentBuffers/exportPly until
             // stop() or the next start() frees it
-            this.onPhase('done');
+            this.setPhase('done');
         } catch (error) {
-            if (this.training === training) {
-                this.onWarning(String(error?.message ?? error));
-                this.onPhase('error');
-            }
+            // stop() clears training before it aborts: that is a run being
+            // ended, not a run failing
+            if (this.training !== training) return;
+            this.training = null;
+            // a run the wasm abandoned still owns this object from a task
+            // that is no longer running; leave it to GC rather than pulling
+            // it out from under the trap
+            if (!this.abandoned) training.free();
+
+            const text = String(error?.message ?? error);
+            this.write('error', text);
+            this.onWarning(text);
+            this.setPhase('error');
         }
     }
 
@@ -302,7 +583,7 @@ class BrushEngine {
                     }
                 }
                 if (message.elapsedMs !== undefined) p.elapsedMs = message.elapsedMs;
-                this.onPhase(this.paused ? 'paused' : 'training');
+                this.setPhase(this.paused ? 'paused' : 'training');
                 this.onProgress(p);
                 this.onSplatsUpdated();
                 break;
@@ -315,6 +596,7 @@ class BrushEngine {
             case kind.DatasetLoaded:
                 p.trainViews = message.trainViews ?? 0;
                 p.evalViews = message.evalViews ?? 0;
+                this.write('info', `dataset: ${p.trainViews} train / ${p.evalViews} eval views`);
                 this.onProgress(p);
                 break;
             case kind.EvalResult:
@@ -323,9 +605,16 @@ class BrushEngine {
                 this.onProgress(p);
                 break;
             case kind.StartLoading:
-                this.onPhase('loading');
+                this.setPhase('loading');
+                break;
+            case kind.DoneLoading:
+                this.write('info', 'dataset loaded');
+                break;
+            case kind.DoneTraining:
+                this.write('info', 'training complete');
                 break;
             case kind.Warning:
+                this.write('warn', message.text ?? 'unknown warning');
                 this.onWarning(message.text ?? 'unknown warning');
                 break;
             default:
@@ -339,6 +628,9 @@ export {
     WebGPUTrainingUnavailableError,
     type BrushConfig,
     type SplatBuffers,
+    type TrainLoad,
+    type TrainLogLevel,
+    type TrainLogLine,
     type TrainPhase,
     type TrainProgress,
     type TrainSource

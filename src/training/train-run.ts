@@ -1,4 +1,4 @@
-import { BrushConfig, BrushEngine, TrainPhase, TrainProgress, TrainSource } from './brush-engine';
+import { BrushConfig, BrushEngine, TrainLoad, TrainLogLine, TrainPhase, TrainProgress, TrainSource } from './brush-engine';
 import { TrainOp } from '../edit-ops';
 import { Events } from '../events';
 import { loadGSplatData, MappedReadFileSystem } from '../io';
@@ -29,9 +29,16 @@ import { Splat } from '../splat';
  */
 const SNAPSHOT_INTERVAL_MS = 5000;
 
+/** Lines kept per node - enough to hold a run's account of itself. */
+const LOG_LIMIT = 200;
+
 type RunState = {
     phase: TrainPhase;
     progress: TrainProgress | null;
+    /** what a load in flight looks like from outside; null once it ends */
+    load: TrainLoad | null;
+    /** this node's last run, in the order it happened */
+    log: TrainLogLine[];
     active: boolean;
 };
 
@@ -41,13 +48,25 @@ const registerTraining = (events: Events, scene: Scene) => {
     let runOp: TrainOp | null = null;
     let phase: TrainPhase = 'idle';
     let progress: TrainProgress | null = null;
+    let load: TrainLoad | null = null;
     let lastConfig: BrushConfig | null = null;
     let snapshotBusy = false;
     let snapshotDirty = false;
     let lastSnapshotAt = 0;
 
+    // the log belongs to the node, not to the engine: it outlives the run
+    // that wrote it, so an error is still readable after the run has ended
+    const logs = new WeakMap<TrainOp, TrainLogLine[]>();
+
     const changed = () => {
         events.fire('training.changed', runOp);
+    };
+
+    const note = (op: TrainOp, line: TrainLogLine) => {
+        const lines = logs.get(op) ?? [];
+        lines.push(line);
+        if (lines.length > LOG_LIMIT) lines.shift();
+        logs.set(op, lines);
     };
 
     // the run belongs to its node: if the node stops being applied history
@@ -85,7 +104,9 @@ const registerTraining = (events: Events, scene: Scene) => {
             lastSnapshotAt = performance.now();
             snapshotDirty = false;
         } catch (error) {
-            events.fire('training.warning', String(error?.message ?? error));
+            const text = String(error?.message ?? error);
+            note(op, { at: performance.now(), level: 'warn', text: `snapshot: ${text}` });
+            events.fire('training.warning', text);
         } finally {
             snapshotBusy = false;
         }
@@ -112,6 +133,14 @@ const registerTraining = (events: Events, scene: Scene) => {
     engine.onWarning = (text) => {
         events.fire('training.warning', text);
     };
+    engine.onLog = (line) => {
+        if (runOp) note(runOp, line);
+        changed();
+    };
+    engine.onLoad = (l) => {
+        load = l;
+        changed();
+    };
 
     events.on('edit.changed', () => {
         if (runOp && engine.active && !opStillApplied(runOp)) {
@@ -130,6 +159,8 @@ const registerTraining = (events: Events, scene: Scene) => {
         }
         runOp = op;
         progress = null;
+        load = null;
+        logs.set(op, []);
         snapshotDirty = false;
         lastSnapshotAt = 0;
 
@@ -169,10 +200,15 @@ const registerTraining = (events: Events, scene: Scene) => {
                 }
             }
         } catch (error) {
-            events.fire('training.warning', String(error?.message ?? error));
+            const text = String(error?.message ?? error);
+            note(op, { at: performance.now(), level: 'error', text });
+            events.fire('training.warning', text);
             phase = 'error';
         } finally {
-            if (runOp === op && !engine.active) {
+            // a finished or failed run stays the node's run until another
+            // begins: its phase, its numbers and its log are the account of
+            // what happened, and they are worth more than a blank node
+            if (runOp === op && !engine.active && phase !== 'done' && phase !== 'error') {
                 runOp = null;
             }
             changed();
@@ -197,6 +233,7 @@ const registerTraining = (events: Events, scene: Scene) => {
         if (runOp === op) {
             engine.stop();
             phase = 'idle';
+            note(op, { at: performance.now(), level: 'info', text: 'stopped' });
             runOp = null;
             events.fire('training.changed', op);
         }
@@ -207,6 +244,8 @@ const registerTraining = (events: Events, scene: Scene) => {
         return {
             phase: active || runOp === op ? phase : 'idle',
             progress: runOp === op ? progress : null,
+            load: runOp === op ? load : null,
+            log: logs.get(op) ?? [],
             active
         };
     });
@@ -216,4 +255,4 @@ const registerTraining = (events: Events, scene: Scene) => {
     });
 };
 
-export { registerTraining };
+export { registerTraining, type RunState };

@@ -110,4 +110,38 @@
         font-size: 11px;
     }
 
+    // the run's log. Levels move up the grey ladder rather than into a
+    // hue, the way every other state in this UI does.
+    .tf-log {
+        max-height: 140px;
+        overflow-y: auto;
+        background-color: $ink-0;
+        border: 1px solid $ink-3;
+        padding: 4px 6px;
+        margin-bottom: 6px;
+        font-size: 10px;
+        line-height: 1.4;
+        user-select: text;
+    }
+
+    .tf-log-line {
+        color: $ink-5;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+
+        &[data-level='warn'] {
+            color: $ink-6;
+        }
+
+        &[data-level='error'] {
+            color: $ink-7;
+        }
+    }
+
+    .tf-log-time {
+        display: inline-block;
+        width: 42px;
+        color: $ink-4;
+    }
+
 }

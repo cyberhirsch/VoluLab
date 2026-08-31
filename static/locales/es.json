@@ -348,6 +348,8 @@
     "training.phase-paused": "en pausa",
     "training.phase-done": "terminado",
     "training.phase-error": "error",
+    "training.log": "Registro",
+    "training.copy-log": "Copiar registro",
     "import.dataset-needs-images": "Este conjunto de datos necesita sus imágenes: suelta la carpeta completa o un zip que las contenga.",
     "import.single-image": "Una sola foto no se puede posar: importa un conjunto de fotos superpuestas de la escena.",
     "import.folder-unrecognized": "Esto no parece un conjunto de datos de captura: se esperan cámaras posadas (COLMAP, transforms.json, csv de RealityCapture) o un conjunto de fotos.",

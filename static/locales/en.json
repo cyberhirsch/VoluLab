@@ -348,6 +348,8 @@
     "training.phase-paused": "paused",
     "training.phase-done": "done",
     "training.phase-error": "error",
+    "training.log": "Log",
+    "training.copy-log": "Copy Log",
     "import.dataset-needs-images": "This dataset needs its images — drop the whole folder or a zip containing them.",
     "import.single-image": "One photo cannot be posed — import a set of overlapping photos of the scene.",
     "import.folder-unrecognized": "This doesn't look like a capture dataset — expected posed cameras (COLMAP, transforms.json, RealityCapture csv) or a set of photos.",

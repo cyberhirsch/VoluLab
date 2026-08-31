@@ -40,6 +40,47 @@ Saving always writes .vlp. Opening still accepts .ssproj: the container
 is identical, so an old project's splats, camera and view still load,
 and the parts that did not exist then come back at their defaults.
 
+## What a training run says while it works
+
+Training could sit on "loading dataset" indefinitely with nothing to
+read: no progress, no error, and no way to tell a big dataset from a
+dead run. Two things made that silence.
+
+The first is the trainer's own API. `trainSteps(n)` returns only once
+`n` training steps have been taken, and the whole loading phase - every
+message the loader produces along the way - arrives inside that first
+call. Until the dataset is loaded *and* a step is done, the host has
+nothing to show.
+
+The second is what happens when the wasm dies. A Rust panic inside the
+training future does not reject that promise: the task is dropped, the
+await never settles, and the phase stays "loading" for as long as the
+tab is open. The panic text goes to `console.error` from the panic hook,
+and the trap behind it surfaces as an unhandled rejection - both outside
+anything the run was listening to.
+
+So the run listens to both now. A panic ends the run and puts its own
+message on the node, instead of a wait with no end in it. The first
+batch also asks for a single step rather than five, so a run leaves
+"loading" as soon as one has actually been taken.
+
+And because the trainer says nothing during a load, the load is measured
+from outside: the clock, the trainer's wasm heap - which grows as the
+dataset decodes, and is the only sign of life a zip source gives - and,
+for a picked directory, the files it has opened against the files there
+are, counted by wrapping `getFile` for the length of the load.
+
+Each train node keeps a log of its run: the GPU it got, the dataset it
+was handed, view counts, warnings, the error that ended it, and a line
+every 30 seconds while a load is still going. The log belongs to the
+node rather than the engine, so it outlives the run that wrote it and a
+failure is still readable afterwards.
+
+What is still not visible is per-image loading progress. It exists - the
+loader emits a message per view - but those messages are buffered until
+the first batch returns, so reaching them means changing the trainer's
+API, not the host.
+
 ## The trainer's sort kernels, compiling at last
 
 Training never got past "loading", and the reason was three layers down.
