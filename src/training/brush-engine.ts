@@ -231,7 +231,6 @@ class BrushEngine {
     // waiting on a promise nothing will ever settle
     private aborted: Promise<never> | null = null;
     private abortFn: ((error: Error) => void) | null = null;
-    private abandoned = false;
 
     private load: TrainLoad | null = null;
     private loadTimer: number | null = null;
@@ -343,7 +342,6 @@ class BrushEngine {
         };
         this.steps = [];
         this.paused = false;
-        this.abandoned = false;
         this.aborted = new Promise<never>((resolve, reject) => {
             this.abortFn = reject;
         });
@@ -476,7 +474,6 @@ class BrushEngine {
      */
     private fail(text: string) {
         if (!this.training || !this.abortFn) return;
-        this.abandoned = true;
         const abort = this.abortFn;
         this.abortFn = null;
         abort(new Error(text));
@@ -580,11 +577,13 @@ class BrushEngine {
             // stop() clears training before it aborts: that is a run being
             // ended, not a run failing
             if (this.training !== training) return;
+            // the reference goes; the object does not. A run that failed
+            // can still have wasm work holding it - the panic killed one
+            // task, not the stream - and freeing it under that work is
+            // what reports "null pointer passed to rust", right after
+            // start, in place of the error that actually ended the run.
+            // Dropping the reference is enough: the finalizer collects it.
             this.training = null;
-            // a run the wasm abandoned still owns this object from a task
-            // that is no longer running; leave it to GC rather than pulling
-            // it out from under the trap
-            if (!this.abandoned) this.release(training);
 
             const text = String(error?.message ?? error);
             this.write('error', text);
