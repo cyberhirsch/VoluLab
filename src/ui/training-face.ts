@@ -3,7 +3,8 @@ import { Container } from '@playcanvas/pcui';
 import { i18n } from './localization';
 import { TrainOp } from '../edit-ops';
 import { Events } from '../events';
-import { TrainPhase, TrainProgress } from '../training/brush-engine';
+import { TrainLoad, TrainLogLine } from '../training/brush-engine';
+import { RunState } from '../training/train-run';
 
 /**
  * The train node's parameters, mounted in the node pane the way the colour
@@ -14,6 +15,34 @@ import { TrainPhase, TrainProgress } from '../training/brush-engine';
  * viewport and refines in place as the run proceeds. This face is the
  * node's controls: dataset, settings, start/pause/stop, numbers.
  */
+
+/** Sizes the way a status line wants them: three digits and a unit. */
+const formatBytes = (bytes: number) => {
+    if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+    if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+    return `${Math.round(bytes / 1e3)} kB`;
+};
+
+const formatDuration = (ms: number) => {
+    const total = Math.round(ms / 1000);
+    if (total < 60) return `${total}s`;
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+};
+
+/**
+ * What a load in flight looks like: the clock, then whatever the source
+ * lets us see of it. A directory is read through handles we can count;
+ * a zip is read inside the wasm, where the growing heap is the only sign
+ * of life. See TrainLoad.
+ */
+const loadParts = (load: TrainLoad) => {
+    return [
+        formatDuration(load.elapsedMs),
+        load.fileCount ? `${load.filesOpened}/${load.fileCount} files` : null,
+        load.sizeBytes ? formatBytes(load.sizeBytes) : null,
+        load.heapBytes ? `${formatBytes(load.heapBytes)} heap` : null
+    ].filter(s => s !== null);
+};
 
 // the config fields the face edits; everything else in Brush's
 // TrainStreamConfig passes through untouched
@@ -34,6 +63,10 @@ class TrainingFace extends Container {
     private statusLine: HTMLElement;
     private statsLine: HTMLElement;
     private noticeLine: HTMLElement;
+    private logSection: HTMLElement;
+    private logBox: HTMLElement;
+    private logCount = -1;
+    private logOp: TrainOp | null = null;
     private form = new Map<string, HTMLInputElement>();
     private buttons: { [name: string]: HTMLButtonElement } = {};
 
@@ -147,6 +180,20 @@ class TrainingFace extends Container {
         progress.appendChild(this.statsLine);
         progress.appendChild(this.noticeLine);
 
+        // the run's log - including what happened during a load, which the
+        // trainer itself reports nothing about until it is over. It is kept
+        // by the node rather than the engine, so a run that ends badly can
+        // still be read afterwards.
+        this.logSection = section(i18n.t('training.log'));
+        this.logBox = document.createElement('div');
+        this.logBox.className = 'tf-log';
+        this.logSection.appendChild(this.logBox);
+        const logRow = document.createElement('div');
+        logRow.className = 'tf-row';
+        this.logSection.appendChild(logRow);
+        button(logRow, 'copyLog', i18n.t('training.copy-log'), () => this.copyLog());
+        this.logSection.hidden = true;
+
         events.on('training.changed', (op: TrainOp) => {
             if (op === this.op) {
                 this.readOp();
@@ -186,6 +233,41 @@ class TrainingFace extends Container {
         this.noticeLine.hidden = false;
     }
 
+    /** The log as text, for pasting where someone can read it. */
+    private copyLog() {
+        const log = this.op ? (this.events.invoke('training.state', this.op) as RunState).log : [];
+        if (log.length === 0) return;
+        const start = log[0].at;
+        const text = log.map(l => `${formatDuration(l.at - start)} ${l.level} ${l.text}`).join('\n');
+        navigator.clipboard?.writeText(text).catch(() => {});
+    }
+
+    private renderLog(log: TrainLogLine[]) {
+        // the load ticks once a second and the lines under it change
+        // rarely, so the list is only rebuilt when there is something new
+        if (this.logCount === log.length && this.logOp === this.op) return;
+        this.logCount = log.length;
+        this.logOp = this.op;
+        this.logSection.hidden = log.length === 0;
+
+        // a reader who has scrolled back is left where they are
+        const atBottom = this.logBox.scrollHeight - this.logBox.scrollTop - this.logBox.clientHeight < 8;
+        this.logBox.textContent = '';
+        const start = log.length > 0 ? log[0].at : 0;
+        for (const line of log) {
+            const el = document.createElement('div');
+            el.className = 'tf-log-line';
+            el.dataset.level = line.level;
+            const time = document.createElement('span');
+            time.className = 'tf-log-time';
+            time.textContent = formatDuration(line.at - start);
+            el.appendChild(time);
+            el.appendChild(document.createTextNode(line.text));
+            this.logBox.appendChild(el);
+        }
+        if (atBottom) this.logBox.scrollTop = this.logBox.scrollHeight;
+    }
+
     /** settings -> controls */
     private readOp() {
         if (!this.op) return;
@@ -205,7 +287,7 @@ class TrainingFace extends Container {
                 op.datasetOp.sourceName) :
             i18n.t('training.needs-import');
 
-        const state = this.events.invoke('training.state', op) as { phase: TrainPhase, progress: TrainProgress | null, active: boolean };
+        const state = this.events.invoke('training.state', op) as RunState;
         const paused = this.events.invoke('training.isPaused', op);
 
         if (!this.supported) {
@@ -213,16 +295,23 @@ class TrainingFace extends Container {
             this.noticeLine.hidden = false;
         }
 
-        this.statusLine.textContent = i18n.t(`training.phase-${state.active || state.phase === 'done' ? state.phase : 'idle'}`);
+        // a run that has ended still says how it ended
+        const ended = state.phase === 'done' || state.phase === 'error';
+        this.statusLine.textContent = i18n.t(`training.phase-${state.active || ended ? state.phase : 'idle'}`);
 
         const p = state.progress;
-        if (p) {
+        if (state.load) {
+            // a load reports nothing from inside itself, so this is what
+            // can be seen of it from out here
+            this.statsLine.textContent = loadParts(state.load).join(' · ');
+        } else if (p) {
             const parts = [
                 `${p.iter.toLocaleString()} it`,
                 `${p.numSplats.toLocaleString()} splats`,
                 p.stepsPerSec ? `${p.stepsPerSec.toFixed(1)} it/s` : null,
                 p.trainViews ? `${p.trainViews}/${p.evalViews} views` : null,
-                p.psnr !== undefined ? `${p.psnr.toFixed(2)} dB` : null
+                p.psnr !== undefined ? `${p.psnr.toFixed(2)} dB` : null,
+                p.elapsedMs ? formatDuration(p.elapsedMs) : null
             ].filter(s => s !== null);
             this.statsLine.textContent = parts.join(' · ');
         } else if (op.settings.finalSplats > 0) {
@@ -236,6 +325,8 @@ class TrainingFace extends Container {
         } else {
             this.statsLine.textContent = '';
         }
+
+        this.renderLog(state.log);
 
         const running = state.active;
         this.buttons.start.textContent = i18n.t(op.settings.finalSplats > 0 ? 'training.retrain' : 'training.start');

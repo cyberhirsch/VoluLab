@@ -348,6 +348,8 @@
     "training.phase-paused": "一時停止中",
     "training.phase-done": "完了",
     "training.phase-error": "エラー",
+    "training.log": "ログ",
+    "training.copy-log": "ログをコピー",
     "import.dataset-needs-images": "このデータセットには画像が必要です。フォルダ全体か画像を含むzipをドロップしてください。",
     "import.single-image": "写真1枚では姿勢推定できません。シーンを重なり合うように撮った複数の写真をインポートしてください。",
     "import.folder-unrecognized": "キャプチャデータセットではないようです。姿勢付きカメラ（COLMAP、transforms.json、RealityCapture CSV）か写真のセットが必要です。",

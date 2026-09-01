@@ -348,6 +348,8 @@
     "training.phase-paused": "en pause",
     "training.phase-done": "terminé",
     "training.phase-error": "erreur",
+    "training.log": "Journal",
+    "training.copy-log": "Copier le journal",
     "import.dataset-needs-images": "Ce jeu de données a besoin de ses images — déposez le dossier complet ou un zip les contenant.",
     "import.single-image": "Une seule photo ne peut pas être posée — importez un ensemble de photos de la scène qui se recouvrent.",
     "import.folder-unrecognized": "Cela ne ressemble pas à un jeu de données de capture — attendu : des caméras posées (COLMAP, transforms.json, csv RealityCapture) ou un ensemble de photos.",

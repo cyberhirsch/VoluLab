@@ -348,6 +348,8 @@
     "training.phase-paused": "пауза",
     "training.phase-done": "готово",
     "training.phase-error": "ошибка",
+    "training.log": "Журнал",
+    "training.copy-log": "Копировать журнал",
     "import.dataset-needs-images": "Этому датасету нужны его изображения — перетащите всю папку или zip с ними.",
     "import.single-image": "Одну фотографию нельзя спозиционировать — импортируйте набор перекрывающихся фотографий сцены.",
     "import.folder-unrecognized": "Это не похоже на датасет съёмки — ожидаются камеры с позами (COLMAP, transforms.json, csv RealityCapture) или набор фотографий.",

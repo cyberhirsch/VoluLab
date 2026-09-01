@@ -348,6 +348,8 @@
     "training.phase-paused": "일시정지됨",
     "training.phase-done": "완료",
     "training.phase-error": "오류",
+    "training.log": "로그",
+    "training.copy-log": "로그 복사",
     "import.dataset-needs-images": "이 데이터셋에는 이미지가 필요합니다. 전체 폴더 또는 이미지가 포함된 zip을 드롭하세요.",
     "import.single-image": "사진 한 장으로는 포즈를 추정할 수 없습니다. 장면이 겹치도록 찍은 여러 장의 사진을 가져오세요.",
     "import.folder-unrecognized": "캡처 데이터셋이 아닌 것 같습니다. 포즈가 있는 카메라(COLMAP, transforms.json, RealityCapture CSV) 또는 사진 세트가 필요합니다.",

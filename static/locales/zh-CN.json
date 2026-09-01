@@ -348,6 +348,8 @@
     "training.phase-paused": "已暂停",
     "training.phase-done": "完成",
     "training.phase-error": "错误",
+    "training.log": "日志",
+    "training.copy-log": "复制日志",
     "import.dataset-needs-images": "此数据集需要其图像 — 请拖入整个文件夹或包含图像的 zip。",
     "import.single-image": "单张照片无法估计位姿 — 请导入一组相互重叠的场景照片。",
     "import.folder-unrecognized": "这看起来不像捕捉数据集 — 需要带位姿的相机（COLMAP、transforms.json、RealityCapture CSV）或一组照片。",
