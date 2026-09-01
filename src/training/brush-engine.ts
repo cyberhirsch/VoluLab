@@ -237,6 +237,13 @@ class BrushEngine {
     private loadTimer: number | null = null;
     private unhookFiles: (() => void) | null = null;
 
+    // exportPly reads the splats back asynchronously, and the snapshot that
+    // calls it is not awaited - so a run can be stopped, or fail, with a
+    // read still in flight. Freeing the run's object under one is exactly
+    // what "null pointer passed to rust" reports, so the free waits.
+    private reads = 0;
+    private freeWhenRead: Training[] = [];
+
     onPhase: (phase: TrainPhase) => void = () => {};
     onProgress: (progress: TrainProgress) => void = () => {};
     onSplatsUpdated: () => void = () => {};
@@ -388,7 +395,7 @@ class BrushEngine {
         if (!this.training) return;
         const training = this.training;
         this.training = null;
-        training.free();
+        this.release(training);
         this.stopLoadWatch();
         // unblock a paused pump so it can observe the cleared training,
         // and a pump waiting on a batch that may never come back
@@ -421,10 +428,30 @@ class BrushEngine {
 
     /** The latest splats as a standard 3DGS binary PLY. */
     async exportPly(): Promise<Uint8Array> {
-        if (!this.training) {
+        const training = this.training;
+        if (!training) {
             throw new Error('no training run');
         }
-        return await this.training.exportPly();
+        this.reads++;
+        try {
+            return await training.exportPly();
+        } finally {
+            this.reads--;
+            this.release(null);
+        }
+    }
+
+    /**
+     * Give up a run's wasm object, once nothing is still reading from it.
+     * Pass null to mean "a read finished" rather than "release this".
+     */
+    private release(training: Training | null) {
+        if (training) this.freeWhenRead.push(training);
+        if (this.reads > 0) return;
+        for (const pending of this.freeWhenRead) {
+            pending.free();
+        }
+        this.freeWhenRead = [];
     }
 
     private write(level: TrainLogLevel, text: string) {
@@ -557,7 +584,7 @@ class BrushEngine {
             // a run the wasm abandoned still owns this object from a task
             // that is no longer running; leave it to GC rather than pulling
             // it out from under the trap
-            if (!this.abandoned) training.free();
+            if (!this.abandoned) this.release(training);
 
             const text = String(error?.message ?? error);
             this.write('error', text);
