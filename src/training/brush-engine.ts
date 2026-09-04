@@ -116,14 +116,30 @@ const LOAD_REPORT_S = 30;
  */
 type ShaderModuleDesc = Parameters<GPUDevice['createShaderModule']>[0];
 
-const enableSubgroupsInWgsl = (device: GPUDevice) => {
+/**
+ * ...and report the ones that still fail.
+ *
+ * wgpu answers a broken pipeline with "invalid due to a previous error",
+ * which names nothing; the browser's own compilation messages name the
+ * line. Reading them is what found the missing directive above, so the
+ * reading stays in - a shader that fails now says so on the node.
+ */
+const enableSubgroupsInWgsl = (device: GPUDevice, onShaderError: (text: string) => void) => {
     const create = device.createShaderModule.bind(device);
     device.createShaderModule = (desc: ShaderModuleDesc) => {
         const code = desc.code;
-        if (typeof code !== 'string' || !/subgroup[A-Z]/.test(code) || /enable\s+subgroups\s*;/.test(code)) {
-            return create(desc);
-        }
-        return create({ ...desc, code: `enable subgroups;\n${code}` });
+        const module = (typeof code !== 'string' || !/subgroup[A-Z]/.test(code) || /enable\s+subgroups\s*;/.test(code)) ?
+            create(desc) :
+            create({ ...desc, code: `enable subgroups;\n${code}` });
+
+        module.getCompilationInfo?.().then((info) => {
+            for (const message of info.messages) {
+                if (message.type === 'error') {
+                    onShaderError(`shader ${desc.label ?? ''}:${message.lineNum} ${message.message}`);
+                }
+            }
+        }).catch(() => {});
+        return module;
     };
 };
 
@@ -304,7 +320,18 @@ class BrushEngine {
             if (typeof v === 'number') requiredLimits[k] = v;
         }
         const device = await adapter.requestDevice({ requiredFeatures: features, requiredLimits });
-        enableSubgroupsInWgsl(device);
+        enableSubgroupsInWgsl(device, text => this.write('error', text));
+
+        // wgpu's webgpu backend panics with a bare "Unexpected error" when
+        // the device hands it something it did not expect, and the message
+        // that would say what it was goes to the browser's console rather
+        // than to anything the run can see. These two put it on the node.
+        device.addEventListener('uncapturederror', (event: any) => {
+            this.write('warn', `webgpu: ${event?.error?.message ?? 'unknown error'}`);
+        });
+        device.lost.then((info) => {
+            this.write('error', `webgpu device lost: ${info.reason ?? ''} ${info.message ?? ''}`.trim());
+        }).catch(() => {});
 
         const info = (adapter as any).info;
         this.write('info', `gpu: ${[info?.vendor, info?.architecture, info?.description].filter(Boolean).join(' ') || 'unknown'}`);
@@ -319,7 +346,15 @@ class BrushEngine {
         app.initExisting(adapter, device, device.queue);
 
         captureWasmFailures((text) => {
-            this.fail(summarise(text));
+            const summary = summarise(text);
+            // Only the first panic ends the run, but the rest still belong
+            // in the log: the one that surfaces first is often the least
+            // informative - a bare "Unexpected error" - while the one that
+            // names the cause arrives after the run is already over, when
+            // there is nothing left to fail.
+            if (!this.fail(summary)) {
+                this.write('error', summary);
+            }
         });
 
         this.pkg = pkg;
@@ -493,13 +528,15 @@ class BrushEngine {
      *
      * The pump is waiting on a batch whose task no longer exists, so the
      * only way out is from this side: reject what it is waiting on, with
-     * the panic text as the reason.
+     * the panic text as the reason. Answers whether there was a run left
+     * to end.
      */
     private fail(text: string) {
-        if (!this.training || !this.abortFn) return;
+        if (!this.training || !this.abortFn) return false;
         const abort = this.abortFn;
         this.abortFn = null;
         abort(new Error(text));
+        return true;
     }
 
     private heapBytes() {
