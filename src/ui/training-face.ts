@@ -295,9 +295,10 @@ class TrainingFace extends Container {
             this.noticeLine.hidden = false;
         }
 
-        // a run that has ended still says how it ended
-        const ended = state.phase === 'done' || state.phase === 'error';
-        this.statusLine.textContent = i18n.t(`training.phase-${state.active || ended ? state.phase : 'idle'}`);
+        // the state already answers 'idle' for any node that is not the
+        // current run, so the phase it gives is the phase to show - including
+        // the seconds spent bringing the trainer up, and how a run ended
+        this.statusLine.textContent = i18n.t(`training.phase-${state.phase}`);
 
         const p = state.progress;
         if (state.load) {
@@ -328,9 +329,14 @@ class TrainingFace extends Container {
 
         this.renderLog(state.log);
 
+        // starting counts as busy from the press, not from when a Training
+        // exists: the wasm takes seconds to come up, and a Start that stays
+        // live through those gets pressed again - which is two runs freeing
+        // each other's Training. Pause and Stop still need a real run.
         const running = state.active;
+        const busy = running || state.phase === 'initializing';
         this.buttons.start.textContent = i18n.t(op.settings.finalSplats > 0 ? 'training.retrain' : 'training.start');
-        this.buttons.start.disabled = !this.supported || !op.dataset || running;
+        this.buttons.start.disabled = !this.supported || !op.dataset || busy;
         this.buttons.pause.textContent = i18n.t(paused ? 'training.resume' : 'training.pause');
         this.buttons.pause.disabled = !this.supported || !running;
         this.buttons.stop.disabled = !this.supported || !running;

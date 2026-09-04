@@ -231,6 +231,7 @@ class BrushEngine {
     // waiting on a promise nothing will ever settle
     private aborted: Promise<never> | null = null;
     private abortFn: ((error: Error) => void) | null = null;
+    private _starting = false;
 
     private load: TrainLoad | null = null;
     private loadTimer: number | null = null;
@@ -260,6 +261,11 @@ class BrushEngine {
 
     get isPaused() {
         return this.paused;
+    }
+
+    /** A run is being brought up: asked for, but with no Training yet. */
+    get starting() {
+        return this._starting;
     }
 
     get phase() {
@@ -328,42 +334,59 @@ class BrushEngine {
      * Resolves when training finishes or is stopped.
      */
     async start(source: TrainSource, editConfig: (defaults: BrushConfig) => Promise<BrushConfig | null>) {
-        try {
-            await this.ensureInit();
-        } catch (error) {
-            this.write('error', String(error?.message ?? error));
-            this.setPhase('error');
-            throw error;
-        }
-        this.stop();
-
-        this.progress = {
-            iter: 0, numSplats: 0, elapsedMs: 0, stepsPerSec: 0, trainViews: 0, evalViews: 0
-        };
-        this.steps = [];
-        this.paused = false;
-        this.aborted = new Promise<never>((resolve, reject) => {
-            this.abortFn = reject;
-        });
-        // nothing races it until the pump does; keep it from counting as
-        // an unhandled rejection in the gap
-        this.aborted.catch(() => {});
-
-        const configFn = (defaults: BrushConfig) => editConfig(defaults);
+        // Bringing the wasm up takes seconds, and every await until the
+        // Training exists is a window a second start can walk into. Two
+        // runs inside that window free each other's Training: "attempted
+        // to take ownership of Rust value while it was borrowed", then a
+        // null pointer, then a panic in the futures glue. So the window
+        // is closed here as well as on the button, because the engine is
+        // the only place that knows how long it lasts.
+        if (this._starting) return;
+        this._starting = true;
+        // the clock starts at the ask, not at the load: those seconds are
+        // the ones that look like nothing is happening
+        this.watchLoad(source);
 
         let training: Training;
-        switch (source.kind) {
-            case 'directory':
-                training = this.app.startTrainingFromDirectory(source.handle, configFn);
-                break;
-            case 'bytes':
-                training = this.app.startTrainingFromBytes(source.bytes, source.name, configFn);
-                break;
-            case 'url':
-                training = this.app.startTrainingFromUrl(source.url, configFn);
-                break;
+        try {
+            try {
+                await this.ensureInit();
+            } catch (error) {
+                this.write('error', String(error?.message ?? error));
+                this.setPhase('error');
+                throw error;
+            }
+            this.stop();
+
+            this.progress = {
+                iter: 0, numSplats: 0, elapsedMs: 0, stepsPerSec: 0, trainViews: 0, evalViews: 0
+            };
+            this.steps = [];
+            this.paused = false;
+            this.aborted = new Promise<never>((resolve, reject) => {
+                this.abortFn = reject;
+            });
+            // nothing races it until the pump does; keep it from counting as
+            // an unhandled rejection in the gap
+            this.aborted.catch(() => {});
+
+            const configFn = (defaults: BrushConfig) => editConfig(defaults);
+
+            switch (source.kind) {
+                case 'directory':
+                    training = this.app.startTrainingFromDirectory(source.handle, configFn);
+                    break;
+                case 'bytes':
+                    training = this.app.startTrainingFromBytes(source.bytes, source.name, configFn);
+                    break;
+                case 'url':
+                    training = this.app.startTrainingFromUrl(source.url, configFn);
+                    break;
+            }
+            this.training = training;
+        } finally {
+            this._starting = false;
         }
-        this.training = training;
 
         this.write('info', `training ${sourceName(source)}`);
         this.setPhase('loading');

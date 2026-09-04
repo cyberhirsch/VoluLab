@@ -154,6 +154,13 @@ const registerTraining = (events: Events, scene: Scene) => {
 
     events.on('training.start', async (op: TrainOp) => {
         if (!op?.dataset) return;
+        // a run already coming up owns the engine until it has its Training;
+        // a second one started inside that window frees the first one's
+        if (engine.starting) {
+            note(op, { at: performance.now(), level: 'warn', text: 'a run is already starting' });
+            changed();
+            return;
+        }
         if (runOp && runOp !== op) {
             engine.stop();
         }
