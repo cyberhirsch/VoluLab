@@ -40,6 +40,42 @@ Saving always writes .vlp. Opening still accepts .ssproj: the container
 is identical, so an old project's splats, camera and view still load,
 and the parts that did not exist then come back at their defaults.
 
+## Training, actually training
+
+Two bugs, one hiding the other, and between them a run that died about a
+second after Start on every dataset.
+
+The loud one was wgpu. `popErrorScope()` resolves with `null` when
+nothing went wrong, and wgpu reads that through wasm-bindgen's
+`JsOption`, which counts only `undefined` as absent. So a clean scope
+arrived as a present error, fell through `Error::from_js` - which knows
+`GPUValidationError` and `GPUOutOfMemoryError` and nothing else - and hit
+its `panic!("Unexpected error")`. wgpu pops a scope after ordinary work,
+so this fired on the first clean one, and the panic named a line with
+nothing to do with the cause.
+
+Handing back `undefined` instead is the whole fix, and it lives in the
+host: `reportCleanErrorScopeAsAbsent` in the engine, the same shape of
+workaround as the subgroups directive beside it - a property of the JS
+side the Rust cannot see. A real error is an object and passes through
+untouched.
+
+Underneath it was cubecl. Autotune measures peak throughput before
+choosing a kernel, and every throughput runner times its sample with
+`block_on(client.sync())`. Wasm cannot block, so the probe panicked from
+cubecl-environment's reader: "Failed to read tensor data synchronously."
+The cubecl family now points at a fork branch that returns, on wasm, the
+no-operations no-duration value an unsupported feature already returns -
+a rate that is unknown rather than wrong. The rebuilt wasm is committed,
+as the trainer's artifacts always are.
+
+Neither bug could be seen past the other. The wgpu panic fired seventy-odd
+times and drowned everything; silencing it revealed the cubecl one, and
+only fixing both gets a first iteration. What found them was a local
+build with its name section kept, driven from a bare page against a zip
+served over http - the app's own picker being a native dialog, and the
+viewport's own device being loud enough to bury the trainer's.
+
 ## What a training run says while it works
 
 Training could sit on "loading dataset" indefinitely with nothing to

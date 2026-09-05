@@ -143,6 +143,32 @@ const enableSubgroupsInWgsl = (device: GPUDevice, onShaderError: (text: string) 
     };
 };
 
+/**
+ * Stop a clean error scope from reading as an error.
+ *
+ * `popErrorScope()` resolves with `null` when nothing went wrong. wgpu reads
+ * that through wasm-bindgen's `JsOption`, which counts only `undefined` as
+ * absent - so `null` arrives as a present error, falls through
+ * `Error::from_js` (which knows GPUValidationError and GPUOutOfMemoryError
+ * and nothing else) and hits its `panic!("Unexpected error")`. wgpu pops a
+ * scope after ordinary work, so this fires on the first clean one: training
+ * died a second after it started, with a panic naming a line that has
+ * nothing to do with the cause.
+ *
+ * Handing back `undefined` instead is the whole fix. It is the same shape of
+ * workaround as the subgroups directive above - a property of the JS side
+ * that the Rust cannot see - and it is safe on any browser: a real error is
+ * an object and passes through untouched.
+ */
+const reportCleanErrorScopeAsAbsent = () => {
+    const proto = (window as any).GPUDevice?.prototype;
+    const pop = proto?.popErrorScope;
+    if (!pop) return;
+    proto.popErrorScope = function popErrorScope(this: GPUDevice) {
+        return pop.call(this).then((error: unknown) => (error === null ? undefined : error));
+    };
+};
+
 // what the wasm side sounds like when it dies: the panic hook's output,
 // and the trap that follows it back out through the executor
 const WASM_FAILURE_RE = /panicked at|RuntimeError|unreachable executed|memory allocation of/i;
@@ -321,6 +347,7 @@ class BrushEngine {
         }
         const device = await adapter.requestDevice({ requiredFeatures: features, requiredLimits });
         enableSubgroupsInWgsl(device, text => this.write('error', text));
+        reportCleanErrorScopeAsAbsent();
 
         // wgpu's webgpu backend panics with a bare "Unexpected error" when
         // the device hands it something it did not expect, and the message
