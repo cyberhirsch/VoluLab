@@ -40,6 +40,39 @@ Saving always writes .vlp. Opening still accepts .ssproj: the container
 is identical, so an old project's splats, camera and view still load,
 and the parts that did not exist then come back at their defaults.
 
+## The refine that asked the wrong device
+
+Training reached its first refine and died there, with a panic that
+named a service and no reason: "Service WgpuServer<AutoCompiler> not
+initialized". Two bugs stood between a dataset and a second iteration,
+and the first hid the second.
+
+Autotune measures peak throughput before choosing a kernel, and every
+throughput runner timed its sample with a blocking sync. Wasm cannot
+block, so the probe panicked out of cubecl's reader about a second in -
+"Failed to read tensor data synchronously". The runners now skip the
+wait but keep the launch, so the device services a kernel touches still
+come up in the order they do on native; the measurement is reported as
+unknown rather than invented. Autotune on the web now picks kernels
+without a measured rate, which is a real cost and the right trade.
+
+Under that sat the actual bug, in brush's own `refine`. It needs a wgpu
+client, because `memory_cleanup` lives there rather than on `Device`,
+and it took one from `WgpuDevice::default()` - with the device the
+splats are on sitting one line above. On desktop that is invisible:
+brush runs on the default device, so the default and the real device
+are the same server. On the web the device arrives through
+`initExisting`, nothing is registered against the default, and the miss
+cannot heal itself, because creating a server needs a blocking call
+wasm does not have. A line that is correct everywhere else is fatal
+here.
+
+Finding it took making the panic say which device it wanted and which
+devices existed. Two ids came back, one holding no services at all, and
+the caller was one grep away. The lesson is the one the sort kernels
+already taught: a panic that names only its own location costs more
+than the fix it hides.
+
 ## Training, actually training
 
 Two bugs, one hiding the other, and between them a run that died about a
