@@ -1,9 +1,10 @@
 # What's next
 
 Everything outstanding, phased and ranked in the table below and then
-described in full: two pieces of work decided and not started, then the
-places where something built works and could work better. What is already
-built is in [CHANGELOG.md](CHANGELOG.md), with the reasoning kept.
+described in full: the work in flight, then relighting - decided and not
+started - then the places where something built works and could work
+better. What is already built is in [CHANGELOG.md](CHANGELOG.md), with the
+reasoning kept.
 
 Terms used below:
 
@@ -16,7 +17,7 @@ Terms used below:
 
 ## Phases, difficulty, and who should take it
 
-Most of this list is genuinely parallel. Five ordering constraints are not,
+Most of this list is genuinely parallel. Six ordering constraints are not,
 and each one costs rework if ignored - they are what the phases are for. The
 model column is a starting point rather than a rule; what makes something
 hard here is rarely the amount of code.
@@ -34,6 +35,10 @@ hard here is rarely the amount of code.
 | 4 | 3 | Colour beyond affine (gamma, contrast, curves) | Fable 5 |
 | 4 | 7 | A real temperature model | Opus 5 |
 | 4 | 15 | Rec.709 luma coefficients | Haiku 4.5 |
+| 5 | 16 | Relighting: density grid, lights, soft shadows | |
+| 5 | 17 | Relighting: occlusion and ambient light | |
+| 5 | 18 | Relighting: de-light by occlusion and a matched sun | |
+| 5 | 19 | Relighting: area and volume lights | |
 | — | 10 | Cleanup in a worker | Sonnet 5 |
 | — | 12 | Merge by dragging output onto input | Sonnet 5 |
 | — | 13 | A voxel export path | Sonnet 5 |
@@ -72,6 +77,18 @@ three rounds of everything shifting under the user; landing them together
 means one deliberate break with one explanation. Rec.709 in particular is a
 one-constant change that has been left alone precisely because it is not
 worth spending a visual regression on by itself.
+
+**Phase 5 is relighting, and its four items land in order.** Each one is
+a query against what the one before built. The grid and the per-gaussian
+light texture come first because everything after traces through them.
+Occlusion is next because ambient light is dimmed by it and de-lighting
+divides by it. De-light comes before the extra light types because it
+needs nothing more than occlusion, and it is what stops new light landing
+on top of old shadows. Area and volume lights come last, as more of what
+the first item already does. The phase needed the WebGPU viewport, which
+is done - the lighting runs in compute - and it is independent of phase 4:
+lighting is off by default and multiplies after the grade, so no existing
+grade changes how it looks.
 
 **The last four have no dependencies at all** and can be picked up whenever
 someone wants a clean, self-contained piece of work. Frame-stable decimate
@@ -235,6 +252,129 @@ gaussian rendering, no PLY round-trip on commit - and
 maintained. It is also the prerequisite for conditioning 4D gaussians in the
 shader, which is what would make scrubbing a TGH sequence cost the CPU
 nothing.
+
+---
+
+## Relighting — decided, not started
+
+The ask: light a capture with lights placed in VoluLab - point, spot, sun,
+area and volume lights, and ambient light - with soft shadows and
+occlusion. Light the scene itself blocks, not a look painted over it.
+
+**For the record, how Octane does it.** Octane 2026 path traces gaussians
+alongside meshes, so they cast and receive shadows and show up in
+reflections. Its relighting is a lighting mode on the splat node that
+scales each gaussian's captured colour by emitter power, distance falloff
+and light colour. It does not remove the lighting baked into the capture,
+and users report that light from a different direction than the capture
+looks wrong - a stylistic effect more than relighting. VoluLab has no path
+tracer and does not want one. What follows gets the same visibility
+effects from a structure the viewport can afford, and goes a step further
+on the baked lighting.
+
+**The mechanism: a density grid, and lighting computed once per gaussian.**
+
+- A compute pass splats every drawn gaussian's opacity into one 3D grid
+  over the whole scene, with mip levels. One grid for all objects, so one
+  capture shadows another; built from what the viewport draws, so deleting
+  a floater removes its shadow too.
+- A second compute pass lights each gaussian at its centre by tracing cones
+  from it through the grid, and writes the result into a per-gaussian light
+  texture laid out like `splatGrade`.
+- The splat vertex shader multiplies that in after `applyGrade` and before
+  `camExposure`: the grades correct the capture, the light lights the
+  corrected capture, the camera exposes the result. Both shader dialects
+  get the multiply, behind a define, so a device without lighting compiles
+  the old path.
+- Lighting recomputes when a light, an edit, a transform or a frame
+  changes - never for the camera, so orbiting costs nothing. The new light
+  is diffuse only: it scales each gaussian's colour, view-dependent part
+  included, and adds no highlights of its own.
+
+**How each piece falls out of it.**
+
+- **Soft shadows** — one cone per light per gaussian, as wide as the light
+  appears from it. Shadows stay sharp at contact and soften with distance,
+  and haze casts partial shadow, because the grid holds density rather
+  than a surface.
+- **Area lights** — analytic diffuse irradiance for rectangle, disk and
+  sphere lights, with the cone for visibility.
+- **Volume lights** — a selection-scoped node: select gaussians, such as a
+  lamp in the capture, and they become the emitter, clustered into a few
+  dozen point lights. *Select, then operate*, applied to light.
+- **Ambient light** — a flat colour or an HDRI reduced to spherical
+  harmonics, dimmed by occlusion.
+- **Occlusion** — a handful of wide cones per gaussian through the same
+  grid. It lives in world space, so it holds still as the camera moves,
+  which screen-space occlusion does not.
+
+Normals come from each gaussian's shortest axis, with the grid's density
+gradient deciding which side is outside. Where a gaussian is too round for
+its shortest axis to mean anything, the gradient is the normal.
+
+**Why a grid rather than shadow maps.** Shadow maps need a render per light
+(six for a point light), opacity rather than depth for semi-transparent
+gaussians, and filtering tricks for softness - and still say nothing about
+occlusion or volume lights. The grid answers every visibility question
+with one structure. It also runs in compute, which sidesteps the WebGPU
+bug above where our offscreen quad passes render nothing; screen-space
+occlusion would need exactly such a pass.
+
+**De-lighting, and why occlusion does most of it.** New light multiplied
+onto a capture leaves the old shadows under the new ones, so the captured
+lighting has to be divided out first. The light texture carries both at
+once: new lighting over captured lighting, one factor per gaussian.
+
+- **Occlusion is the automatic half.** Captures are best shot in overcast
+  or even light precisely so that what gets baked in is mostly sky light,
+  and how much sky reaches a point is what occlusion measures. Dividing by
+  it lifts the baked darkening in cavities and contact regions and leaves
+  open surfaces exactly as captured. For a well-shot capture that is most
+  of the de-light, with no input from the user.
+- **A matched sun is the manual half.** Direct sun baked in as hard
+  shadows is not occlusion. For a sunlit capture the user places a light
+  matching the original sun; its shadows and falloff go through the same
+  grid and are divided out too.
+- **Division needs guarding.** A floor on the divisor, so deep baked
+  shadows do not turn noise into colour, and a strength slider - bounce
+  light makes real cavities brighter than occlusion predicts, so full
+  strength over-brightens them.
+- **De-light against the scene as captured, relight against the scene as
+  edited.** A deleted car's shadow is baked into the road. Dividing by
+  occlusion that still includes the car removes that shadow, and relighting
+  without the car does not put it back. Cleanup's deleted floaters would
+  count as occluders too, though, so which scene de-light sees wants to be
+  a choice rather than a rule.
+- Learning true albedo during training is the proper fix. It means
+  teaching the Brush fork a lighting model, and it waits on phase 0 - a
+  training run seen end to end.
+
+**The genuine unknown** is in the first item: whether the engine's compute
+wrapper binds a 3D texture both for storage writes and for sampled reads
+with mips. If not, the grid lives in storage buffers and the interpolation
+is done by hand - slower, not wrong. WebGPU has no float atomics either
+way, so accumulation goes into a `u32` buffer in fixed point and a resolve
+pass turns it into density and mips.
+
+**Decisions not yet made.**
+
+1. **WebGL2.** Recommended: relighting is WebGPU-only, switched off on the
+   fallback with a message saying so. SOG export and training already are,
+   so it would not be the first.
+2. **Sharpness.** Lighting per gaussian means shadow edges are no sharper
+   than the gaussians, and a big background gaussian gets one flat value.
+   Per-pixel lighting would need depth and normals per pixel, which a
+   splat render does not give reliably. Accepted for now.
+3. **Large scenes.** One grid over a big outdoor capture gets coarse.
+   Fitting it to a box the user places is the cheap answer; nested grids
+   are the thorough one.
+4. **Sequences.** Every frame means a new grid and a new relight. The cost
+   wants measuring on a real sequence before anything promises smooth
+   scrubbing.
+5. **Export.** Image and video renders go through the same material and get
+   the light for free. Splat export would bake the factor into colour the
+   way grades are baked today, through `applyDC` and `applySH` - whether
+   that is the default is open.
 
 ---
 
