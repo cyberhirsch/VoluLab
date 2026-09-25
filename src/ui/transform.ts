@@ -176,6 +176,15 @@ class Transform extends Container {
             }
         });
 
+        // a light moves and aims like a camera, and has no scale either
+        events.on('light.selectionChanged', (light) => {
+            if (light) {
+                setEnabled(true, false);
+            } else {
+                setEnabled(!!events.invoke('selection') || !!events.invoke('camera.selected'), !events.invoke('camera.selected'));
+            }
+        });
+
         events.on('pivot.placed', (pivot: Pivot) => {
             updateUI(pivot);
         });

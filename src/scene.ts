@@ -21,6 +21,7 @@ import { DataProcessor } from './data-processor';
 import { Element, ElementType, ElementTypeList } from './element';
 import { Events } from './events';
 import { InfiniteGrid as Grid } from './infinite-grid';
+import { LightGizmos } from './light-gizmos';
 import { Outline } from './outline';
 import { PCApp } from './pc-app';
 import { SceneCameraGizmos } from './scene-camera-gizmos';
@@ -98,6 +99,7 @@ class Scene {
     camera: Camera;
     cameraPoseGizmos: CameraPoseGizmos;
     sceneCameraGizmos: SceneCameraGizmos;
+    lightGizmos: LightGizmos;
     splatOverlay: SplatOverlay;
     grid: Grid;
     outline: Outline;
@@ -240,6 +242,9 @@ class Scene {
 
         this.sceneCameraGizmos = new SceneCameraGizmos();
         this.add(this.sceneCameraGizmos);
+
+        this.lightGizmos = new LightGizmos();
+        this.add(this.lightGizmos);
 
         this.splatOverlay = new SplatOverlay();
         this.add(this.splatOverlay);

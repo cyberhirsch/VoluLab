@@ -5,6 +5,7 @@ import { BrowserFileSystem, BlobReadSource } from './io';
 import { recentFiles } from './recent-files';
 import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
+import { SceneLight } from './scene-light';
 import { Splat } from './splat';
 import { writeSplatFile } from './splat-serialize';
 import { Transform } from './transform';
@@ -164,6 +165,17 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 events.fire('camera.effects.refresh');
             }
 
+            // lights come back as light nodes, the same way; a project from
+            // before lights simply has none, and default scene lighting
+            if (Array.isArray(document.lights)) {
+                for (const stored of document.lights) {
+                    const op = events.invoke('light.addNode', stored?.settings?.kind);
+                    op?.output?.docDeserialize(stored);
+                }
+                events.fire('edit.changed');
+            }
+            events.fire('docDeserialize.lighting', document.lighting);
+
             // the session around the scene. Preferences are applied inside a
             // suspend window already opened by the caller, so applying them
             // cannot be captured back as user changes.
@@ -204,6 +216,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             const splats = events.invoke('scene.allSplats') as Splat[];
 
             const cameras = (events.invoke('camera.list') ?? []) as SceneCamera[];
+            const lights = (events.invoke('light.list') ?? []) as SceneLight[];
 
             const document = {
                 // .vlp starts its own numbering; an .ssproj is version 0 of a
@@ -218,6 +231,10 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
                 // the camera objects: pose, lens, lock and their animation
                 cameras: cameras.map(c => c.docSerialize()),
+
+                // the lights, and the lighting they share
+                lights: lights.map(l => l.docSerialize()),
+                lighting: events.invoke('docSerialize.lighting'),
 
                 // the session around the scene, so a project reopens in the
                 // workspace it was authored in

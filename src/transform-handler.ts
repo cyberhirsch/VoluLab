@@ -1,6 +1,7 @@
 import { CameraTransformHandler } from './camera-transform-handler';
 import { EntityTransformHandler } from './entity-transform-handler';
 import { Events } from './events';
+import { LightTransformHandler } from './light-transform-handler';
 import { registerPivotEvents } from './pivot';
 import { Splat } from './splat';
 import { SplatsTransformHandler } from './splats-transform-handler';
@@ -37,6 +38,7 @@ const registerTransformHandlerEvents = (events: Events) => {
     const entityTransformHandler = new EntityTransformHandler(events);
     const splatsTransformHandler = new SplatsTransformHandler(events);
     const cameraTransformHandler = new CameraTransformHandler(events);
+    const lightTransformHandler = new LightTransformHandler(events);
 
     const update = (splat: Splat) => {
         pop();
@@ -58,6 +60,18 @@ const registerTransformHandlerEvents = (events: Events) => {
         pop();
         if (camera) {
             push(cameraTransformHandler);
+        }
+    });
+
+    // and so is a light. Letting go of one only pops its own handler:
+    // selecting an object is what deselects the light, and by the time the
+    // light hears of it the object's handler is already on top
+    events.on('light.selectionChanged', (light: unknown) => {
+        if (light) {
+            pop();
+            push(lightTransformHandler);
+        } else if (transformHandlers[transformHandlers.length - 1] === lightTransformHandler) {
+            pop();
         }
     });
 

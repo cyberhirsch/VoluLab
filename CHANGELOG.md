@@ -9,6 +9,78 @@ months finds out why before they change it.
 
 ---
 
+## Relighting: light nodes, soft shadows, a density grid
+
+A light node puts a point, spot or sun light in the scene, and the scene
+casts its shadows onto itself. The first of the four relighting items in
+[task.md](task.md); the design and what is still to come are there.
+
+How it works, in one pass: a compute kernel splats every drawn gaussian's
+extinction into a pyramid of grid levels, a second kernel lights every
+gaussian once by tracing a cone from it toward each light through that
+pyramid, and the splat shader multiplies the result in after the grade and
+before exposure. The grid is rebuilt when the gaussians change - an edit, a
+transform, a new frame - and the lighting when a light or the grid does.
+Never for the camera. It is WebGPU only; on the WebGL2 fallback the lights
+are drawn, the node says why they light nothing, and the shader's lighting
+branch is simply never compiled in.
+
+What building it settled, and the traps on the way:
+
+- **The grid lives in storage buffers, not a 3D texture.** The question the
+  plan left open. The engine's shorthand WGSL declarations reflect every
+  storage texture as 2D, and its WebGPU texture creation gives a volume
+  texture one layer. Buffers are portable and fully under our control: a
+  `u32` accumulator, because WebGPU has atomics on integers and nothing
+  else, written in fixed point with stochastic rounding so faint gaussians
+  still add up, then resolved to float levels by hand. Trilinear sampling
+  is done in the kernel. Every kernel declares its bindings explicitly, the
+  way the engine's own sort does, and reads the RGBA32F transform palette as
+  unfilterable so it binds on adapters without float filtering.
+- **A gaussian too big to sample well deposits into a coarser level**, and
+  a push-down pass hands that to the finer cells. Without it a sky-sized
+  gaussian lands as a few dense clumps and casts black spots.
+- **The grid covers the gaussians, not their worst floater.** Its box is
+  the drawn centres with half a percent trimmed off each end of each axis,
+  so one stray gaussian far away does not stretch the cells over nothing.
+- **Every gaussian is lit on both sides of its flat axis.** A captured
+  gaussian has no outside - the density around a single-layer wall is the
+  same on both sides - so orienting normals from the grid cannot work. Both
+  sides are lit into two textures and the splat shader keeps the one facing
+  the camera. A wall seen from the room gets the room's light; a sun behind
+  it lands on the side nobody captured. The case that settles it is a room
+  lit through a window, where every one-sided scheme leaks sun onto the
+  inside of the walls.
+- **Shadow rays start two cells off the surface.** A surface deposits into
+  the two cells around it and a trilinear sample reaches one further, so at
+  one cell every surface dimmed itself by about a fifth, by an amount that
+  depended on where it sat inside its cell. The cost is a contact gap of
+  up to two cells before a shadow starts.
+- **Intensity and softness are relative.** Intensity is how bright a light
+  is at its aim point, softness is its size as a share of that distance, so
+  a lighting setup means the same on a capture of any scale.
+- **Nothing listens to history.** The relighter compares what is there
+  frame to frame - lights, deletions, transforms, data - so undo, bypass, a
+  gizmo drag and a sequence frame all reach it the same way.
+- **Two engine behaviours to know.** Compute uniforms and storage-buffer
+  writes land before the frame's commands run, so a kernel dispatched twice
+  in a frame with different uniforms needs two `Compute` objects - each grid
+  level has its own pull. And the light state is compared in doubles:
+  compared through a float copy, a captured-light value of 0.2 never equals
+  itself and the lighting reran every frame.
+
+Verified in headless Chromium on SwiftShader's WebGPU, against a synthetic
+capture of a floor and a floating sphere: the floor under a hard sun holds
+only the captured light while the open floor gets all of it, the sphere's
+far side stays dark, deleting the sphere removes its shadow and undo brings
+it back, a soft point light gives a penumbra and falloff, and hiding or
+undoing every light switches relighting off. The flags that work there are
+`--enable-unsafe-webgpu --enable-features=Vulkan --use-vulkan=swiftshader
+--use-angle=swiftshader`; `--use-webgpu-adapter=swiftshader` crashed the
+renderer mid-load. SwiftShader also rejects the bound pass's four RGBA32F
+targets, which leaves splats with an empty bound, so screenshots there need
+the bound set by hand - see Known limits in task.md.
+
 ## .vlp: the project format
 
 Projects are `.vlp` now. The inherited `.ssproj` described a scene this

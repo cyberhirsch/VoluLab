@@ -8,6 +8,7 @@ enum ElementType {
     model = 'model',
     splat = 'splat',
     voxel = 'voxel',
+    light = 'light',
     shadow = 'shadow',
     debug = 'debug',
     other = 'other'
@@ -18,6 +19,7 @@ const ElementTypeList = [
     ElementType.model,
     ElementType.splat,
     ElementType.voxel,
+    ElementType.light,
     ElementType.shadow,
     ElementType.debug,
     ElementType.other

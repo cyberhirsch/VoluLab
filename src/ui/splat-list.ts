@@ -4,6 +4,7 @@ import { SplatRenameOp } from '../edit-ops';
 import { Element, ElementType } from '../element';
 import { Events } from '../events';
 import { SceneCamera } from '../scene-camera';
+import { SceneLight } from '../scene-light';
 import { Splat } from '../splat';
 import deleteSvg from './svg/delete.svg';
 import hiddenSvg from './svg/hidden.svg';
@@ -244,7 +245,56 @@ class SplatList extends Container {
             });
         });
 
+        // Lights join them for the same reason. A light's eye switches it on
+        // and off: a hidden light lights nothing.
+        const lightItems = new Map<SceneLight, SplatItem>();
+
+        events.on('scene.elementAdded', (element: Element) => {
+            if (!(element instanceof SceneLight)) return;
+            const light = element as SceneLight;
+            const item = new SplatItem(light.name, edit);
+            item.class.add('light-item');
+            item.visible = light.visible;
+            this.append(item);
+            lightItems.set(light, item);
+
+            item.on('visible', () => {
+                light.visible = true;
+                light.changed();
+            });
+            item.on('invisible', () => {
+                light.visible = false;
+                light.changed();
+            });
+            item.on('rename', (value: string) => {
+                light.name = value;
+                light.changed();
+                events.fire('edit.changed');
+            });
+        });
+
+        events.on('light.selectionChanged', (light: SceneLight | null) => {
+            lightItems.forEach((value, key) => {
+                value.selected = key === light;
+            });
+        });
+
+        events.on('light.changed', (light: SceneLight) => {
+            const item = lightItems.get(light);
+            if (item) {
+                item.name = light.name;
+                item.visible = light.visible;
+            }
+        });
+
         events.on('scene.elementRemoved', (element: Element) => {
+            if (element instanceof SceneLight) {
+                const item = lightItems.get(element as SceneLight);
+                if (item) {
+                    this.remove(item);
+                    lightItems.delete(element as SceneLight);
+                }
+            }
             if (element instanceof SceneCamera) {
                 const item = cameraItems.get(element as SceneCamera);
                 if (item) {
@@ -311,6 +361,13 @@ class SplatList extends Container {
         });
 
         this.on('click', (item: SplatItem) => {
+            for (const [key, value] of lightItems) {
+                if (item === value) {
+                    events.fire('light.select', key);
+                    return;
+                }
+            }
+
             for (const [key, value] of cameraItems) {
                 if (item === value) {
                     // one highlight in the list, so picking a camera drops

@@ -8,6 +8,7 @@ import { IndexRanges } from './index-ranges';
 import { Pivot } from './pivot';
 import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
+import { SceneLight } from './scene-light';
 import { SelectQuery, resolveHits } from './select-query';
 import { SphereShape } from './sphere-shape';
 import { Splat } from './splat';
@@ -1446,6 +1447,104 @@ class CameraPoseOp {
     }
 }
 
+type LightKind = 'point' | 'spot' | 'sun';
+
+/**
+ * What a light node records. Everything is relative, because a capture
+ * arrives at whatever scale its solver felt like: intensity is how bright
+ * the light is where it is aimed, and softness is the light's size as a
+ * fraction of its distance to that point (or, for a sun, of a fixed wide
+ * angle). A light set up on one capture means the same on another.
+ */
+type LightSettings = {
+    kind: LightKind;
+    /** linear rgb */
+    color: [number, number, number];
+    /** 1 lights the aim point as brightly as the capture already was */
+    intensity: number;
+    /** 0 hard shadows, 1 very soft */
+    softness: number;
+    /** spot only: the full cone angle, in degrees */
+    spotAngle: number;
+    /** spot only: how much of the cone is soft edge, 0..1 */
+    spotBlend: number;
+};
+
+const defaultLightSettings = (): LightSettings => ({
+    kind: 'point',
+    color: [1, 1, 1],
+    intensity: 0.8,
+    softness: 0.15,
+    spotAngle: 45,
+    spotBlend: 0.3
+});
+
+/**
+ * A light node: one light, in the scene while the node is applied.
+ *
+ * The same shape as the camera node - it owns its scene object and puts it
+ * in or takes it out, so undo, redo and bypass decide which lights exist
+ * without the relighter having to read history. The relighter lights with
+ * whatever lights are in the scene.
+ */
+class LightOp {
+    name = 'light';
+
+    /** settings-only: nothing flows in */
+    inputs: Splat[] = [];
+    /** the light this node puts in the scene */
+    output: SceneLight;
+    scene: Scene;
+    settings: LightSettings;
+    bypassed?: boolean;
+
+    constructor(scene: Scene, output: SceneLight, settings: LightSettings) {
+        this.scene = scene;
+        this.output = output;
+        this.settings = settings;
+    }
+
+    /** what the graph writes under the node's title */
+    get sourceLabel() {
+        return this.output?.name ?? 'light';
+    }
+
+    async do() {
+        await this.scene.add(this.output);
+    }
+
+    undo() {
+        this.scene.remove(this.output);
+    }
+
+    destroy() {
+        this.output?.destroy();
+    }
+}
+
+/** Moving or aiming a light with the gizmo, as one undoable step. */
+class LightPoseOp {
+    name = 'lightPose';
+
+    light: SceneLight;
+    oldPose: { position: Vec3, target: Vec3 };
+    newPose: { position: Vec3, target: Vec3 };
+
+    constructor(light: SceneLight, oldPose: { position: Vec3, target: Vec3 }, newPose: { position: Vec3, target: Vec3 }) {
+        this.light = light;
+        this.oldPose = { position: oldPose.position.clone(), target: oldPose.target.clone() };
+        this.newPose = { position: newPose.position.clone(), target: newPose.target.clone() };
+    }
+
+    do() {
+        this.light.setPose(this.newPose);
+    }
+
+    undo() {
+        this.light.setPose(this.oldPose);
+    }
+}
+
 /** The record a train node keeps: what was trained, how, and what came out. */
 type TrainSettings = {
     datasetName: string;
@@ -1583,6 +1682,11 @@ export {
     CameraPoseOp,
     type CameraSettings,
     defaultCameraSettings,
+    LightOp,
+    LightPoseOp,
+    type LightKind,
+    type LightSettings,
+    defaultLightSettings,
     TrainOp,
     type TrainSettings,
     principalOp,

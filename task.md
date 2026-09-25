@@ -1,9 +1,9 @@
 # What's next
 
 Everything outstanding, phased and ranked in the table below and then
-described in full: the work in flight, then relighting - decided and not
-started - then the places where something built works and could work
-better. What is already built is in [CHANGELOG.md](CHANGELOG.md), with the
+described in full: the work in flight, then relighting - the first of
+its four items built - then the places where something built works and
+could work better. What is already built is in [CHANGELOG.md](CHANGELOG.md), with the
 reasoning kept.
 
 Terms used below:
@@ -35,7 +35,7 @@ hard here is rarely the amount of code.
 | 4 | 3 | Colour beyond affine (gamma, contrast, curves) | Fable 5 |
 | 4 | 7 | A real temperature model | Opus 5 |
 | 4 | 15 | Rec.709 luma coefficients | Haiku 4.5 |
-| 5 | 16 | Relighting: density grid, lights, soft shadows | |
+| 5 | 16 | Relighting: density grid, lights, soft shadows (built, needs a real-GPU run) | |
 | 5 | 17 | Relighting: occlusion and ambient light | |
 | 5 | 18 | Relighting: de-light by occlusion and a matched sun | |
 | 5 | 19 | Relighting: area and volume lights | |
@@ -255,11 +255,20 @@ nothing.
 
 ---
 
-## Relighting — decided, not started
+## Relighting — first item built, three to go
 
 The ask: light a capture with lights placed in VoluLab - point, spot, sun,
 area and volume lights, and ambient light - with soft shadows and
 occlusion. Light the scene itself blocks, not a look painted over it.
+
+**Where it stands.** Item 16 is built: light nodes for point, spot and sun
+lights, the density grid, soft shadows and the splat shader's multiply,
+with the traps written up in [CHANGELOG.md](CHANGELOG.md). It was verified
+in headless Chromium on SwiftShader's software WebGPU, numerically and by
+eye. What it still owes is a session on a real GPU with a real capture:
+timing for a grid build and a relight at a million gaussians and more, and
+a look at two-sided lighting on real surfaces. Items 17 to 19 are not
+started.
 
 **For the record, how Octane does it.** Octane 2026 path traces gaussians
 alongside meshes, so they cast and receive shadows and show up in
@@ -279,8 +288,9 @@ on the baked lighting.
   capture shadows another; built from what the viewport draws, so deleting
   a floater removes its shadow too.
 - A second compute pass lights each gaussian at its centre by tracing cones
-  from it through the grid, and writes the result into a per-gaussian light
-  texture laid out like `splatGrade`.
+  from it through the grid, and writes the result into two per-gaussian
+  light textures laid out like `splatGrade` - one for each side of the
+  gaussian's flat axis, see below.
 - The splat vertex shader multiplies that in after `applyGrade` and before
   `camExposure`: the grades correct the capture, the light lights the
   corrected capture, the camera exposes the result. Both shader dialects
@@ -308,9 +318,14 @@ on the baked lighting.
   grid. It lives in world space, so it holds still as the camera moves,
   which screen-space occlusion does not.
 
-Normals come from each gaussian's shortest axis, with the grid's density
-gradient deciding which side is outside. Where a gaussian is too round for
-its shortest axis to mean anything, the gradient is the normal.
+Normals come from each gaussian's shortest axis, and nothing decides which
+side is outside - nothing can. The density around a single-layer wall is
+the same on both sides, which is why the plan's grid-gradient orientation
+was dropped while building it. Both sides are lit instead, and the splat
+shader keeps the side facing the camera: a wall seen from the room gets
+the room's light, and a sun behind it lands on the side nobody captured.
+A gaussian too round for its shortest axis to mean anything is lit the
+same from every side.
 
 **Why a grid rather than shadow maps.** Shadow maps need a render per light
 (six for a point light), opacity rather than depth for semi-transparent
@@ -349,32 +364,48 @@ once: new lighting over captured lighting, one factor per gaussian.
   teaching the Brush fork a lighting model, and it waits on phase 0 - a
   training run seen end to end.
 
-**The genuine unknown** is in the first item: whether the engine's compute
-wrapper binds a 3D texture both for storage writes and for sampled reads
-with mips. If not, the grid lives in storage buffers and the interpolation
-is done by hand - slower, not wrong. WebGPU has no float atomics either
-way, so accumulation goes into a `u32` buffer in fixed point and a resolve
-pass turns it into density and mips.
+**The unknown, resolved.** The engine's shorthand WGSL declarations
+reflect every storage texture as 2D, and its WebGPU texture creation gives
+a volume texture a single layer, so the grid lives in storage buffers and
+the trilinear interpolation is done by hand. Accumulation goes into a `u32`
+buffer in fixed point, since WebGPU has no float atomics, and resolve,
+pull-up and push-down passes turn it into the density pyramid. A 3D
+texture with hardware filtering is still reachable through explicit bind
+formats and texture views, and is the first thing to try if lighting
+proves slow on real captures.
 
-**Decisions not yet made.**
+**Decisions, and what is still open.**
 
-1. **WebGL2.** Recommended: relighting is WebGPU-only, switched off on the
-   fallback with a message saying so. SOG export and training already are,
-   so it would not be the first.
-2. **Sharpness.** Lighting per gaussian means shadow edges are no sharper
-   than the gaussians, and a big background gaussian gets one flat value.
-   Per-pixel lighting would need depth and normals per pixel, which a
-   splat render does not give reliably. Accepted for now.
-3. **Large scenes.** One grid over a big outdoor capture gets coarse.
-   Fitting it to a box the user places is the cheap answer; nested grids
-   are the thorough one.
-4. **Sequences.** Every frame means a new grid and a new relight. The cost
-   wants measuring on a real sequence before anything promises smooth
-   scrubbing.
+1. **WebGL2 - decided.** Relighting is WebGPU-only. On the fallback the
+   lights are drawn and the light node says why they light nothing. SOG
+   export and training already needed WebGPU, so it was not the first.
+2. **Sharpness - built as proposed.** Lighting per gaussian means shadow
+   edges are no sharper than the gaussians, and a big background gaussian
+   gets one flat value. Shadow rays also start two cells off the surface,
+   so a contact shadow begins up to two cells late - any closer and every
+   surface dims itself.
+3. **Large scenes - partly answered.** The grid's box already trims half a
+   percent of gaussians off each end of each axis, so a few floaters do not
+   stretch it. For a big outdoor capture the cells still get coarse; a box
+   the user places is the cheap answer, nested grids the thorough one.
+4. **Sequences.** Every frame means a new grid and a new relight, and the
+   gaussians are repacked on the CPU at every frame swap. The cost wants
+   measuring on a real sequence before anything promises smooth scrubbing.
 5. **Export.** Image and video renders go through the same material and get
    the light for free. Splat export would bake the factor into colour the
    way grades are baked today, through `applyDC` and `applySH` - whether
    that is the default is open.
+
+**Left from item 16**, none of it blocking:
+
+- The grid's box and the gaussian packing run on the CPU. Grid rebuilds
+  during a drag are throttled to ten a second; on a large capture both
+  want moving to the GPU once they show up in a profile.
+- Lights are selected from the outliner or the graph. A click on a light's
+  gizmo in the viewport does not pick it, which cameras cannot do either.
+- Lights do not animate: no timeline track yet.
+- Changing a light's settings is not an undo step, the same as a camera
+  node's settings. Moving or aiming one with the gizmo is.
 
 ---
 
@@ -414,6 +445,15 @@ steady means ranking against something that does not move frame to frame.
 node rather than everything reachable from it, so it may re-resolve a node no
 path touches. Correct, and cheaper than a second ordering to keep consistent.
 If it becomes slow, walk `inputs` backwards from the changed node.
+
+**The bound pass needs 64 bytes of colour targets per sample.**
+`src/data-processor/calc-bound.ts` renders into four RGBA32F targets.
+WebGPU only guarantees 32 bytes per sample. The engine asks for whatever
+the adapter offers and real GPUs offer more, but an adapter at the minimum
+rejects the pass - SwiftShader is one, found while testing relighting
+headless - and every splat is left with an empty bound, so culling hides
+it and camera framing breaks. Splitting the pass in two, or RGBA16F where
+the precision allows, would fit the minimum.
 
 **TGH frames are evaluated on the main thread.** A million active gaussians
 per frame costs seconds of CPU per scrub. A worker and a small frame cache

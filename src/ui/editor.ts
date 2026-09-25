@@ -11,6 +11,7 @@ import { ExportPopup } from './export-popup';
 import { GraphPanel } from './graph-panel';
 import { ImageSettingsDialog } from './image-settings-dialog';
 import { ImportFace } from './import-face';
+import { LightFace } from './light-face';
 import { i18n } from './localization';
 import { Menu } from './menu';
 import { NodePanel } from './node-panel';
@@ -136,6 +137,9 @@ class EditorUI {
         // the camera node's exposure, depth of field and lens
         const cameraFace = new CameraFace(events);
         nodePanel.mount('camera', cameraFace.dom);
+        // a light node's light, and the scene lighting every light shares
+        const lightFace = new LightFace(events);
+        nodePanel.mount('light', lightFace.dom);
         // the colour controls are a node's parameters now, so they live inside
         // the node pane rather than in a pane of their own
         nodePanel.mount('colour', colorPanel.dom);

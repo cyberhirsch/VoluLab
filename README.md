@@ -42,6 +42,10 @@ metric and level.
 **Grade it.** Tint, temperature, saturation, brightness, black and white point,
 and transparency, applied to the scene rather than baked in afterwards.
 
+**Light it.** Place point, spot and sun lights and the scene casts their
+shadows onto itself, soft or hard, with a control for how much of the lighting
+baked into the capture to keep. Relighting needs a WebGPU browser.
+
 **Move the camera.** Store camera poses, lay them out on a timeline and let
 VoluLab interpolate between them along a spline. Orbit and fly navigation for
 setting shots up.

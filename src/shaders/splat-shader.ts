@@ -31,8 +31,29 @@ float camDofMix = 0.0;
 void modifySplatCenter(inout vec3 center) {
 }
 
+// Relighting: the gaussian's flat axis, in its own space. The relighter
+// lights both sides of it and the forward pass keeps the side facing the
+// camera - see relight-shaders.ts. Taken here because this is where the
+// rotation and scale are to hand, and before the depth of field widens the
+// scale. Same axis and tie-break as flatAxis() in the lighting kernel.
+#ifdef SPLAT_LIGHTING
+    vec3 splatLightAxis = vec3(0.0, 0.0, 1.0);
+
+    vec3 relightFlatAxis(vec4 q, vec3 s) {
+        vec3 e = s.x < s.y ? (s.x < s.z ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.0, 1.0))
+                           : (s.y < s.z ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0));
+        // rotate by q = (x, y, z, w)
+        vec3 t = 2.0 * cross(q.xyz, e);
+        return e + q.w * t + cross(q.xyz, t);
+    }
+#endif
+
 void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout vec4 rotation, inout vec3 scale) {
     camDofAlpha = 1.0;
+
+    #ifdef SPLAT_LIGHTING
+        splatLightAxis = relightFlatAxis(rotation, scale);
+    #endif
 
     // picking must stay sharp - a defocused splat would answer for a
     // pixel it only covers because of the blur
@@ -95,6 +116,12 @@ uniform float clrAlpha;
 
 uniform highp usampler2D splatGrade;    // per-gaussian index into the grade palette
 uniform sampler2D gradePalette;         // palette of colour grades
+
+#ifdef SPLAT_LIGHTING
+    // relit light, one texture per side of each gaussian's flat axis
+    uniform sampler2D splatLightPlus;
+    uniform sampler2D splatLightMinus;
+#endif
 
 // Two grades, in order: whatever colour nodes have put on this gaussian, then
 // the object's own.
@@ -242,6 +269,20 @@ void main(void) {
         // the whole grade is one matrix and one translation - saturation is a
         // linear map, so it folds in rather than following on afterwards
         color = applyGrade(color);
+
+        // relit light lands after the grade and before exposure: the grades
+        // correct the capture, the light lights the corrected capture, and
+        // the camera exposes the result. Of the two sides the relighter lit,
+        // the one facing the camera is the one being seen.
+        #ifdef SPLAT_LIGHTING
+        {
+            vec3 viewDir = center.view * mat3(center.modelView);
+            vec3 lit = dot(splatLightAxis, viewDir) <= 0.0
+                ? texelFetch(splatLightPlus, splat.uv, 0).rgb
+                : texelFetch(splatLightMinus, splat.uv, 0).rgb;
+            color.xyz *= lit;
+        }
+        #endif
 
         // don't allow out-of-range alpha
         color.a = clamp(color.a, 0.0, 1.0);
@@ -457,8 +498,31 @@ var<private> camDofMix: f32 = 0.0;
 fn modifySplatCenter(center: ptr<function, vec3f>) {
 }
 
+// Relighting: the gaussian's flat axis - see the GLSL twin.
+#ifdef SPLAT_LIGHTING
+    var<private> splatLightAxis: vec3f = vec3f(0.0, 0.0, 1.0);
+
+    fn relightFlatAxis(q: vec4f, s: vec3f) -> vec3f {
+        var e = vec3f(0.0, 0.0, 1.0);
+        if (s.x < s.y) {
+            if (s.x < s.z) {
+                e = vec3f(1.0, 0.0, 0.0);
+            }
+        } else if (s.y < s.z) {
+            e = vec3f(0.0, 1.0, 0.0);
+        }
+        // rotate by q = (x, y, z, w)
+        let t = 2.0 * cross(q.xyz, e);
+        return e + q.w * t + cross(q.xyz, t);
+    }
+#endif
+
 fn modifySplatRotationScale(originalCenter: vec3f, modifiedCenter: vec3f, rotation: ptr<function, vec4f>, scale: ptr<function, vec3f>) {
     camDofAlpha = 1.0;
+
+    #ifdef SPLAT_LIGHTING
+        splatLightAxis = relightFlatAxis(*rotation, *scale);
+    #endif
 
     // picking must stay sharp
     #ifndef PICK_PASS
@@ -513,6 +577,12 @@ uniform clrAlpha: f32;
 
 var splatGrade: texture_2d<u32>;    // per-gaussian index into the grade palette
 var gradePalette: texture_2d<f32>;  // palette of colour grades
+
+#ifdef SPLAT_LIGHTING
+    // relit light, one texture per side of each gaussian's flat axis
+    var splatLightPlus: texture_2d<f32>;
+    var splatLightMinus: texture_2d<f32>;
+#endif
 
 varying vTexCoordFlags: vec4f;      // xy: texCoord, z: selected, w: locked
 varying vColor: vec4f;
@@ -644,6 +714,20 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
 
         // the whole grade is one matrix and one translation
         color = applyGrade(color);
+
+        // relit light: after the grade, before exposure, the side facing
+        // the camera - see the GLSL twin
+        #ifdef SPLAT_LIGHTING
+            let lightView = mat3x3f(center.modelView[0].xyz, center.modelView[1].xyz, center.modelView[2].xyz);
+            let viewDir = center.view * lightView;
+            var lit: vec3f;
+            if (dot(splatLightAxis, viewDir) <= 0.0) {
+                lit = textureLoad(splatLightPlus, splat.uv, 0).rgb;
+            } else {
+                lit = textureLoad(splatLightMinus, splat.uv, 0).rgb;
+            }
+            color = vec4f(color.xyz * lit, color.a);
+        #endif
 
         color.a = clamp(color.a, 0.0, 1.0);
 

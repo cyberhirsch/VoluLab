@@ -6,7 +6,8 @@
 
 #training-face,
 #import-face,
-#camera-face {
+#camera-face,
+#light-face {
     display: flex;
     flex-direction: column;
     background-color: $ink-1;
@@ -73,7 +74,8 @@
             color: $ink-5;
         }
 
-        input {
+        input,
+        select {
             width: 90px;
             background-color: $ink-0;
             border: 1px solid $ink-3;

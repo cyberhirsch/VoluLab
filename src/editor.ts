@@ -5,14 +5,17 @@ import { registerCameraEffects } from './camera-effects';
 import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp, defaultCameraSettings } from './edit-ops';
+import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
 import type { GridPlane } from './infinite-grid';
 import { MappedReadFileSystem } from './io';
+import { registerLightViewEvents } from './light-view';
+import { registerRelighting } from './relight/relighter';
 import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
+import { SceneLight } from './scene-light';
 import { RangeQuery, SelectQuery } from './select-query';
 import { Splat } from './splat';
 import { writeSplatFile } from './splat-serialize';
@@ -1043,6 +1046,47 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     /**
+     * A light node: one light, aimed at what you are looking at. It starts
+     * above and to one side of the view rather than at the eye, so the first
+     * thing it shows is a shadow, not a headlamp's flat light.
+     */
+    events.function('light.addNode', (kind: LightKind = 'point') => {
+        const settings = defaultLightSettings();
+        settings.kind = kind;
+
+        const count = (events.invoke('light.list') as unknown[]).length;
+        const light = new SceneLight(`light ${count + 1}`, settings);
+
+        // the pose arrives as plain numbers, not vectors
+        const pose = events.invoke('camera.getPose');
+        const target = pose ? new Vec3(pose.target.x, pose.target.y, pose.target.z) : scene.bound.center.clone();
+        const eye = pose ? new Vec3(pose.position.x, pose.position.y, pose.position.z) : target.clone().add(new Vec3(0, 0, 1));
+        const distance = Math.max(1e-3, eye.distance(target));
+
+        // from the view: right, up, and a little back toward the camera
+        const forward = new Vec3().sub2(target, eye).normalize();
+        const right = new Vec3().cross(forward, Vec3.UP);
+        if (right.length() < 1e-6) right.set(1, 0, 0);
+        right.normalize();
+        const offset = new Vec3()
+        .addScaled(right, 0.6)
+        .addScaled(Vec3.UP, 1.0)
+        .addScaled(forward, -0.4)
+        .normalize()
+        .mulScalar(distance);
+
+        light.position.copy(target).add(offset);
+        light.target.copy(target);
+
+        const op = new LightOp(scene, light, settings);
+        const index = history().cursor;
+        events.fire('edit.add', op);
+        openInGraph(index);
+        events.fire('workspace.reveal', 'node');
+        return op;
+    });
+
+    /**
      * A dataset entering the graph as an import node of its own. Nothing
      * is wired automatically - the user drags its output into a train
      * node's input.
@@ -1075,6 +1119,8 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     registerTraining(events, scene);
     registerCameraEffects(events, scene);
     registerCameraViewEvents(events, scene);
+    registerLightViewEvents(events, scene);
+    registerRelighting(events, scene);
 
     /**
      * Resample an object onto a grid.

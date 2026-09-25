@@ -1,7 +1,8 @@
 import { Container } from '@playcanvas/pcui';
 
-import { AnimTrackEditOp, EditOp, MultiOp, PlacePivotOp, SelectOp, SelectStep, ShapeTransformOp, principalOp } from '../edit-ops';
+import { AnimTrackEditOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, SelectOp, SelectStep, ShapeTransformOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
+import { SceneLight } from '../scene-light';
 import { describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
 import { MenuEntry, contributeMenuItems, showContextMenu } from './context-menu';
@@ -76,6 +77,8 @@ const OP_LABELS: Record<string, string> = {
     addVoxels: 'import voxels',
     dataset: 'import',
     camera: 'camera',
+    light: 'light',
+    lightPose: 'aim light',
     train: 'train',
     crop: 'crop',
     cleanup: 'cleanup',
@@ -134,7 +137,8 @@ const releasePointer = (el: Element, pointerId: number) => {
 const isGestureOnly = (op: EditOp) => {
     return op instanceof AnimTrackEditOp ||
         op instanceof PlacePivotOp ||
-        op instanceof ShapeTransformOp;
+        op instanceof ShapeTransformOp ||
+        op instanceof LightPoseOp;
 };
 
 // The object an op belongs to, or null for ops that act on the scene at large
@@ -901,7 +905,8 @@ class GraphPanel extends Container {
                     return;
                 }
 
-                const splat = node.splat;
+                // a light's lane holds a light, not an object to edit
+                const splat = node.splat instanceof SceneLight ? null : node.splat;
                 const items: MenuEntry[] = splat ? [
                     {
                         label: 'select',
@@ -1005,7 +1010,13 @@ class GraphPanel extends Container {
                 // a drag could move all of it. Releasing without having dragged
                 // means it was a click after all, which picks out just this one.
                 if (!extend && this.selection.size > 1) this.setSelection([node.key]);
-                if (node.splat) this.events.fire('selection', node.splat);
+                // a light node's lane is its light, which is selected as a
+                // light rather than as an object
+                if (node.splat instanceof SceneLight) {
+                    this.events.fire('light.select', node.splat);
+                } else if (node.splat) {
+                    this.events.fire('selection', node.splat);
+                }
             };
 
             // listeners before the capture: capturing can fail, and a drag that
@@ -1107,6 +1118,12 @@ class GraphPanel extends Container {
                 // so it needs nothing selected
                 label: 'add camera node',
                 action: () => this.events.invoke('camera.addNode')
+            },
+            {
+                // a light lights whatever is there, so like the camera it
+                // needs nothing selected
+                label: 'add light node',
+                action: () => this.events.invoke('light.addNode')
             },
             {
                 label: 'add select node',
