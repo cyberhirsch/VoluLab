@@ -44,8 +44,11 @@ and transparency, applied to the scene rather than baked in afterwards.
 
 **Light it.** Place point, spot and sun lights and the scene casts their
 shadows onto itself, soft or hard. An ambient light, flat or from an HDRI,
-fills in, darkening where things meet. A control sets how much of the
-lighting baked into the capture to keep. Relighting needs a WebGPU browser.
+fills in, darkening where things meet. De-light takes the capture's own
+light out first, so new light doesn't land on old shadows. It handles the
+sky on its own, and a sunny capture's sun once you place a light where it
+was. Controls set how much of the baked lighting to keep and how hard to
+de-light. Relighting needs a WebGPU browser.
 
 **Move the camera.** Store camera poses, lay them out on a timeline and let
 VoluLab interpolate between them along a spline. Orbit and fly navigation for

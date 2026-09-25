@@ -112,6 +112,16 @@ fn splatWorld(uv: vec2i) -> mat4x4f {
     return uniforms.matrixModel * transpose(t);
 }
 
+// Where the capture put the gaussian: the object's model matrix alone,
+// before any palette transform moved it. De-light asks about this one,
+// because the light baked into a gaussian's colour fell on it there.
+fn worldOf(uv: vec2i, captured: bool) -> mat4x4f {
+    if (captured) {
+        return uniforms.matrixModel;
+    }
+    return splatWorld(uv);
+}
+
 fn splatIndex(wid: vec3u, nwg: vec3u, lid: u32) -> u32 {
     return (wid.y * nwg.x + wid.x) * WORKGROUP + lid;
 }
@@ -124,14 +134,12 @@ fn splatStateBits(uv: vec2i) -> u32 {
     return u32(textureLoad(splatState, uv, 0).r * 255.0 + 0.5);
 }
 
-fn isDeleted(uv: vec2i) -> bool {
-    return (splatStateBits(uv) & 4u) != 0u;
+fn hasState(uv: vec2i, mask: u32) -> bool {
+    return (splatStateBits(uv) & mask) != 0u;
 }
 
-// deleted, or hidden - which this app records as locked, and draws as all
-// but invisible. Neither should cast a shadow.
-fn isGone(uv: vec2i) -> bool {
-    return (splatStateBits(uv) & 6u) != 0u;
+fn isDeleted(uv: vec2i) -> bool {
+    return hasState(uv, 4u);
 }
 `;
 
@@ -150,6 +158,11 @@ fn isGone(uv: vec2i) -> bool {
  * instead, where the same samples cover it; the push-down kernel hands that
  * back to the finer levels afterwards. Without that, a sky-sized gaussian
  * would land as a few dense clumps and cast black spots.
+ *
+ * The same kernel builds both kinds of grid. The scene's grid takes every
+ * drawn gaussian where it is now. De-light's grid for one object takes
+ * that object's gaussians where the capture put them, and deleted ones too
+ * unless told otherwise - which gaussians stay out is a mask of state bits.
  */
 const depositSource = /* wgsl */`
 @group(0) @binding(0) var<storage, read> gaussians: array<vec4f>;
@@ -163,7 +176,7 @@ struct Uniforms {
     matrixModel: mat4x4f,
     gridOrigin: vec4f,      // xyz: grid min corner, w: finest cell size
     gridDims: vec4u,        // xyz: finest dims, w: level count
-    counts: vec4u           // x: gaussians, y: texture width
+    counts: vec4u           // x: gaussians, y: texture width, z: state bits that keep a gaussian out, w: 1 where the capture put it
 };
 @group(0) @binding(6) var<uniform> uniforms: Uniforms;
 
@@ -224,7 +237,7 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, 
     }
 
     let uv = splatUV(i);
-    if (isGone(uv)) {
+    if (hasState(uv, uniforms.counts.z)) {
         return;
     }
 
@@ -236,7 +249,7 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, 
     let g1 = gaussians[i * 3u + 1u];
     let g2 = gaussians[i * 3u + 2u];
 
-    let world = splatWorld(uv);
+    let world = worldOf(uv, uniforms.counts.w != 0u);
     let m3 = mat3x3f(world[0].xyz, world[1].xyz, world[2].xyz);
     let rot = quatToMat3(g1);
 
@@ -475,12 +488,12 @@ struct Surface {
     flatness: f32
 };
 
-fn surfaceOf(i: u32, uv: vec2i) -> Surface {
+// world: where the gaussian is taken to be - see splatWorld and worldOf
+fn surfaceOf(i: u32, world: mat4x4f) -> Surface {
     let g0 = gaussians[i * 3u];
     let g1 = gaussians[i * 3u + 1u];
     let g2 = gaussians[i * 3u + 2u];
 
-    let world = splatWorld(uv);
     let m3 = mat3x3f(world[0].xyz, world[1].xyz, world[2].xyz);
 
     // Normals take the inverse transpose; the cofactor matrix is that times
@@ -508,6 +521,19 @@ fn safeNormalize(v: vec3f, fallback: vec3f) -> vec3f {
     let l = length(v);
     return select(fallback, v / l, l > 1e-6);
 }
+
+// an orthonormal frame around n (Duff et al., "Building an Orthonormal
+// Basis, Revisited")
+fn frameAround(n: vec3f) -> mat3x3f {
+    let s = select(-1.0, 1.0, n.z >= 0.0);
+    let a = -1.0 / (s + n.z);
+    let b = n.x * n.y * a;
+    return mat3x3f(
+        vec3f(1.0 + s * n.x * n.x * a, s * b, -s * n.x),
+        vec3f(b, s + n.y * n.y * a, -n.y),
+        n
+    );
+}
 `;
 
 /**
@@ -525,6 +551,12 @@ fn safeNormalize(v: vec3f, fallback: vec3f) -> vec3f {
  * what it is for is the darkening where things meet. So only what lies
  * within the range counts, and it counts for less the farther it is.
  *
+ * Run twice over, for two questions. Against the scene's grid, it is how
+ * open each gaussian is now, which the ambient light is dimmed by. Against
+ * an object's captured grid, from where the capture put each gaussian, it
+ * is how open each one was when it was shot - how much sky the capture's
+ * own light had - which de-light divides out.
+ *
  * Output per side: xyz the bent normal, w the fraction open.
  */
 const occlusionSource = /* wgsl */`
@@ -541,7 +573,7 @@ struct Uniforms {
     matrixModel: mat4x4f,
     gridOrigin: vec4f,      // xyz: grid min corner, w: finest cell size
     gridDims: vec4u,        // xyz: finest dims, w: level count
-    counts: vec4u,          // x: gaussians, y: texture width
+    counts: vec4u,          // x: gaussians, y: texture width, w: 1 where the capture put it
     params: vec4f           // x: range in world units, y: ray offset in cells, z: cone tan(half angle)
 };
 @group(0) @binding(8) var<uniform> uniforms: Uniforms;
@@ -578,19 +610,6 @@ fn coneOcclusion(origin: vec3f, dir: vec3f, tanHalf: f32, range: f32, start: f32
     return exp(-tau);
 }
 
-// an orthonormal frame around n (Duff et al., "Building an Orthonormal
-// Basis, Revisited")
-fn frameAround(n: vec3f) -> mat3x3f {
-    let s = select(-1.0, 1.0, n.z >= 0.0);
-    let a = -1.0 / (s + n.z);
-    let b = n.x * n.y * a;
-    return mat3x3f(
-        vec3f(1.0 + s * n.x * n.x * a, s * b, -s * n.x),
-        vec3f(b, s + n.y * n.y * a, -n.y),
-        n
-    );
-}
-
 @compute @workgroup_size(WORKGROUP)
 fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, @builtin(local_invocation_index) lid: u32) {
     let i = splatIndex(wid, nwg, lid);
@@ -598,14 +617,19 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, 
         return;
     }
 
+    // A deleted gaussian is never drawn, so the scene's occlusion skips it.
+    // The capture's does not: an undo brings the gaussian back without
+    // changing anything the captured grid was built from, so nothing would
+    // trace it again.
     let uv = splatUV(i);
-    if (isDeleted(uv)) {
+    let captured = uniforms.counts.w != 0u;
+    if (!captured && isDeleted(uv)) {
         textureStore(occlusionPlus, uv, vec4f(0.0, 1.0, 0.0, 1.0));
         textureStore(occlusionMinus, uv, vec4f(0.0, -1.0, 0.0, 1.0));
         return;
     }
 
-    let surface = surfaceOf(i, uv);
+    let surface = surfaceOf(i, worldOf(uv, captured));
     let h0 = uniforms.gridOrigin.w;
     let range = max(uniforms.params.x, h0);
     let offset = uniforms.params.y * h0;
@@ -654,63 +678,12 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, 
 }
 `;
 
-/**
- * Lighting: each gaussian, lit once, from both sides of its flat axis.
- *
- * A captured gaussian has no outside. Its flat axis gives a normal up to
- * sign, and the density around a single-layer wall is the same on both
- * sides, so no amount of looking at the grid says which side the camera
- * was on. So both sides are lit and stored - "plus" along the axis, "minus"
- * against it - and the splat shader picks the one facing the viewer. A wall
- * seen from the room gets the room side's light; the sun behind that wall
- * lands on the side nobody captured.
- *
- * Per light, only the side facing it is traced: its shadow ray starts just
- * off that side and walks the grid toward the light as a cone as wide as
- * the light looks from here. Round gaussians - fog, fuzz - have no useful
- * axis, and are lit the same from every side.
- *
- * Ambient light is added last: the irradiance the ambient coefficients give
- * each side's bent normal, times how open that side is.
- *
- * Light records are four vec4s:
- *   0: xyz position, or the direction toward a sun; w kind (0 point, 1 spot, 2 sun)
- *   1: rgb colour times intensity; w emitter radius, or the sun's tan(half angle)
- *   2: xyz spot axis; w cos(outer half angle)
- *   3: x cos(inner half angle); y falloff reference distance squared
- */
-const lightingSource = /* wgsl */`
-@group(0) @binding(0) var<storage, read> gaussians: array<vec4f>;
-@group(0) @binding(1) var<storage, read> density: array<f32>;
-@group(0) @binding(2) var<storage, read> levels: array<vec4u>;
-@group(0) @binding(3) var<storage, read> lights: array<vec4f>;
-@group(0) @binding(4) var splatState: texture_2d<f32>;
-@group(0) @binding(5) var splatTransform: texture_2d<u32>;
-@group(0) @binding(6) var transformPalette: texture_2d<f32>;
-@group(0) @binding(7) var lightPlus: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(8) var lightMinus: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(9) var occlusionPlus: texture_2d<f32>;
-@group(0) @binding(10) var occlusionMinus: texture_2d<f32>;
-
-struct Uniforms {
-    matrixModel: mat4x4f,
-    gridOrigin: vec4f,      // xyz: grid min corner, w: finest cell size
-    gridDims: vec4u,        // xyz: finest dims, w: level count
-    counts: vec4u,          // x: gaussians, y: texture width, z: lights
-    params: vec4f,          // x: captured light, y: wrap, z: ray offset in cells
-    ambient: vec4f          // x: 1 when there is ambient light, y: occlusion strength
-};
-@group(0) @binding(11) var<uniform> uniforms: Uniforms;
-
-${gaussianCommon}
-${gridSampling}
-${surfaceCommon}
-
 // Transmittance along a cone. The cone's width picks the level, so a soft
 // light reads coarse cells and a hard one reads fine ones. Where a coarse
 // level reads empty, a whole stretch is known to be empty and is skipped:
 // a coarse cell is the mean of its non-negative children, so zero there is
 // zero all the way down.
+const coneTraceSource = /* wgsl */`
 fn coneTrace(origin: vec3f, dir: vec3f, tanHalf: f32, maxDist: f32, start: f32, rise: f32) -> f32 {
     let h0 = uniforms.gridOrigin.w;
     let span = clipToGrid(origin, dir);
@@ -750,6 +723,174 @@ fn coneTrace(origin: vec3f, dir: vec3f, tanHalf: f32, maxDist: f32, start: f32, 
     return exp(-tau);
 }
 
+// The grid blurs every occluder by a cell or two, so a shadow traced through
+// it comes out that much wider than the real one. Lighting can live with
+// that; de-light cannot, since dividing by the wider shadow lifts a bright
+// ring round the real one. So de-light takes the blur back out: a point is
+// as lit as the best of six rays from around it, the given distance off to
+// the side - the shadow shrunk from its edges. A point the middle ray
+// already sees lit costs nothing more.
+fn erodedTrace(origin: vec3f, dir: vec3f, tanHalf: f32, maxDist: f32, start: f32, rise: f32, radius: f32) -> f32 {
+    var best = coneTrace(origin, dir, tanHalf, maxDist, start, rise);
+    if (radius <= 0.0) {
+        return best;
+    }
+    let frame = frameAround(dir);
+    for (var k = 0u; k < 6u && best < 0.999; k++) {
+        let a = 1.0471976 * f32(k);
+        let side = origin + (frame[0] * cos(a) + frame[1] * sin(a)) * radius;
+        best = max(best, coneTrace(side, dir, tanHalf, maxDist, start, rise));
+    }
+    return best;
+}
+`;
+
+// What one light record delivers to each side of a surface: wrapped Lambert
+// on the side facing it, the wrap's tail on the other, both times what the
+// cone toward the light lets through. The lighting and de-light kernels ask
+// the same question of different grids, so both use this.
+const lightFromSource = /* wgsl */`
+struct TwoSides {
+    plus: vec3f,
+    minus: vec3f
+};
+
+// erode: see erodedTrace; 0 for a plain trace
+fn lightFrom(li: u32, surface: Surface, erode: f32) -> TwoSides {
+    var sides = TwoSides(vec3f(0.0), vec3f(0.0));
+
+    let la = lights[li * 4u];
+    let lb = lights[li * 4u + 1u];
+    let lc = lights[li * 4u + 2u];
+    let ld = lights[li * 4u + 3u];
+    let kind = u32(la.w + 0.5);
+    let p = surface.p;
+    let n = surface.n;
+    let flatness = surface.flatness;
+
+    var toLight: vec3f;
+    var falloff = 1.0;
+    var tanHalf: f32;
+    var maxDist: f32;
+
+    if (kind == 2u) {
+        toLight = la.xyz;
+        tanHalf = lb.w;
+        maxDist = 3.0e38;
+    } else {
+        let d = la.xyz - p;
+        let dist = max(length(d), 1e-6);
+        toLight = d / dist;
+        let radius = lb.w;
+        falloff = ld.y / max(dist * dist, max(radius * radius, 1e-12));
+        tanHalf = radius / dist;
+        maxDist = dist - radius;
+        if (kind == 1u) {
+            falloff *= smoothstep(lc.w, ld.x, dot(-toLight, lc.xyz));
+        }
+    }
+
+    let energy = lb.rgb * falloff;
+    if (max(energy.r, max(energy.g, energy.b)) <= 1e-5) {
+        return sides;
+    }
+
+    let wrap = uniforms.params.y;
+    let ndl = dot(n, toLight);
+    let side = select(-1.0, 1.0, ndl >= 0.0);
+    let facing = abs(ndl);
+
+    // wrapped Lambert on the lit side; the wrap's tail on the far side
+    let near = (facing + wrap) / (1.0 + wrap);
+    let far = max(0.0, wrap - facing) / (1.0 + wrap);
+
+    // Leave a few cells off the lit side, along the ray itself: as far along
+    // it as it takes to climb that high off a flat gaussian, so the ray is
+    // still the one from the gaussian and the shadow falls where the real
+    // one does. Leaving along the axis instead would move every shadow
+    // toward the light by the height over the slope - which is what dividing
+    // by a shadow shows up, as a bright crescent on one side of it and a
+    // dark one on the other. Capped for grazing light, where the climb would
+    // take a long way; a round gaussian has no surface to climb from.
+    let offset = uniforms.params.z * uniforms.gridOrigin.w;
+    let rise = mix(1.0, facing, flatness);
+    let along = offset / max(rise, 0.25);
+    let visibility = erodedTrace(p + toLight * along, toLight, tanHalf, max(maxDist - along, 0.0), along * rise, rise, erode);
+
+    let lit = energy * visibility;
+    let litNear = lit * mix(0.5, near, flatness);
+    let litFar = lit * mix(0.5, far, flatness);
+    if (side > 0.0) {
+        sides.plus = litNear;
+        sides.minus = litFar;
+    } else {
+        sides.plus = litFar;
+        sides.minus = litNear;
+    }
+    return sides;
+}
+`;
+
+/**
+ * Lighting: each gaussian, lit once, from both sides of its flat axis.
+ *
+ * A captured gaussian has no outside. Its flat axis gives a normal up to
+ * sign, and the density around a single-layer wall is the same on both
+ * sides, so no amount of looking at the grid says which side the camera
+ * was on. So both sides are lit and stored - "plus" along the axis, "minus"
+ * against it - and the splat shader picks the one facing the viewer. A wall
+ * seen from the room gets the room side's light; the sun behind that wall
+ * lands on the side nobody captured.
+ *
+ * Per light, only the side facing it is traced: its shadow ray starts just
+ * off that side and walks the grid toward the light as a cone as wide as
+ * the light looks from here. Round gaussians - fog, fuzz - have no useful
+ * axis, and are lit the same from every side.
+ *
+ * Ambient light is added next: the irradiance the ambient coefficients give
+ * each side's bent normal, times how open that side is.
+ *
+ * Last, when de-light is on, the lot is divided by what the de-light pass
+ * worked out the capture's own light was - see delightSource.
+ *
+ * Light records are four vec4s, those that add light first and those
+ * matched to the capture after them:
+ *   0: xyz position, or the direction toward a sun; w kind (0 point, 1 spot, 2 sun)
+ *   1: rgb colour times intensity; w emitter radius, or the sun's tan(half angle)
+ *   2: xyz spot axis; w cos(outer half angle)
+ *   3: x cos(inner half angle); y falloff reference distance squared
+ */
+const lightingSource = /* wgsl */`
+@group(0) @binding(0) var<storage, read> gaussians: array<vec4f>;
+@group(0) @binding(1) var<storage, read> density: array<f32>;
+@group(0) @binding(2) var<storage, read> levels: array<vec4u>;
+@group(0) @binding(3) var<storage, read> lights: array<vec4f>;
+@group(0) @binding(4) var splatState: texture_2d<f32>;
+@group(0) @binding(5) var splatTransform: texture_2d<u32>;
+@group(0) @binding(6) var transformPalette: texture_2d<f32>;
+@group(0) @binding(7) var lightPlus: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(8) var lightMinus: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(9) var occlusionPlus: texture_2d<f32>;
+@group(0) @binding(10) var occlusionMinus: texture_2d<f32>;
+@group(0) @binding(11) var delightPlus: texture_2d<f32>;
+@group(0) @binding(12) var delightMinus: texture_2d<f32>;
+
+struct Uniforms {
+    matrixModel: mat4x4f,
+    gridOrigin: vec4f,      // xyz: grid min corner, w: finest cell size
+    gridDims: vec4u,        // xyz: finest dims, w: level count
+    counts: vec4u,          // x: gaussians, y: texture width, z: lights that add
+    params: vec4f,          // x: captured light, y: wrap, z: ray offset in cells
+    ambient: vec4f          // x: 1 when there is ambient light, y: occlusion strength, z: 1 when de-light is on
+};
+@group(0) @binding(13) var<uniform> uniforms: Uniforms;
+
+${gaussianCommon}
+${gridSampling}
+${surfaceCommon}
+${coneTraceSource}
+${lightFromSource}
+
 // The ambient irradiance factor for a surface facing n - the same nine
 // functions environment.ts projects onto, in the same order.
 fn ambientAt(n: vec3f) -> vec3f {
@@ -785,78 +926,14 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, 
         return;
     }
 
-    let surface = surfaceOf(i, uv);
-    let p = surface.p;
-    let n = surface.n;
-    let flatness = surface.flatness;
+    let surface = surfaceOf(i, splatWorld(uv));
 
-    let h0 = uniforms.gridOrigin.w;
-    let wrap = uniforms.params.y;
-    let offset = uniforms.params.z * h0;
-
-    var plus = vec3f(0.0);
-    var minus = vec3f(0.0);
-
+    var plus = base;
+    var minus = base;
     for (var li = 0u; li < uniforms.counts.z; li++) {
-        let la = lights[li * 4u];
-        let lb = lights[li * 4u + 1u];
-        let lc = lights[li * 4u + 2u];
-        let ld = lights[li * 4u + 3u];
-        let kind = u32(la.w + 0.5);
-
-        var toLight: vec3f;
-        var falloff = 1.0;
-        var tanHalf: f32;
-        var maxDist: f32;
-
-        if (kind == 2u) {
-            toLight = la.xyz;
-            tanHalf = lb.w;
-            maxDist = 3.0e38;
-        } else {
-            let d = la.xyz - p;
-            let dist = max(length(d), 1e-6);
-            toLight = d / dist;
-            let radius = lb.w;
-            falloff = ld.y / max(dist * dist, max(radius * radius, 1e-12));
-            tanHalf = radius / dist;
-            maxDist = dist - radius;
-            if (kind == 1u) {
-                falloff *= smoothstep(lc.w, ld.x, dot(-toLight, lc.xyz));
-            }
-        }
-
-        let energy = lb.rgb * falloff;
-        if (max(energy.r, max(energy.g, energy.b)) <= 1e-5) {
-            continue;
-        }
-
-        let ndl = dot(n, toLight);
-        let side = select(-1.0, 1.0, ndl >= 0.0);
-        let facing = abs(ndl);
-
-        // wrapped Lambert on the lit side; the wrap's tail on the far side
-        let near = (facing + wrap) / (1.0 + wrap);
-        let far = max(0.0, wrap - facing) / (1.0 + wrap);
-
-        // leave from just off the lit side - along the axis for a flat
-        // gaussian, toward the light for a round one
-        // a flat surface is climbed away from as steeply as the light is
-        // above it; a round gaussian has no surface to climb from
-        let away = normalize(mix(toLight, n * side, flatness));
-        let rise = mix(1.0, facing, flatness);
-        let visibility = coneTrace(p + away * offset, toLight, tanHalf, maxDist, offset, rise);
-
-        let lit = energy * visibility;
-        let litNear = lit * mix(0.5, near, flatness);
-        let litFar = lit * mix(0.5, far, flatness);
-        if (side > 0.0) {
-            plus += litNear;
-            minus += litFar;
-        } else {
-            minus += litNear;
-            plus += litFar;
-        }
+        let lit = lightFrom(li, surface, 0.0);
+        plus += lit.plus;
+        minus += lit.minus;
     }
 
     // ambient: what each side's open sky delivers, dimmed by how much of it
@@ -870,8 +947,97 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, 
         minus += ambientAt(occMinus.xyz) * mix(1.0, occMinus.w, strength);
     }
 
-    textureStore(lightPlus, uv, vec4f(base + plus, 1.0));
-    textureStore(lightMinus, uv, vec4f(base + minus, 1.0));
+    // new light over the capture's own, rather than on top of its shadows
+    if (uniforms.ambient.z > 0.5) {
+        plus /= textureLoad(delightPlus, uv, 0).rgb;
+        minus /= textureLoad(delightMinus, uv, 0).rgb;
+    }
+
+    textureStore(lightPlus, uv, vec4f(plus, 1.0));
+    textureStore(lightMinus, uv, vec4f(minus, 1.0));
+}
+`;
+
+/**
+ * De-light: what light the capture itself had, per side of each gaussian,
+ * for the lighting pass to divide by.
+ *
+ * A gaussian's colour is what it reflects times the light that fell on it
+ * when it was shot, so new light is put over an estimate of that old light
+ * rather than stacked on top of its shadows. The estimate is the capture's
+ * sky - how open the gaussian was, from the captured occlusion - plus the
+ * lights matched to the capture, traced through the object's captured grid
+ * from where the capture put the gaussian, with the grid's blur taken back
+ * out of their shadows. It is scaled so an open surface squarely facing
+ * every matched light is 1, which leaves such a surface exactly as
+ * captured; floored, so a deep baked shadow is lifted a bounded amount
+ * rather than turning its noise into colour; and faded toward 1 by the
+ * strength, because bounce light makes a real cavity brighter than
+ * occlusion alone predicts.
+ *
+ * Separate from lighting because it changes far less often: only with the
+ * matched lights, the captured grid and the de-light settings. Moving a
+ * light that adds light reruns the lighting alone.
+ *
+ * Every gaussian gets a value, deleted or not: an undo brings one back
+ * without changing anything this pass watches.
+ */
+const delightSource = /* wgsl */`
+@group(0) @binding(0) var<storage, read> gaussians: array<vec4f>;
+@group(0) @binding(1) var<storage, read> density: array<f32>;
+@group(0) @binding(2) var<storage, read> levels: array<vec4u>;
+@group(0) @binding(3) var<storage, read> lights: array<vec4f>;
+@group(0) @binding(4) var splatState: texture_2d<f32>;
+@group(0) @binding(5) var splatTransform: texture_2d<u32>;
+@group(0) @binding(6) var transformPalette: texture_2d<f32>;
+@group(0) @binding(7) var capturedPlus: texture_2d<f32>;
+@group(0) @binding(8) var capturedMinus: texture_2d<f32>;
+@group(0) @binding(9) var delightPlus: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(10) var delightMinus: texture_storage_2d<rgba16float, write>;
+
+struct Uniforms {
+    matrixModel: mat4x4f,
+    gridOrigin: vec4f,      // the object's captured grid: xyz min corner, w finest cell size
+    gridDims: vec4u,        // xyz: finest dims, w: level count
+    counts: vec4u,          // x: gaussians, y: texture width, z: first matched light, w: matched lights
+    params: vec4f,          // x: strength, y: wrap, z: ray offset in cells, w: floor
+    scale: vec4f            // rgb: one over the light an open surface facing every matched light had; w: shadow erosion in cells
+};
+@group(0) @binding(11) var<uniform> uniforms: Uniforms;
+
+${gaussianCommon}
+${gridSampling}
+${surfaceCommon}
+${coneTraceSource}
+${lightFromSource}
+
+@compute @workgroup_size(WORKGROUP)
+fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, @builtin(local_invocation_index) lid: u32) {
+    let i = splatIndex(wid, nwg, lid);
+    if (i >= uniforms.counts.x) {
+        return;
+    }
+
+    let uv = splatUV(i);
+
+    // the capture's sky, white and 1 where nothing shut it out
+    var bakedPlus = vec3f(textureLoad(capturedPlus, uv, 0).w);
+    var bakedMinus = vec3f(textureLoad(capturedMinus, uv, 0).w);
+
+    // then the matched lights, from where the capture put the gaussian
+    let surface = surfaceOf(i, worldOf(uv, true));
+    let erode = uniforms.scale.w * uniforms.gridOrigin.w;
+    for (var k = 0u; k < uniforms.counts.w; k++) {
+        let lit = lightFrom(uniforms.counts.z + k, surface, erode);
+        bakedPlus += lit.plus;
+        bakedMinus += lit.minus;
+    }
+
+    let strength = uniforms.params.x;
+    let lowest = vec3f(uniforms.params.w);
+    let scale = uniforms.scale.rgb;
+    textureStore(delightPlus, uv, vec4f(mix(vec3f(1.0), max(bakedPlus * scale, lowest), strength), 1.0));
+    textureStore(delightMinus, uv, vec4f(mix(vec3f(1.0), max(bakedMinus * scale, lowest), strength), 1.0));
 }
 `;
 
@@ -886,5 +1052,6 @@ export {
     pullSource,
     pushSource,
     occlusionSource,
-    lightingSource
+    lightingSource,
+    delightSource
 };

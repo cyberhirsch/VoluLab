@@ -29,7 +29,7 @@ import {
 } from 'playcanvas';
 
 import { addAmbientSH } from './environment';
-import { AMBIENT_BASE, MAX_LIGHTS, SH_COUNT, depositSource, lightingSource, occlusionSource, pullSource, pushSource, resolveSource, WORKGROUP } from './relight-shaders';
+import { AMBIENT_BASE, MAX_LIGHTS, SH_COUNT, delightSource, depositSource, lightingSource, occlusionSource, pullSource, pushSource, resolveSource, WORKGROUP } from './relight-shaders';
 import { ElementType } from '../element';
 import { Events } from '../events';
 import { Scene } from '../scene';
@@ -50,6 +50,16 @@ import { Splat } from '../splat';
  * is diffuse, so orbiting costs nothing, and moving a light leaves the
  * occlusion alone.
  *
+ * De-light adds a second view of each object while it is on: the object
+ * alone, as its capture saw it, with a grid of its own, how open each
+ * gaussian was in it, and the divisor worked out from that and the lights
+ * matched to the capture. De-light against the scene as captured, relight
+ * against the scene as edited - so a deleted car's shadow comes out of the
+ * road, and a second capture set beside this one shadows it without being
+ * taken for part of its baked light. That view barely changes - edits
+ * inside the object never touch it - so it is built once and kept, and the
+ * divisor reruns only when a matched light or the de-light settings do.
+ *
  * WebGPU only. The passes are compute, and the splat shader's lighting
  * branch sits behind a define that is simply never set on WebGL2.
  *
@@ -61,7 +71,7 @@ import { Splat } from '../splat';
  */
 
 type RelightSettings = {
-    /** how much of the lighting baked into the capture is kept */
+    /** how much of the capture's own lighting is kept, less what de-light divides out */
     capturedLight: number;
     /** finest grid cells along the scene's longest side */
     resolution: number;
@@ -69,17 +79,37 @@ type RelightSettings = {
     occlusionRange: number;
     /** 0 ambient light ignores occlusion, 1 it is fully shut out */
     occlusionStrength: number;
+    /** 0 the capture's own light stays in, 1 it is divided out in full */
+    delight: number;
+    /** the least de-light divides by, so no baked shadow is lifted more than 1 / this */
+    delightFloor: number;
+    /** whether the capture de-light divides out still has the deleted gaussians in it */
+    delightSeesDeleted: boolean;
 };
 
 const defaultRelightSettings = (): RelightSettings => ({
     capturedLight: 0.4,
     resolution: 128,
     occlusionRange: 0.1,
-    occlusionStrength: 1
+    occlusionStrength: 1,
+    delight: 0.5,
+    delightFloor: 0.2,
+    delightSeesDeleted: true
 });
 
 const MAX_LEVELS = 8;
 const LIGHT_FLOATS = 16;
+
+// the settings the lighting pass depends on, compared ahead of the lights
+const SEEN_HEAD = 5;
+
+// the settings the de-light pass depends on, compared ahead of the matched lights
+const DELIGHT_HEAD = 3;
+
+// state bits: hidden - which this app records as locked, and draws as all
+// but invisible - and deleted
+const STATE_LOCKED = 2;
+const STATE_DELETED = 4;
 
 // the light records, then the ambient coefficients after them
 const LIGHT_BUFFER_FLOATS = (AMBIENT_BASE + SH_COUNT) * 4;
@@ -98,6 +128,16 @@ const WRAP = 0.3;
 // by an amount that depends on where it happens to sit inside its cell
 const RAY_OFFSET_CELLS = 2.0;
 
+// How far de-light shrinks a matched light's shadow, in the captured grid's
+// finest cells. A hard shadow through the grid comes out about a cell and
+// a half wider all round than the one that cast it, at 128 cells and at
+// 256; this takes that back out and a cell more, because the division is
+// lopsided. Where an edge cannot be placed exactly, calling a half-lit point
+// shadowed lifts it nearly twice too bright, and calling a half-shadowed one
+// lit leaves it a little dark - so edges err toward lit, and end as a faint
+// dark outline rather than a white one.
+const DELIGHT_ERODE_CELLS = 2.5;
+
 // a sun at softness 1 is this wide, half-angle; at 0 it is the real sun
 const SUN_MAX_HALF_ANGLE = 15 * Math.PI / 180;
 const SUN_MIN_HALF_ANGLE = 0.27 * Math.PI / 180;
@@ -112,7 +152,7 @@ const BOUND_TAIL = 0.005;
 
 const tmpDispatch = new Vec2();
 
-/** The six kernels, compiled once per device. */
+/** The seven kernels, compiled once per device. */
 class Kernels {
     deposit: Shader;
     resolve: Shader;
@@ -120,6 +160,7 @@ class Kernels {
     push: Shader;
     occlusion: Shader;
     lighting: Shader;
+    delight: Shader;
     noOcclusion: Texture;
 
     constructor(device: GraphicsDevice) {
@@ -203,15 +244,36 @@ class Kernels {
             storageTexture('lightPlus'),
             storageTexture('lightMinus'),
             texture('occlusionPlus', SAMPLETYPE_FLOAT),
-            texture('occlusionMinus', SAMPLETYPE_FLOAT)
+            texture('occlusionMinus', SAMPLETYPE_FLOAT),
+            texture('delightPlus', SAMPLETYPE_FLOAT),
+            texture('delightMinus', SAMPLETYPE_FLOAT)
         ], [
             ...gaussianUniforms(),
             new UniformFormat('params', UNIFORMTYPE_VEC4),
             new UniformFormat('ambient', UNIFORMTYPE_VEC4)
         ]);
 
+        this.delight = make('relightDelight', delightSource, [
+            storage('gaussians', true),
+            storage('density', true),
+            storage('levels', true),
+            storage('lights', true),
+            texture('splatState', SAMPLETYPE_FLOAT),
+            texture('splatTransform', SAMPLETYPE_UINT),
+            texture('transformPalette', SAMPLETYPE_UNFILTERABLE_FLOAT),
+            texture('capturedPlus', SAMPLETYPE_FLOAT),
+            texture('capturedMinus', SAMPLETYPE_FLOAT),
+            storageTexture('delightPlus'),
+            storageTexture('delightMinus')
+        ], [
+            ...gaussianUniforms(),
+            new UniformFormat('params', UNIFORMTYPE_VEC4),
+            new UniformFormat('scale', UNIFORMTYPE_VEC4)
+        ]);
+
         // bound in place of the occlusion textures while there is no ambient
-        // light to need them - the kernel never reads it
+        // light to need them, and of the de-light ones while de-light is off
+        // - the kernel never reads it
         this.noOcclusion = new Texture(device, {
             name: 'relightNoOcclusion',
             width: 1,
@@ -230,6 +292,7 @@ class Kernels {
         this.push.destroy();
         this.occlusion.destroy();
         this.lighting.destroy();
+        this.delight.destroy();
         this.noOcclusion.destroy();
     }
 }
@@ -317,6 +380,11 @@ class DensityGrid {
 
     get levelCount() {
         return this.levels.length;
+    }
+
+    /** the grid's longest side, in world units */
+    get longest() {
+        return Math.max(this.dims[0], this.dims[1], this.dims[2]) * this.cell;
     }
 
     /** the uniforms every gaussian kernel shares */
@@ -446,6 +514,13 @@ const perGaussianTexture = (device: GraphicsDevice, name: string, width: number,
     addressV: ADDRESS_CLAMP_TO_EDGE
 });
 
+const sameMatrix = (a: ArrayLike<number>, b: ArrayLike<number>) => {
+    for (let i = 0; i < 16; ++i) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
+};
+
 /**
  * Per object: its gaussians packed for the kernels, its two light textures,
  * and what the grid was last built from, to tell when it has changed.
@@ -474,6 +549,29 @@ class SplatLighting {
     seenLocked = -1;
     seenPositions = -1;
     seenMatrix = new Float32Array(16);
+
+    // De-light's view of this object: the object alone, as its capture saw
+    // it, in a grid of its own; how open each side of each gaussian was
+    // there; and what the de-light pass made of that and the matched lights,
+    // for lighting to divide by. Only while de-light is on.
+    captured: DensityGrid = null;
+    capturedPlus: Texture = null;
+    capturedMinus: Texture = null;
+    delightPlus: Texture = null;
+    delightMinus: Texture = null;
+    capturedDeposit: Compute = null;
+    capturedOcclusion: Compute = null;
+    delighting: Compute = null;
+    capturedDirty = true;
+    capturedSkyDirty = true;
+    delightDirty = true;
+
+    // what the captured grid and its occlusion were last built from; the
+    // deleted count is -1 while deleted gaussians are counted in
+    capturedMatrix = new Float32Array(16);
+    capturedDeleted = -1;
+    capturedResolution = 0;
+    capturedRange = 0;
 
     constructor(device: GraphicsDevice, kernels: Kernels, splat: Splat) {
         this.splat = splat;
@@ -512,6 +610,40 @@ class SplatLighting {
         this.occlusion = null;
     }
 
+    ensureDelight(device: GraphicsDevice, kernels: Kernels) {
+        if (this.captured) return;
+        this.captured = new DensityGrid(device, kernels);
+        this.capturedPlus = perGaussianTexture(device, 'splatCapturedPlus', this.width, this.height);
+        this.capturedMinus = perGaussianTexture(device, 'splatCapturedMinus', this.width, this.height);
+        this.delightPlus = perGaussianTexture(device, 'splatDelightPlus', this.width, this.height);
+        this.delightMinus = perGaussianTexture(device, 'splatDelightMinus', this.width, this.height);
+        this.capturedDeposit = new Compute(device, kernels.deposit, 'RelightCapturedDeposit');
+        this.capturedOcclusion = new Compute(device, kernels.occlusion, 'RelightCapturedOcclusion');
+        this.delighting = new Compute(device, kernels.delight, 'RelightDelight');
+        this.capturedDirty = true;
+        this.capturedSkyDirty = true;
+        this.delightDirty = true;
+    }
+
+    releaseDelight() {
+        this.captured?.destroy();
+        this.capturedPlus?.destroy();
+        this.capturedMinus?.destroy();
+        this.delightPlus?.destroy();
+        this.delightMinus?.destroy();
+        this.capturedDeposit?.destroy();
+        this.capturedOcclusion?.destroy();
+        this.delighting?.destroy();
+        this.captured = null;
+        this.capturedPlus = null;
+        this.capturedMinus = null;
+        this.delightPlus = null;
+        this.delightMinus = null;
+        this.capturedDeposit = null;
+        this.capturedOcclusion = null;
+        this.delighting = null;
+    }
+
     destroy() {
         this.gaussians.destroy();
         this.lightPlus.destroy();
@@ -519,6 +651,7 @@ class SplatLighting {
         this.deposit.destroy();
         this.lighting.destroy();
         this.releaseOcclusion();
+        this.releaseDelight();
     }
 }
 
@@ -528,8 +661,12 @@ class SplatLighting {
  * A capture's bounds are set by its worst floater, and a grid stretched over
  * that spends its cells on nothing. Gaussians outside the box cast no shadow
  * and are lit as if unoccluded.
+ *
+ * `skip` is the state bits that leave a gaussian out. `captured` takes each
+ * one where the capture put it, not where the transform palette has since
+ * moved it - the box of a captured grid.
  */
-const robustBox = (entries: SplatLighting[]): Box | null => {
+const robustBox = (entries: SplatLighting[], skip: number, captured: boolean): Box | null => {
     const lo = [Infinity, Infinity, Infinity];
     const hi = [-Infinity, -Infinity, -Infinity];
     let total = 0;
@@ -537,16 +674,16 @@ const robustBox = (entries: SplatLighting[]): Box | null => {
     const visit = (fn: (wx: number, wy: number, wz: number) => void) => {
         for (const entry of entries) {
             const { splat } = entry;
-            const centers = (splat.entity.gsplat?.instance as any)?.sorter?.centers as Float32Array;
+            const centers = captured ? null : (splat.entity.gsplat?.instance as any)?.sorter?.centers as Float32Array;
             const state = splat.splatData.getProp('state') as Uint8Array;
             const m = splat.entity.getWorldTransform().data;
             const x = splat.splatData.getProp('x') as Float32Array;
             const y = splat.splatData.getProp('y') as Float32Array;
             const z = splat.splatData.getProp('z') as Float32Array;
             for (let i = 0; i < entry.count; ++i) {
-                if (state && (state[i] & 6)) continue;
+                if (state && (state[i] & skip)) continue;
                 // the sorter's centres follow the transform palette; the
-                // raw positions are the fallback
+                // raw positions are where the capture put each gaussian
                 const px = centers ? centers[i * 3] : x[i];
                 const py = centers ? centers[i * 3 + 1] : y[i];
                 const pz = centers ? centers[i * 3 + 2] : z[i];
@@ -606,17 +743,15 @@ const robustBox = (entries: SplatLighting[]): Box | null => {
 };
 
 /**
- * One light record per light - see the lighting kernel for the layout.
- * Returns how many were written.
+ * One light record per point, spot or sun light - see the lighting kernel
+ * for the layout - from record `first` on. Returns how many were written.
  */
-const packLights = (lights: SceneLight[], out: Float32Array) => {
-    out.fill(0, 0, MAX_LIGHTS * LIGHT_FLOATS);
+const packLights = (lights: SceneLight[], out: Float32Array, first: number) => {
     let n = 0;
     for (const light of lights) {
-        if (n >= MAX_LIGHTS) break;
-        if (light.settings.kind === 'ambient') continue;
+        if (first + n >= MAX_LIGHTS) break;
         const s = light.settings;
-        const o = n * LIGHT_FLOATS;
+        const o = (first + n) * LIGHT_FLOATS;
 
         const dx = light.target.x - light.position.x;
         const dy = light.target.y - light.position.y;
@@ -667,9 +802,28 @@ const packLights = (lights: SceneLight[], out: Float32Array) => {
 };
 
 /**
+ * What de-light scales its estimate of the capture's light by: one over
+ * what an open surface squarely facing every matched light had - the sky's
+ * 1, plus each matched light's colour times intensity. Per channel, so a
+ * warm sun in the capture is taken out of the shadows' colour as well as
+ * their depth.
+ */
+const delightScaleOf = (out: Float32Array, first: number, count: number) => {
+    const sum = [1, 1, 1];
+    for (let n = first; n < first + count; ++n) {
+        const o = n * LIGHT_FLOATS;
+        sum[0] += out[o + 4];
+        sum[1] += out[o + 5];
+        sum[2] += out[o + 6];
+    }
+    return [1 / sum[0], 1 / sum[1], 1 / sum[2]];
+};
+
+/**
  * Every visible ambient light, summed into the one set of irradiance
  * coefficients the kernel reads - so ambient lights cost the same however
- * many there are. Returns whether there was any.
+ * many there are. Returns whether there was any. An ambient light always
+ * adds light: the capture's own sky is what de-light's occlusion stands for.
  */
 const packAmbient = (lights: SceneLight[], out: Float32Array) => {
     const offset = AMBIENT_BASE * 4;
@@ -699,7 +853,10 @@ class Relighter {
     private lightData = new Float32Array(LIGHT_BUFFER_FLOATS);
     // doubles, so the settings are compared exactly - a float copy of 0.2 is
     // never equal to 0.2, and the lighting would rerun forever
-    private seenLights = new Float64Array(LIGHT_BUFFER_FLOATS + 4);
+    private seenLights = new Float64Array(LIGHT_BUFFER_FLOATS + SEEN_HEAD);
+    private seenDelight = new Float64Array(MAX_LIGHTS * LIGHT_FLOATS + DELIGHT_HEAD);
+    private lightsUploaded = false;
+    private delightScale = [1, 1, 1];
 
     private active = false;
     private gridDirty = true;
@@ -710,7 +867,18 @@ class Relighter {
     private failed = false;
 
     /** for the curious and for tests: what the last build did */
-    stats = { gridBuilds: 0, occlusionPasses: 0, lightingPasses: 0, lastGridMs: 0, lastOcclusionMs: 0, lastLightingMs: 0 };
+    stats = {
+        gridBuilds: 0,
+        occlusionPasses: 0,
+        lightingPasses: 0,
+        capturedBuilds: 0,
+        capturedOcclusionPasses: 0,
+        delightPasses: 0,
+        lastGridMs: 0,
+        lastOcclusionMs: 0,
+        lastLightingMs: 0,
+        lastCapturedMs: 0
+    };
 
     constructor(scene: Scene) {
         this.scene = scene;
@@ -811,6 +979,7 @@ class Relighter {
             this.kernels ??= new Kernels(device);
             this.grid = new DensityGrid(device, this.kernels);
             this.lightBuffer = new StorageBuffer(device, LIGHT_BUFFER_FLOATS * 4, BUFFERUSAGE_COPY_DST);
+            this.lightsUploaded = false;
             this.active = true;
             this.gridDirty = true;
             this.occlusionDirty = true;
@@ -843,35 +1012,79 @@ class Relighter {
             // transform, a palette transform
             const matrix = splat.entity.getWorldTransform().data;
             const positions = this.positionsVersion.get(splat) ?? 0;
-            let moved = false;
-            for (let i = 0; i < 16; ++i) {
-                if (matrix[i] !== entry.seenMatrix[i]) {
-                    moved = true;
-                    break;
-                }
-            }
-            if (moved || entry.seenDeleted !== splat.numDeleted || entry.seenLocked !== splat.numLocked || entry.seenPositions !== positions) {
+            if (!sameMatrix(matrix, entry.seenMatrix) || entry.seenDeleted !== splat.numDeleted || entry.seenLocked !== splat.numLocked || entry.seenPositions !== positions) {
                 this.gridDirty = true;
+            }
+
+            // De-light's grid sees the object as it was captured, so far less
+            // makes it stale: the object's own transform - its captured light
+            // moved with it - the resolution, and deletions only when it is
+            // told to leave deleted gaussians out. Never the palette or hiding.
+            if (this.settings.delight > 0) {
+                entry.ensureDelight(device, this.kernels);
+                const deleted = this.settings.delightSeesDeleted ? -1 : splat.numDeleted;
+                if (!sameMatrix(matrix, entry.capturedMatrix) || entry.capturedDeleted !== deleted || entry.capturedResolution !== this.settings.resolution) {
+                    entry.capturedDirty = true;
+                }
+                if (entry.capturedRange !== this.settings.occlusionRange) {
+                    entry.capturedSkyDirty = true;
+                }
+            } else {
+                entry.releaseDelight();
             }
         }
 
-        // what would make the lighting stale: the lights, the ambient light,
-        // the captured share, the occlusion strength
-        const count = packLights(lights, this.lightData);
+        // what would make the lighting stale: the lights - those that add
+        // light first, then those matched to the capture - the ambient light,
+        // and the settings the lighting pass reads
+        const direct = lights.filter(light => light.settings.kind !== 'ambient');
+        const adding = direct.filter(light => light.settings.role !== 'match');
+        const matched = direct.filter(light => light.settings.role === 'match');
+        this.lightData.fill(0, 0, MAX_LIGHTS * LIGHT_FLOATS);
+        const count = packLights(adding, this.lightData, 0);
+        const matchedCount = packLights(matched, this.lightData, count);
         const ambient = packAmbient(lights, this.lightData);
+        this.delightScale = delightScaleOf(this.lightData, count, matchedCount);
+
+        const { settings } = this;
         const seen = this.seenLights;
-        const head = [count, this.settings.capturedLight, this.settings.occlusionStrength, ambient ? 1 : 0];
+        const head = [count, settings.capturedLight, settings.occlusionStrength, ambient ? 1 : 0, settings.delight > 0 ? 1 : 0];
         let lightsChanged = false;
-        for (let i = 0; i < head.length && !lightsChanged; ++i) {
+        for (let i = 0; i < SEEN_HEAD && !lightsChanged; ++i) {
             lightsChanged = seen[i] !== head[i];
         }
         for (let i = 0; i < LIGHT_BUFFER_FLOATS && !lightsChanged; ++i) {
-            lightsChanged = seen[i + head.length] !== this.lightData[i];
+            lightsChanged = seen[i + SEEN_HEAD] !== this.lightData[i];
         }
         if (lightsChanged) {
             seen.set(head, 0);
-            seen.set(this.lightData, head.length);
+            seen.set(this.lightData, SEEN_HEAD);
             this.lightingDirty = true;
+        }
+        if (lightsChanged || !this.lightsUploaded) {
+            this.lightBuffer.write(0, this.lightData, 0, this.lightData.length);
+            this.lightsUploaded = true;
+        }
+
+        // what would make de-light stale: the matched lights - wherever they
+        // sit in the buffer - and its own settings. Lights that add light do
+        // not, so moving one reruns the lighting alone
+        const matchedData = this.lightData.subarray(count * LIGHT_FLOATS, (count + matchedCount) * LIGHT_FLOATS);
+        const seenDelight = this.seenDelight;
+        const delightHead = [matchedCount, settings.delight, settings.delightFloor];
+        let delightChanged = false;
+        for (let i = 0; i < DELIGHT_HEAD && !delightChanged; ++i) {
+            delightChanged = seenDelight[i] !== delightHead[i];
+        }
+        for (let i = 0; i < matchedData.length && !delightChanged; ++i) {
+            delightChanged = seenDelight[i + DELIGHT_HEAD] !== matchedData[i];
+        }
+        if (delightChanged) {
+            seenDelight.set(delightHead, 0);
+            seenDelight.set(matchedData, DELIGHT_HEAD);
+            this.entries.forEach((entry) => {
+                entry.delightDirty = true;
+            });
         }
 
         // occlusion exists only while something reads it
@@ -888,13 +1101,22 @@ class Relighter {
 
         const entries = splats.map(s => this.entries.get(s));
 
-        if (this.gridDirty) {
+        // grids are rebuilt together, and no more often than the interval
+        const stale = entries.filter(entry => entry.captured && entry.capturedDirty);
+        if (this.gridDirty || stale.length > 0) {
             const now = performance.now();
             if (now - this.lastGridBuild >= GRID_MIN_INTERVAL_MS) {
-                this.buildGrid(entries);
+                if (this.gridDirty) {
+                    this.buildGrid(entries);
+                    this.gridDirty = false;
+                    this.occlusionDirty = true;
+                }
+                for (const entry of stale) {
+                    this.buildCaptured(entry);
+                    entry.capturedDirty = false;
+                    entry.capturedSkyDirty = true;
+                }
                 this.lastGridBuild = now;
-                this.gridDirty = false;
-                this.occlusionDirty = true;
                 this.lightingDirty = true;
             }
         }
@@ -905,7 +1127,23 @@ class Relighter {
             this.lightingDirty = true;
         }
 
-        if (this.lightingDirty && !this.gridDirty) {
+        for (const entry of entries) {
+            if (!entry.captured || entry.capturedDirty) continue;
+            if (entry.capturedSkyDirty) {
+                this.occludeCaptured(entry);
+                entry.capturedSkyDirty = false;
+                entry.delightDirty = true;
+            }
+            if (entry.delightDirty) {
+                this.delightPass(entry, count, matchedCount);
+                entry.delightDirty = false;
+                this.lightingDirty = true;
+            }
+        }
+
+        // lighting waits for everything it reads
+        const ready = !this.gridDirty && entries.every(entry => !entry.captured || !entry.capturedDirty);
+        if (this.lightingDirty && ready) {
             this.light(entries, count, ambient);
             this.lightingDirty = false;
             this.scene.forceRender = true;
@@ -920,7 +1158,10 @@ class Relighter {
         const start = performance.now();
         const { device, grid } = this;
 
-        const box = robustBox(entries) ?? { min: [-1, -1, -1], max: [1, 1, 1] };
+        // every drawn gaussian, where it is now: hidden and deleted ones cast
+        // no shadow
+        const skip = STATE_LOCKED | STATE_DELETED;
+        const box = robustBox(entries, skip, false) ?? { min: [-1, -1, -1], max: [1, 1, 1] };
         grid.layout(box, this.settings.resolution);
         grid.clear();
 
@@ -935,7 +1176,7 @@ class Relighter {
             deposit.setParameter('matrixModel', splat.entity.getWorldTransform().data);
             deposit.setParameter('gridOrigin', grid.gridOrigin);
             deposit.setParameter('gridDims', grid.gridDims);
-            deposit.setParameter('counts', [entry.count, entry.width, 0, 0]);
+            deposit.setParameter('counts', [entry.count, entry.width, skip, 0]);
             dispatchFor(device, deposit, entry.count);
             device.computeDispatch([deposit], 'RelightDeposit');
 
@@ -952,14 +1193,56 @@ class Relighter {
         this.stats.lastGridMs = performance.now() - start;
     }
 
+    /**
+     * One object as its capture saw it, for de-light: its own gaussians and
+     * nothing else in the scene - another object was not there when this one
+     * was shot, and shadows nothing baked into it - where the capture put
+     * them, before any palette transform, and deleted ones too unless the
+     * settings say otherwise. A deleted car still shadowed the road it was
+     * captured on. The object's own transform does apply: the light it was
+     * captured under moved with it.
+     */
+    private buildCaptured(entry: SplatLighting) {
+        const start = performance.now();
+        const { device } = this;
+        const { splat, captured, capturedDeposit: deposit } = entry;
+        const skip = this.settings.delightSeesDeleted ? 0 : STATE_DELETED;
+        const matrix = splat.entity.getWorldTransform().data;
+
+        const box = robustBox([entry], skip, true) ?? { min: [-1, -1, -1], max: [1, 1, 1] };
+        captured.layout(box, this.settings.resolution);
+        captured.clear();
+
+        deposit.setParameter('gaussians', entry.gaussians);
+        deposit.setParameter('accum', captured.accum);
+        deposit.setParameter('levels', captured.levelBuffer);
+        deposit.setParameter('splatState', splat.stateTexture);
+        deposit.setParameter('splatTransform', splat.transformTexture);
+        deposit.setParameter('transformPalette', splat.transformPalette.texture);
+        deposit.setParameter('matrixModel', matrix);
+        deposit.setParameter('gridOrigin', captured.gridOrigin);
+        deposit.setParameter('gridDims', captured.gridDims);
+        deposit.setParameter('counts', [entry.count, entry.width, skip, 1]);
+        dispatchFor(device, deposit, entry.count);
+        device.computeDispatch([deposit], 'RelightCapturedDeposit');
+
+        captured.finish();
+
+        entry.capturedMatrix.set(matrix);
+        entry.capturedDeleted = this.settings.delightSeesDeleted ? -1 : splat.numDeleted;
+        entry.capturedResolution = this.settings.resolution;
+
+        this.stats.capturedBuilds++;
+        this.stats.lastCapturedMs = performance.now() - start;
+    }
+
     private occlude(entries: SplatLighting[]) {
         const start = performance.now();
         const { device, grid } = this;
 
         // the range is a share of the grid's longest side, so it means the
         // same on a capture of any scale
-        const longest = Math.max(grid.dims[0], grid.dims[1], grid.dims[2]) * grid.cell;
-        const range = this.settings.occlusionRange * longest;
+        const range = this.settings.occlusionRange * grid.longest;
 
         for (const entry of entries) {
             const { splat, occlusion } = entry;
@@ -984,11 +1267,68 @@ class Relighter {
         this.stats.lastOcclusionMs = performance.now() - start;
     }
 
+    /**
+     * How open each gaussian was where the capture put it - how much of the
+     * capture's sky reached it. Traced through the object's captured grid,
+     * with the range taken from that grid, so on an unedited capture it is
+     * the very occlusion the ambient light is dimmed by, and the two cancel.
+     */
+    private occludeCaptured(entry: SplatLighting) {
+        const { device } = this;
+        const { splat, captured, capturedOcclusion: occlusion } = entry;
+        const range = this.settings.occlusionRange * captured.longest;
+
+        occlusion.setParameter('gaussians', entry.gaussians);
+        occlusion.setParameter('density', captured.density);
+        occlusion.setParameter('levels', captured.levelBuffer);
+        occlusion.setParameter('splatState', splat.stateTexture);
+        occlusion.setParameter('splatTransform', splat.transformTexture);
+        occlusion.setParameter('transformPalette', splat.transformPalette.texture);
+        occlusion.setParameter('occlusionPlus', entry.capturedPlus);
+        occlusion.setParameter('occlusionMinus', entry.capturedMinus);
+        occlusion.setParameter('matrixModel', splat.entity.getWorldTransform().data);
+        occlusion.setParameter('gridOrigin', captured.gridOrigin);
+        occlusion.setParameter('gridDims', captured.gridDims);
+        occlusion.setParameter('counts', [entry.count, entry.width, 0, 1]);
+        occlusion.setParameter('params', [range, RAY_OFFSET_CELLS, OCCLUSION_TAN_HALF, 0]);
+        dispatchFor(device, occlusion, entry.count);
+        device.computeDispatch([occlusion], 'RelightCapturedOcclusion');
+
+        entry.capturedRange = this.settings.occlusionRange;
+        this.stats.capturedOcclusionPasses++;
+    }
+
+    /** What the capture's own light was, for lighting to divide by. */
+    private delightPass(entry: SplatLighting, firstMatched: number, matchedCount: number) {
+        const { device, settings } = this;
+        const { splat, captured, delighting } = entry;
+
+        delighting.setParameter('gaussians', entry.gaussians);
+        delighting.setParameter('density', captured.density);
+        delighting.setParameter('levels', captured.levelBuffer);
+        delighting.setParameter('lights', this.lightBuffer);
+        delighting.setParameter('splatState', splat.stateTexture);
+        delighting.setParameter('splatTransform', splat.transformTexture);
+        delighting.setParameter('transformPalette', splat.transformPalette.texture);
+        delighting.setParameter('capturedPlus', entry.capturedPlus);
+        delighting.setParameter('capturedMinus', entry.capturedMinus);
+        delighting.setParameter('delightPlus', entry.delightPlus);
+        delighting.setParameter('delightMinus', entry.delightMinus);
+        delighting.setParameter('matrixModel', splat.entity.getWorldTransform().data);
+        delighting.setParameter('gridOrigin', captured.gridOrigin);
+        delighting.setParameter('gridDims', captured.gridDims);
+        delighting.setParameter('counts', [entry.count, entry.width, firstMatched, matchedCount]);
+        delighting.setParameter('params', [settings.delight, WRAP, RAY_OFFSET_CELLS, settings.delightFloor]);
+        delighting.setParameter('scale', [...this.delightScale, DELIGHT_ERODE_CELLS]);
+        dispatchFor(device, delighting, entry.count);
+        device.computeDispatch([delighting], 'RelightDelight');
+
+        this.stats.delightPasses++;
+    }
+
     private light(entries: SplatLighting[], lightCount: number, ambient: boolean) {
         const start = performance.now();
-        const { device, grid } = this;
-
-        this.lightBuffer.write(0, this.lightData, 0, this.lightData.length);
+        const { device, grid, kernels, settings } = this;
 
         for (const entry of entries) {
             const { splat, lighting } = entry;
@@ -1001,14 +1341,16 @@ class Relighter {
             lighting.setParameter('transformPalette', splat.transformPalette.texture);
             lighting.setParameter('lightPlus', entry.lightPlus);
             lighting.setParameter('lightMinus', entry.lightMinus);
-            lighting.setParameter('occlusionPlus', entry.occlusionPlus ?? this.kernels.noOcclusion);
-            lighting.setParameter('occlusionMinus', entry.occlusionMinus ?? this.kernels.noOcclusion);
+            lighting.setParameter('occlusionPlus', entry.occlusionPlus ?? kernels.noOcclusion);
+            lighting.setParameter('occlusionMinus', entry.occlusionMinus ?? kernels.noOcclusion);
             lighting.setParameter('matrixModel', splat.entity.getWorldTransform().data);
             lighting.setParameter('gridOrigin', grid.gridOrigin);
             lighting.setParameter('gridDims', grid.gridDims);
+            lighting.setParameter('delightPlus', entry.delightPlus ?? kernels.noOcclusion);
+            lighting.setParameter('delightMinus', entry.delightMinus ?? kernels.noOcclusion);
             lighting.setParameter('counts', [entry.count, entry.width, lightCount, 0]);
-            lighting.setParameter('params', [this.settings.capturedLight, WRAP, RAY_OFFSET_CELLS, 0]);
-            lighting.setParameter('ambient', [ambient && entry.occlusion ? 1 : 0, this.settings.occlusionStrength, 0, 0]);
+            lighting.setParameter('params', [settings.capturedLight, WRAP, RAY_OFFSET_CELLS, 0]);
+            lighting.setParameter('ambient', [ambient && entry.occlusion ? 1 : 0, settings.occlusionStrength, entry.delightPlus ? 1 : 0, 0]);
             dispatchFor(device, lighting, entry.count);
             device.computeDispatch([lighting], 'RelightLighting');
         }
@@ -1023,6 +1365,9 @@ class Relighter {
         next.resolution = Math.round(Math.min(256, Math.max(32, Number(next.resolution) || 128)));
         next.occlusionRange = Math.min(1, Math.max(0.01, Number(next.occlusionRange) || 0.1));
         next.occlusionStrength = Math.min(1, Math.max(0, Number.isFinite(Number(next.occlusionStrength)) ? Number(next.occlusionStrength) : 1));
+        next.delight = Math.min(1, Math.max(0, Number.isFinite(Number(next.delight)) ? Number(next.delight) : 0.5));
+        next.delightFloor = Math.min(1, Math.max(0.02, Number(next.delightFloor) || 0.2));
+        next.delightSeesDeleted = next.delightSeesDeleted !== false;
         if (next.resolution !== this.settings.resolution) {
             this.gridDirty = true;
         }
@@ -1054,6 +1399,15 @@ class Relighter {
                 lightMinus: e.lightMinus,
                 occlusionPlus: e.occlusionPlus,
                 occlusionMinus: e.occlusionMinus,
+                capturedPlus: e.capturedPlus,
+                capturedMinus: e.capturedMinus,
+                delightPlus: e.delightPlus,
+                delightMinus: e.delightMinus,
+                captured: e.captured ? {
+                    origin: e.captured.origin.slice(),
+                    cell: e.captured.cell,
+                    dims: e.captured.dims.slice()
+                } : null,
                 width: e.width,
                 height: e.height,
                 count: e.count

@@ -1,17 +1,17 @@
 import { Container } from '@playcanvas/pcui';
 
 import { i18n } from './localization';
-import { LightKind, LightOp, LightSettings } from '../edit-ops';
+import { LightKind, LightOp, LightRole, LightSettings } from '../edit-ops';
 import { Events } from '../events';
 import { loadEnvironment } from '../relight/environment';
 
 /**
  * The light node's face, mounted in the node pane like the camera's.
  *
- * Two parts. The light itself - its kind, colour, strength, softness and,
- * for a spot, its cone, for an ambient light its environment - edits the
- * node's settings in place; a light has no baked result, so the relighter
- * simply sees the change on its next frame.
+ * Two parts. The light itself - its kind, role, colour, strength, softness
+ * and, for a spot, its cone, for an ambient light its environment - edits
+ * the node's settings in place; a light has no baked result, so the
+ * relighter simply sees the change on its next frame.
  * Below that, the scene's lighting: settings every light shares, shown on
  * each light's face because there is nowhere else a user would look for
  * them.
@@ -37,6 +37,12 @@ const LIGHT_FIELDS: NumberField[] = [
 
 const KINDS: LightKind[] = ['point', 'spot', 'sun', 'ambient'];
 
+const ROLES: LightRole[] = ['add', 'match'];
+
+// an ambient light always adds light: the capture's own sky is what
+// de-light's occlusion stands for
+const ROLE_KINDS: LightKind[] = ['point', 'spot', 'sun'];
+
 const RESOLUTIONS = [64, 96, 128, 192, 256];
 
 // the picker speaks hex; the settings keep 0..1 per channel
@@ -50,12 +56,17 @@ class LightFace extends Container {
     private events: Events;
     private op: LightOp | null = null;
     private kindSelect: HTMLSelectElement;
+    private roleSelect: HTMLSelectElement;
+    private roleRow: HTMLElement;
     private colorInput: HTMLInputElement;
     private inputs = new Map<string, { input: HTMLInputElement, row: HTMLElement, field: NumberField }>();
     private capturedInput: HTMLInputElement;
     private resolutionSelect: HTMLSelectElement;
     private rangeInput: HTMLInputElement;
     private strengthInput: HTMLInputElement;
+    private delightInput: HTMLInputElement;
+    private floorInput: HTMLInputElement;
+    private seesDeletedSelect: HTMLSelectElement;
     private unsupported: HTMLDivElement;
     private environmentRow: HTMLElement;
     private environmentControls: HTMLElement;
@@ -109,6 +120,17 @@ class LightFace extends Container {
             return el;
         };
 
+        const select = (values: string[], label: (value: string) => string) => {
+            const el = quiet(document.createElement('select')) as HTMLSelectElement;
+            values.forEach((value) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = i18n.t(label(value));
+                el.appendChild(option);
+            });
+            return el;
+        };
+
         // a browser without WebGPU still shows lights, and says why they do
         // nothing rather than leaving it to be guessed. Decided when a node
         // is bound: this face is built before the device exists
@@ -120,13 +142,7 @@ class LightFace extends Container {
 
         const lightSection = section('light.light-group');
 
-        this.kindSelect = quiet(document.createElement('select')) as HTMLSelectElement;
-        KINDS.forEach((kind) => {
-            const option = document.createElement('option');
-            option.value = kind;
-            option.textContent = i18n.t(`light.kind-${kind}`);
-            this.kindSelect.appendChild(option);
-        });
+        this.kindSelect = select(KINDS, kind => `light.kind-${kind}`);
         this.kindSelect.addEventListener('change', () => {
             if (!this.op) return;
             this.op.settings.kind = this.kindSelect.value as LightKind;
@@ -134,6 +150,16 @@ class LightFace extends Container {
             this.changed();
         });
         row(lightSection, 'light.kind', this.kindSelect);
+
+        // a light the capture was shot under is matched, not added: placed
+        // where it was, it lets de-light divide its shadows back out
+        this.roleSelect = select(ROLES, role => `light.role-${role}`);
+        this.roleSelect.addEventListener('change', () => {
+            if (!this.op) return;
+            this.op.settings.role = this.roleSelect.value as LightRole;
+            this.changed();
+        });
+        this.roleRow = row(lightSection, 'light.role', this.roleSelect);
 
         this.colorInput = quiet(document.createElement('input')) as HTMLInputElement;
         this.colorInput.type = 'color';
@@ -265,6 +291,20 @@ class LightFace extends Container {
         this.rangeInput = sceneNumber('light.occlusion-range', 'occlusionRange', 0.01, 0.01, 1);
         this.strengthInput = sceneNumber('light.occlusion-strength', 'occlusionStrength', 0.05, 0, 1);
 
+        // de-light: how much of the capture's own light is divided back out,
+        // the least it divides by, and whether deleted gaussians still count
+        // as part of the capture - a deleted car's baked shadow comes out of
+        // the road only if they do, cleaned-up floaters stop counting only if
+        // they do not
+        this.delightInput = sceneNumber('light.delight', 'delight', 0.05, 0, 1);
+        this.floorInput = sceneNumber('light.delight-floor', 'delightFloor', 0.05, 0.02, 1);
+        this.seesDeletedSelect = select(['yes', 'no'], answer => `light.${answer}`);
+        this.seesDeletedSelect.addEventListener('change', () => {
+            events.fire('relight.setSettings', { delightSeesDeleted: this.seesDeletedSelect.value === 'yes' });
+            events.fire('edit.changed');
+        });
+        row(sceneSection, 'light.delight-deleted', this.seesDeletedSelect);
+
         // another light's face, or a loaded project, can change these
         events.on('relight.settingsChanged', () => this.readScene());
     }
@@ -278,6 +318,7 @@ class LightFace extends Container {
         if (!this.op) return;
         const s = this.op.settings;
         this.kindSelect.value = s.kind;
+        this.roleSelect.value = s.role ?? 'add';
         this.colorInput.value = toHex(s.color);
         for (const [key, { input }] of this.inputs) {
             input.value = String((s as any)[key] ?? 0);
@@ -294,6 +335,9 @@ class LightFace extends Container {
         this.resolutionSelect.value = String(settings.resolution);
         this.rangeInput.value = String(settings.occlusionRange);
         this.strengthInput.value = String(settings.occlusionStrength);
+        this.delightInput.value = String(settings.delight);
+        this.floorInput.value = String(settings.delightFloor);
+        this.seesDeletedSelect.value = settings.delightSeesDeleted ? 'yes' : 'no';
     }
 
     /** a spot's cone means nothing to a point light or a sun */
@@ -307,6 +351,7 @@ class LightFace extends Container {
         const ambient = kind === 'ambient' ? '' : 'none';
         this.environmentRow.style.display = ambient;
         this.environmentControls.style.display = ambient;
+        this.roleRow.style.display = ROLE_KINDS.includes(kind) ? '' : 'none';
     }
 
     private write(field: NumberField, input: HTMLInputElement) {

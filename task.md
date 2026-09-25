@@ -1,7 +1,7 @@
 # What's next
 
 Everything outstanding, phased and ranked in the table below and then
-described in full: the work in flight, then relighting - two of its four
+described in full: the work in flight, then relighting - three of its four
 items built - then the places where something built works and could work
 better. What is already built is in [CHANGELOG.md](CHANGELOG.md), with the
 reasoning kept.
@@ -37,7 +37,7 @@ hard here is rarely the amount of code.
 | 4 | 15 | Rec.709 luma coefficients | Haiku 4.5 |
 | 5 | 16 | Relighting: density grid, lights, soft shadows (built, needs a real-GPU run) | |
 | 5 | 17 | Relighting: occlusion and ambient light (built, needs a real-GPU run) | |
-| 5 | 18 | Relighting: de-light by occlusion and a matched sun | |
+| 5 | 18 | Relighting: de-light by occlusion and a matched sun (built, needs a real-GPU run) | |
 | 5 | 19 | Relighting: area and volume lights | |
 | — | 10 | Cleanup in a worker | Sonnet 5 |
 | — | 12 | Merge by dragging output onto input | Sonnet 5 |
@@ -255,7 +255,7 @@ nothing.
 
 ---
 
-## Relighting — two items built, two to go
+## Relighting — three items built, one to go
 
 The ask: light a capture with lights placed in VoluLab - point, spot, sun,
 area and volume lights, and ambient light - with soft shadows and
@@ -273,7 +273,15 @@ Item 17 is built too: an ambient light kind - a flat colour, or an HDRI
 or photo reduced to spherical harmonics and turned with a rotation - shaped
 by occlusion traced through the same grid, with a range and a strength
 shared by the scene. Verified the same way, and owing the same real-GPU
-session. Items 18 and 19 are not started.
+session.
+
+Item 18 is built as well: de-light, which divides an estimate of the
+capture's own light out before new light goes on - the capture's sky
+through occlusion, automatically, and any light the user sets to "baked
+in" where the capture's sun was. Verified the same way, on a test capture
+with an analytic sky and sun baked into it, and owing the same session -
+plus a look at how its guards sit on a real sunny capture. Item 19 is not
+started.
 
 **For the record, how Octane does it.** Octane 2026 path traces gaussians
 alongside meshes, so they cast and receive shadows and show up in
@@ -346,7 +354,8 @@ occlusion would need exactly such a pass.
 **De-lighting, and why occlusion does most of it.** New light multiplied
 onto a capture leaves the old shadows under the new ones, so the captured
 lighting has to be divided out first. The light texture carries both at
-once: new lighting over captured lighting, one factor per gaussian.
+once: new lighting over captured lighting, one factor per gaussian. Built
+as described below, with what building it changed noted where it did.
 
 - **Occlusion is the automatic half.** Captures are best shot in overcast
   or even light precisely so that what gets baked in is mostly sky light,
@@ -367,7 +376,11 @@ once: new lighting over captured lighting, one factor per gaussian.
   occlusion that still includes the car removes that shadow, and relighting
   without the car does not put it back. Cleanup's deleted floaters would
   count as occluders too, though, so which scene de-light sees wants to be
-  a choice rather than a rule.
+  a choice rather than a rule. Built as a choice, "de-light counts
+  deleted", on by default. Building it showed "as captured" means per
+  object: a second capture set beside this one was not there when this one
+  was shot, so each object gets a captured grid of its own gaussians alone,
+  where the capture put them.
 - Learning true albedo during training is the proper fix. It means
   teaching the Brush fork a lighting model, and it waits on phase 0 - a
   training run seen end to end.
@@ -389,9 +402,12 @@ proves slow on real captures.
    export and training already needed WebGPU, so it was not the first.
 2. **Sharpness - built as proposed.** Lighting per gaussian means shadow
    edges are no sharper than the gaussians, and a big background gaussian
-   gets one flat value. Shadow rays also start two cells off the surface,
-   so a contact shadow begins up to two cells late - any closer and every
-   surface dims itself.
+   gets one flat value. Shadow rays also skip the first stretch off the
+   surface - along the ray, to two cells' height - so a contact shadow
+   begins up to two cells late; any closer and every surface dims itself.
+   The grid blurs occluders by a cell and a half as well, so shadows come
+   out that much wider than the objects casting them - harmless when
+   multiplied in, which is why only de-light takes it back out.
 3. **Large scenes - partly answered.** The grid's box already trims half a
    percent of gaussians off each end of each axis, so a few floaters do not
    stretch it. For a big outdoor capture the cells still get coarse; a box
@@ -423,6 +439,28 @@ proves slow on real captures.
   room makes the room dark. The range defaults short for that reason.
 - The occlusion textures cost another 16 bytes per gaussian while an
   ambient light is on, on top of the light textures' 16.
+
+**Left from item 18**, none of it blocking:
+
+- A hard baked shadow's edge leaves a thin dark outline at full strength.
+  The grid cannot place an edge to better than a cell or so, and de-light
+  errs toward lit there on purpose (see CHANGELOG.md). Half strength, the
+  default, hides it; a finer grid narrows it.
+- A shadow narrower than about five cells is shrunk away entirely, and so
+  is not de-lit - a pole's, a branch's. The same shrinking makes the
+  outline above; neither goes without a sharper occluder than the grid.
+- A soft matched light reads coarser levels, which blur more than de-light
+  takes back out. The real sun is hard, so that is the usual case anyway.
+- The capture's sky is white and even. A matched ambient light, an HDRI
+  of the sky the capture was shot under, would let de-light take a sky's
+  colour and gradient out too.
+- Occlusion ignores bounce light, so full strength over-lifts cavities.
+  The strength defaults to half for that.
+- The captured grid lives in world space, so moving a whole object
+  rebuilds it and its occlusion. In the object's own space it never would,
+  at the price of carrying each matched light into that space.
+- While de-light is on, each object costs another grid and 32 bytes per
+  gaussian: its captured occlusion and the divisor, both sides.
 
 ---
 

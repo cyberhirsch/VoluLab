@@ -87,6 +87,8 @@ class SceneLight extends Element {
             }
             this.settings.environment = validEnvironment(environment);
             this.settings.rotation = Number(this.settings.rotation) || 0;
+            // projects from before matched lights had none
+            this.settings.role = this.settings.role === 'match' ? 'match' : 'add';
         }
         this.changed();
     }

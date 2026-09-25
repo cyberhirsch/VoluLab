@@ -16,9 +16,11 @@ import { vertexShader, fragmentShader } from './shaders/debug-shader';
  *
  * A point light is a small star, a spot adds its cone out to the aim point,
  * a sun is an arrow along the way it shines, and an ambient light - light
- * from all around - is a dome. Each is drawn in its own
- * colour, the selected one at full brightness. Modelled on
- * SceneCameraGizmos: one shared line mesh, rebuilt when anything changes.
+ * from all around - is a dome. A light matched to the capture is framed by
+ * a square, since it stands for light already there rather than adding
+ * any. Each is drawn in its own colour, the selected one at full
+ * brightness. Modelled on SceneCameraGizmos: one shared line mesh, rebuilt
+ * when anything changes.
  */
 
 const tmpForward = new Vec3();
@@ -174,6 +176,17 @@ class LightGizmos extends Element {
                 arc(Vec3.RIGHT, Vec3.UP, 0, Math.PI);
                 arc(Vec3.BACK, Vec3.UP, 0, Math.PI);
                 return;
+            }
+
+            if (settings.role === 'match') {
+                // a square across the aim, round whatever is drawn below
+                const r = size * 1.4;
+                const corners = [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([a, b]) => new Vec3().copy(position)
+                .addScaled(tmpRight, a * r)
+                .addScaled(tmpUp, b * r));
+                for (let i = 0; i < 4; ++i) {
+                    pushLine(corners[i], corners[(i + 1) % 4]);
+                }
             }
 
             if (settings.kind === 'sun') {

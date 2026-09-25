@@ -1451,6 +1451,14 @@ class CameraPoseOp {
 type LightKind = 'point' | 'spot' | 'sun' | 'ambient';
 
 /**
+ * What a light does to the scene. Most add light. A light matched to the
+ * capture stands for one the capture was shot under - the sun of a sunny
+ * day - and de-light divides its light and shadows back out of the colours
+ * instead, so new light does not land on top of them.
+ */
+type LightRole = 'add' | 'match';
+
+/**
  * What a light node records. Everything is relative, because a capture
  * arrives at whatever scale its solver felt like: intensity is how bright
  * the light is where it is aimed, and softness is the light's size as a
@@ -1460,9 +1468,14 @@ type LightKind = 'point' | 'spot' | 'sun' | 'ambient';
  * An ambient light has no position that matters: it is light from every
  * direction, a flat colour or an environment map, and its intensity is how
  * bright it makes an unoccluded surface. Occlusion shapes it.
+ *
+ * A matched light's intensity is relative to the capture's sky, which is 1:
+ * a sun twice as bright as the sky light in the shadows is 2.
  */
 type LightSettings = {
     kind: LightKind;
+    /** point, spot and sun: whether the light adds light or is matched to the capture */
+    role: LightRole;
     /** linear rgb */
     color: [number, number, number];
     /** 1 lights the aim point as brightly as the capture already was */
@@ -1481,6 +1494,7 @@ type LightSettings = {
 
 const defaultLightSettings = (): LightSettings => ({
     kind: 'point',
+    role: 'add',
     color: [1, 1, 1],
     intensity: 0.8,
     softness: 0.15,
@@ -1696,6 +1710,7 @@ export {
     LightOp,
     LightPoseOp,
     type LightKind,
+    type LightRole,
     type LightSettings,
     defaultLightSettings,
     TrainOp,

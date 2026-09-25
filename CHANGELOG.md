@@ -9,6 +9,98 @@ months finds out why before they change it.
 
 ---
 
+## Relighting: de-light by occlusion and a matched sun
+
+The third relighting item. New light used to be multiplied onto the
+capture, so it landed on top of the capture's own shadows. De-light divides
+an estimate of the capture's light back out first: new light over old light,
+still one factor per gaussian.
+
+- **Occlusion is the automatic half.** The capture's sky is taken to be
+  white and as bright as the open sky, dimmed by how open each gaussian
+  was. That openness is traced through the same kind of grid as the
+  ambient light's occlusion, with the same kernel and the same range. On
+  an unedited capture the two are the same number, so a flat white ambient
+  light with de-light at full strength gives the capture back exactly - the
+  test checks every gaussian and finds no difference at all.
+- **A matched light is the manual half.** Any point, spot or sun light can
+  be set to "baked in": it no longer adds light, it stands for one the
+  capture was shot under. Its light and shadow are added to the estimate.
+  Its intensity is relative to the sky, and the estimate is scaled per
+  channel so an open surface squarely facing every matched light is 1. That
+  leaves such a surface exactly as captured, and a warm sun's cast comes out
+  of the shadows too. The gizmo frames a matched light in a square.
+- **De-light sees the object as captured, not the scene as edited.** Each
+  object gets a grid of its own: its own gaussians and nothing else, where
+  the capture put them - no palette transform - and the deleted ones too by
+  default. A deleted car's baked shadow comes out of the road, while
+  relighting, which sees the scene as edited, puts nothing back. A second
+  capture set beside this one was not there when this one was shot, so it
+  shadows it without being taken for part of its baked light - which one
+  shared grid would get wrong. "De-light counts deleted" can be turned off
+  for cleaned-up floaters, which otherwise count as occluders too.
+- **Guards.** A floor on the divisor bounds how far a deep baked shadow is
+  lifted, and a strength fades the whole estimate toward 1, because bounce
+  light makes a real cavity brighter than occlusion predicts. Strength
+  defaults to half.
+- **Its own pass, rarely run.** The captured grid depends only on the object
+  and its transform, and its occlusion only on that and the range. They are
+  built once and kept. The divisor itself is a pass of its own, stored per
+  side, which reruns only when a matched light or the de-light settings
+  change. Moving a light that adds light never reruns it.
+
+**The trap: dividing by a shadow shows every error in it.** Multiplied in,
+a shadow a cell off reads as a soft shadow. Divided out, the same error
+lifts a white ring round the baked one. Two causes, found by comparing the
+traced shadow against the analytic one baked into a test capture:
+
+- Shadow rays left along the surface normal, a couple of cells up, which
+  moves every shadow toward the light by the height over the slope - about
+  1.3 cells for a sun at 56 degrees. They now leave along the ray itself,
+  as far as it takes to reach the same height, so the ray is the one from
+  the gaussian. It applies to every light; item 16's measured shadows came
+  out identical.
+- The grid blurs every occluder by about a cell and a half, at 128 cells
+  and at 256 alike, so a traced shadow is that much wider than the real
+  one. De-light takes it back out: a point counts as lit if the best of six
+  rays from around it, off to the side, gets through - the shadow shrunk
+  from its edges. It shrinks by 2.5 cells, deliberately more than the
+  blur, because the division is lopsided. Calling a half-lit point shadowed
+  lifts it nearly twice too bright; calling a half-shadowed point lit
+  leaves it a little dark. So an edge the grid cannot place exactly ends
+  as a thin dark outline, which reads as a trace of the old shadow, rather
+  than a white line, which reads as a fault.
+
+Softening the matched light does not help: a wider cone reads coarser,
+blurrier levels, and its shadow grows.
+
+**The other trap: an undo brings a gaussian back without changing the
+captured grid.** Deleted gaussians are in the captured grid by default, so
+deleting or restoring one changes nothing there, and nothing would trace
+it again. The captured occlusion and the divisor are therefore worked out
+for every gaussian, deleted or not.
+
+Verified on a test capture with its lighting baked in - an analytic sky
+occlusion and a sun twice as bright as the sky, whose shadow falls on the
+floor:
+
+- De-light by occlusion alone matched the formula at every gaussian, to
+  0.09%.
+- The ambient identity held exactly.
+- The matched sun, placed where the baked one was, lifted the baked
+  shadow's inside from 0.20 to 0.79 against 0.70 for the open floor.
+- Deleting the sphere with de-light counting it lifted the floor under it
+  to 0.73 against 0.72 open; not counting it left the baked shadow in place,
+  as it should.
+- Moving the matched sun reran de-light and lighting and no grid; moving
+  the other sun reran lighting alone.
+- The undo rebuilt what it had to.
+- The role survived a project round trip, and an older project's lights
+  load as lights that add.
+- The shadow and ambient numbers of items 16 and 17 came out unchanged.
+
+---
+
 ## Relighting: ambient light and occlusion
 
 The second relighting item. A light node can now be an ambient light:
