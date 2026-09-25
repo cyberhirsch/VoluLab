@@ -9,6 +9,94 @@ months finds out why before they change it.
 
 ---
 
+## Relighting: area and volume lights
+
+The last relighting item. Two new families of light, both built on what
+the first item already does: a light's irradiance per side of each
+gaussian, and one cone through the density grid for its shadow.
+
+- **Area lights: rectangle, disk and sphere.** Each sits where a point
+  light would and faces its aim point. Its size is a share of the distance
+  to that point, like a point light's softness, and its softness follows
+  from its size. Irradiance is the emitter's vector form factor:
+  - A rectangle is exact: Lambert's formula over its four edges, with the
+    edge angles taken by `atan2` because `acos` loses a distant light's
+    tiny edges.
+  - A sphere is exact.
+  - The horizon is handled by treating any emitter as the sphere with the
+    same form factor and direction (the Frostbite formula), which is exact
+    for spheres and close for the rest.
+  - Rectangles and disks light their front only.
+  - Each is scaled so a surface at its aim point, facing it, gets exactly
+    its intensity - the same promise every other light makes.
+- **Volume lights: what glows in the capture, made into light.** Select
+  the gaussians of a lamp, a window or a screen and add a light from the
+  selection (or turn any light into a volume light while they are
+  selected):
+  - Each gaussian is weighed by what it shows: its luminance times its
+    opacity times its footprint.
+  - Weighted k-means groups them into 16 emitters, with the brightest
+    gaussian as the first seed and farthest-point seeding after it, so the
+    same selection always gives the same emitters.
+  - Each emitter keeps its share of the light, its colour and its spread.
+    Each has its own falloff and Lambert term, but they share one shadow
+    cone, toward their middle and as wide as they spread - so a lamp of
+    thousands of gaussians costs one trace.
+  - The emitters are placed relative to the light, so moving the light
+    moves them.
+- Both can be set to "baked in" and go through de-light like any other
+  light.
+
+**The trap: a disk's closed form only holds head-on.** The usual formula
+for a disk is exact for a point on its axis and off by up to 6% across the
+floor beside it. A disk is now an octagon of the same area, run through the
+rectangle's exact edge sum: within 0.08% of the exact formula everywhere
+the test looked.
+
+**The trap: a volume light shadowed its own light.** Its emitters are
+inside the glowing gaussians, so its shadow ray has to stop short of them.
+But the cone is wide by the time it arrives, reads coarse levels, and a
+coarse level's blur reached into the glowing object anyway: the floor a
+little way from a glowing sphere got 59% of its light. Two changes:
+- The ray now stops at the emitters' reach: each cluster's offset plus
+  twice its spread, since a cluster's radius is its members' root-mean-square
+  distance.
+- Every cone now caps its level by how far it has left to go, the same way
+  it already capped it by its height above the surface it left - so no
+  coarse level near either end blurs into the surface at that end.
+
+The floor then got its full light at every distance, while a light made
+from the sphere's top cap alone is still fully shadowed by the rest of the
+sphere. The cap changed item 16's soft point light by 1% (a little less
+spurious blur) and its hard shadows not at all.
+
+**The other trap: the lamp itself went dark.** Its emitters sit just
+inside it, behind the side a camera sees, and relighting treats its colour
+as a surface's. But a glowing gaussian's colour is its own light, so it now
+glows with the light instead: the light's intensity added, unshadowed. At
+the usual intensity it looks as captured, turned up it brightens, and turned
+off it goes dark (1.05, and 0.25 with the light at zero, on the test
+sphere). Which gaussians glow is decided by distance to the emitters.
+Testing only the nearest one left seams where clusters meet; reaching
+further spilled glow onto the floor under the lamp. Summing a short falloff
+over all of them does neither.
+
+Verified on the floor and sphere scene:
+- Rectangle, disk and sphere lights over the open floor each matched the
+  exact form factor at over 3,000 gaussians, to 0.02% on average.
+- A rectangle facing away lit nothing behind it, and a sphere light beside
+  the sphere, partly below its gaussians' horizons, gave no NaN.
+- The sphere made into a volume light gave 16 red emitters at its centre.
+  The floor under it and further away got exactly the unshadowed light, and
+  moving the light moved the pool of light with it.
+- A baked-in rectangle ran through de-light.
+- Kinds, sizes and emitters survived a project round trip.
+- The face showed each kind's own settings.
+- The earlier items' shadow, ambient and de-light numbers came out
+  unchanged, apart from the 1% above.
+
+---
+
 ## Relighting: de-light by occlusion and a matched sun
 
 The third relighting item. New light used to be multiplied onto the

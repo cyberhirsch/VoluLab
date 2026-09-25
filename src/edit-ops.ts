@@ -1448,7 +1448,22 @@ class CameraPoseOp {
     }
 }
 
-type LightKind = 'point' | 'spot' | 'sun' | 'ambient';
+type LightKind = 'point' | 'spot' | 'sun' | 'rect' | 'disk' | 'sphere' | 'volume' | 'ambient';
+
+/**
+ * One glowing cluster of a volume light: where it sits, how much of the
+ * light it gives, its colour, and how far its gaussians spread. Positions
+ * are world units from the light's own position, so moving the light moves
+ * them all.
+ */
+type VolumeEmitter = {
+    offset: [number, number, number];
+    /** share of the light; a light's emitters add up to 1 */
+    weight: number;
+    /** linear rgb, brightest channel 1 */
+    color: [number, number, number];
+    radius: number;
+};
 
 /**
  * What a light does to the scene. Most add light. A light matched to the
@@ -1468,6 +1483,12 @@ type LightRole = 'add' | 'match';
  * An ambient light has no position that matters: it is light from every
  * direction, a flat colour or an environment map, and its intensity is how
  * bright it makes an unoccluded surface. Occlusion shapes it.
+ *
+ * An area light - rectangle, disk or sphere - sits where a point light
+ * would and faces its aim point; its size is a share of the distance to
+ * that point too, and its softness follows from its size. A volume light
+ * is glowing gaussians taken from a selection - a lamp in the capture -
+ * clustered into a few emitters that keep their places around the light.
  *
  * A matched light's intensity is relative to the capture's sky, which is 1:
  * a sun twice as bright as the sky light in the shadows is 2.
@@ -1490,6 +1511,14 @@ type LightSettings = {
     environment: Environment | null;
     /** ambient only: the environment turned about the up axis, in degrees */
     rotation: number;
+    /** rectangle: width; disk, sphere: diameter - as a share of the distance to the aim point */
+    size: number;
+    /** rectangle only: height, as a share of the distance to the aim point */
+    height: number;
+    /** volume only: the glowing gaussians the light was made from, clustered */
+    emitters: VolumeEmitter[];
+    /** volume only: the object they came from, for the node to show */
+    emitterSource: string;
 };
 
 const defaultLightSettings = (): LightSettings => ({
@@ -1501,7 +1530,11 @@ const defaultLightSettings = (): LightSettings => ({
     spotAngle: 45,
     spotBlend: 0.3,
     environment: null,
-    rotation: 0
+    rotation: 0,
+    size: 0.5,
+    height: 0.5,
+    emitters: [],
+    emitterSource: ''
 });
 
 /**
@@ -1712,6 +1745,7 @@ export {
     type LightKind,
     type LightRole,
     type LightSettings,
+    type VolumeEmitter,
     defaultLightSettings,
     TrainOp,
     type TrainSettings,

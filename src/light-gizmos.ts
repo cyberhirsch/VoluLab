@@ -16,11 +16,13 @@ import { vertexShader, fragmentShader } from './shaders/debug-shader';
  *
  * A point light is a small star, a spot adds its cone out to the aim point,
  * a sun is an arrow along the way it shines, and an ambient light - light
- * from all around - is a dome. A light matched to the capture is framed by
- * a square, since it stands for light already there rather than adding
- * any. Each is drawn in its own colour, the selected one at full
- * brightness. Modelled on SceneCameraGizmos: one shared line mesh, rebuilt
- * when anything changes.
+ * from all around - is a dome. An area light is drawn as itself, at its
+ * real size, facing its aim point, and a volume light as a small star at
+ * each of its emitters. A light matched to the capture is framed by a
+ * square, since it stands for light already there rather than adding any.
+ * Each is drawn in its own colour, the selected one at full brightness.
+ * Modelled on SceneCameraGizmos: one shared line mesh, rebuilt when
+ * anything changes.
  */
 
 const tmpForward = new Vec3();
@@ -149,13 +151,32 @@ class LightGizmos extends Element {
             }
             tmpUp.cross(tmpRight, tmpForward);
 
-            // a star at the light: three axes and the aim direction
-            const star = (s: number) => {
+            // a star: three axes
+            const star = (s: number, at: Vec3 = position) => {
                 for (const axis of [Vec3.RIGHT, Vec3.UP, Vec3.FORWARD]) {
-                    tmpA.copy(position).addScaled(axis, s);
-                    tmpB.copy(position).addScaled(axis, -s);
+                    tmpA.copy(at).addScaled(axis, s);
+                    tmpB.copy(at).addScaled(axis, -s);
                     pushLine(tmpA, tmpB);
                 }
+            };
+
+            // a circle of radius r round the light, in the plane of a and b
+            const ring = (a: Vec3, b: Vec3, r: number) => {
+                let prev: Vec3 = null;
+                for (let i = 0; i <= CONE_SEGMENTS * 2; ++i) {
+                    const angle = i / (CONE_SEGMENTS * 2) * Math.PI * 2;
+                    const p = new Vec3().copy(position)
+                    .addScaled(a, Math.cos(angle) * r)
+                    .addScaled(b, Math.sin(angle) * r);
+                    if (prev) pushLine(prev, p);
+                    prev = p;
+                }
+            };
+
+            // a short line out of the light toward what it is aimed at
+            const aim = () => {
+                tmpA.copy(position).addScaled(tmpForward, Math.min(dist, size * 3));
+                pushLine(position, tmpA);
             };
 
             if (settings.kind === 'ambient') {
@@ -187,6 +208,38 @@ class LightGizmos extends Element {
                 for (let i = 0; i < 4; ++i) {
                     pushLine(corners[i], corners[(i + 1) % 4]);
                 }
+            }
+
+            if (settings.kind === 'rect' || settings.kind === 'disk' || settings.kind === 'sphere') {
+                // the emitter itself, sized as the relighter sizes it
+                const halfWidth = Math.max(0.01, settings.size) * dist * 0.5;
+                const halfHeight = Math.max(0.01, settings.height) * dist * 0.5;
+                if (settings.kind === 'rect') {
+                    const corners = [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([a, b]) => new Vec3().copy(position)
+                    .addScaled(tmpRight, a * halfWidth)
+                    .addScaled(tmpUp, b * halfHeight));
+                    for (let i = 0; i < 4; ++i) {
+                        pushLine(corners[i], corners[(i + 1) % 4]);
+                    }
+                } else {
+                    ring(tmpRight, tmpUp, halfWidth);
+                    if (settings.kind === 'sphere') {
+                        ring(tmpRight, tmpForward, halfWidth);
+                        ring(tmpUp, tmpForward, halfWidth);
+                    }
+                }
+                aim();
+                return;
+            }
+
+            if (settings.kind === 'volume') {
+                // each emitter where it glows, as big as its gaussians spread
+                for (const e of settings.emitters ?? []) {
+                    tmpBase.set(position.x + e.offset[0], position.y + e.offset[1], position.z + e.offset[2]);
+                    star(Math.max(e.radius, size * 0.1), tmpBase);
+                }
+                aim();
+                return;
             }
 
             if (settings.kind === 'sun') {
@@ -225,8 +278,7 @@ class LightGizmos extends Element {
                 }
             } else {
                 // a point light's aim point, which its intensity is measured at
-                tmpA.copy(position).addScaled(tmpForward, Math.min(dist, size * 3));
-                pushLine(position, tmpA);
+                aim();
             }
         });
 

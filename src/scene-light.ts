@@ -1,6 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
-import { LightSettings } from './edit-ops';
+import { LightSettings, VolumeEmitter } from './edit-ops';
 import { Element, ElementType } from './element';
 import { validEnvironment } from './relight/environment';
 
@@ -17,6 +17,22 @@ import { validEnvironment } from './relight/environment';
  * intensity is measured at - which is what keeps a light's brightness
  * independent of the capture's scale.
  */
+const finite = (v: unknown, fallback: number) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+
+/** a volume light's emitters from a project, keeping only well-formed ones */
+const validEmitters = (emitters: unknown): VolumeEmitter[] => {
+    if (!Array.isArray(emitters)) return [];
+    return emitters
+    .filter(e => e && Array.isArray(e.offset) && e.offset.length === 3 && Array.isArray(e.color) && e.color.length === 3)
+    .slice(0, 64)
+    .map(e => ({
+        offset: [finite(e.offset[0], 0), finite(e.offset[1], 0), finite(e.offset[2], 0)],
+        weight: Math.max(0, finite(e.weight, 0)),
+        color: [Math.max(0, finite(e.color[0], 1)), Math.max(0, finite(e.color[1], 1)), Math.max(0, finite(e.color[2], 1))],
+        radius: Math.max(0, finite(e.radius, 0))
+    }));
+};
+
 class SceneLight extends Element {
     name: string;
     position = new Vec3(0, 1, 0);
@@ -47,6 +63,22 @@ class SceneLight extends Element {
         this.scene?.events.fire('light.moved', this);
     }
 
+    /**
+     * The light's own axes: forward toward its aim point, right and up across
+     * it - the plane an area light's rectangle or disk lies in, which the
+     * relighter and the gizmo must agree on. Aimed straight up or down,
+     * right is taken from the world's z axis rather than its up.
+     */
+    frame() {
+        const forward = new Vec3().sub2(this.target, this.position);
+        const distance = Math.max(forward.length(), 1e-4);
+        forward.mulScalar(1 / distance);
+        const reference = Math.abs(forward.y) > 0.999 ? Vec3.BACK : Vec3.UP;
+        const right = new Vec3().cross(forward, reference).normalize();
+        const up = new Vec3().cross(right, forward);
+        return { forward, right, up, distance };
+    }
+
     /** anything else about the light changed: settings, name, visibility */
     changed() {
         this.scene?.events.fire('light.changed', this);
@@ -67,7 +99,13 @@ class SceneLight extends Element {
                 environment: this.settings.environment ? {
                     ...this.settings.environment,
                     data: [...this.settings.environment.data]
-                } : null
+                } : null,
+                emitters: (this.settings.emitters ?? []).map(e => ({
+                    offset: [...e.offset],
+                    weight: e.weight,
+                    color: [...e.color],
+                    radius: e.radius
+                }))
             }
         };
     }
@@ -80,7 +118,7 @@ class SceneLight extends Element {
         this.visible = doc.visible !== false;
         if (doc.settings) {
             // in place: the op's record and this light share the object
-            const { color, environment, ...rest } = doc.settings;
+            const { color, environment, emitters, ...rest } = doc.settings;
             Object.assign(this.settings, rest);
             if (Array.isArray(color) && color.length === 3) {
                 this.settings.color = [color[0], color[1], color[2]];
@@ -89,6 +127,11 @@ class SceneLight extends Element {
             this.settings.rotation = Number(this.settings.rotation) || 0;
             // projects from before matched lights had none
             this.settings.role = this.settings.role === 'match' ? 'match' : 'add';
+            // nor, from before area and volume lights, these
+            this.settings.size = Math.max(0.01, finite(this.settings.size, 0.5));
+            this.settings.height = Math.max(0.01, finite(this.settings.height, 0.5));
+            this.settings.emitters = validEmitters(emitters);
+            this.settings.emitterSource = String(this.settings.emitterSource ?? '');
         }
         this.changed();
     }

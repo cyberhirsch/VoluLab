@@ -400,10 +400,27 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, 
 `;
 
 // Light records are four vec4s each; the ambient irradiance - nine
-// spherical-harmonic coefficients, rgb in xyz - follows the last record.
+// spherical-harmonic coefficients, rgb in xyz - follows the last record,
+// and the volume lights' emitters, two vec4s each, follow that.
 const MAX_LIGHTS = 32;
 const AMBIENT_BASE = MAX_LIGHTS * 4;
 const SH_COUNT = 9;
+const MAX_EMITTERS = 256;
+const EMITTER_BASE = AMBIENT_BASE + SH_COUNT;
+
+// an octagon with its corners this far out, in radii, covers a disk's area
+const DISK_OCTAGON_SCALE = Math.sqrt(Math.PI / (4 * Math.sin(Math.PI / 4)));
+
+// the kind in a light record's first w
+const LIGHT_KIND = {
+    point: 0,
+    spot: 1,
+    sun: 2,
+    rect: 3,
+    disk: 4,
+    sphere: 5,
+    volume: 6
+};
 
 // The density pyramid, as every kernel that traces through it reads it.
 const gridSampling = /* wgsl */`
@@ -702,7 +719,12 @@ fn coneTrace(origin: vec3f, dir: vec3f, tanHalf: f32, maxDist: f32, start: f32, 
         }
         let pos = origin + dir * t;
         let diam = max(h0, 2.0 * t * tanHalf);
-        let lod = min(min(log2(diam / h0), heightLod(start + t * rise, h0)), f32(levelCount - 1u));
+        // capped at both ends: by the height above the surface it left, and
+        // by how far is left to go - so the blur of a coarse level reaches
+        // neither the surface nor whatever the ray ends at, such as the
+        // glowing gaussians of the volume light it is looking toward
+        let cap = min(heightLod(start + t * rise, h0), heightLod(tEnd - t, h0));
+        let lod = min(min(log2(diam / h0), cap), f32(levelCount - 1u));
 
         if (empty && skipLevel > 0u && lod < f32(skipLevel)) {
             if (sampleLevel(pos, skipLevel) <= 0.0) {
@@ -745,15 +767,121 @@ fn erodedTrace(origin: vec3f, dir: vec3f, tanHalf: f32, maxDist: f32, start: f32
 }
 `;
 
-// What one light record delivers to each side of a surface: wrapped Lambert
-// on the side facing it, the wrap's tail on the other, both times what the
-// cone toward the light lets through. The lighting and de-light kernels ask
-// the same question of different grids, so both use this.
+// What one light record delivers to each side of a surface, unshadowed,
+// worked out per kind; then one cone toward the light for its shadow,
+// which both sides share. The lighting and de-light kernels ask the same
+// question of different grids, so both use this.
 const lightFromSource = /* wgsl */`
 struct TwoSides {
     plus: vec3f,
     minus: vec3f
 };
+
+const PI: f32 = 3.14159265;
+
+// Wrapped Lambert on the side facing the light, the wrap's tail on the far
+// side - what keeps a fuzzy gaussian's terminator from being a hard line.
+// A round gaussian has no sides and takes half from every direction.
+fn wrapped(energy: vec3f, n: vec3f, toLight: vec3f, flatness: f32) -> TwoSides {
+    let wrap = uniforms.params.y;
+    let ndl = dot(n, toLight);
+    let facing = abs(ndl);
+    let near = energy * mix(0.5, (facing + wrap) / (1.0 + wrap), flatness);
+    let far = energy * mix(0.5, max(0.0, wrap - facing) / (1.0 + wrap), flatness);
+    if (ndl >= 0.0) {
+        return TwoSides(near, far);
+    }
+    return TwoSides(far, near);
+}
+
+// The angle between two unit vectors, accurate when it is tiny - which acos
+// is not, and an edge of a distant light is tiny.
+fn angleBetween(a: vec3f, b: vec3f) -> f32 {
+    return atan2(length(cross(a, b)), dot(a, b));
+}
+
+// One edge's term in Lambert's formula for a polygon's form factor.
+fn edgeTerm(a: vec3f, b: vec3f) -> vec3f {
+    let c = cross(a, b);
+    let l = length(c);
+    if (l < 1e-12) {
+        return vec3f(0.0);
+    }
+    return c * (angleBetween(a, b) / l);
+}
+
+// A flat or round emitter as seen from p, as its vector form factor: a
+// vector toward it whose length is the share of a facing surface's
+// cosine-weighted view it fills. A rectangle is exact - Lambert's formula
+// over its four edges. A disk is the same formula over an octagon of the
+// disk's area, which is within a percent; the closed form for a disk only
+// holds for one seen squarely. A sphere is exact. A rectangle or disk
+// lights its front only.
+fn areaVector(kind: u32, centre: vec3f, lc: vec4f, ld: vec4f, radius: f32, p: vec3f) -> vec3f {
+    let toCentre = centre - p;
+    let d2 = max(dot(toCentre, toCentre), 1e-12);
+    let dir = toCentre * inverseSqrt(d2);
+
+    if (kind == ${LIGHT_KIND.sphere}u) {
+        return dir * min(1.0, radius * radius / d2);
+    }
+
+    // lc.xyz: the way the front faces; behind it, nothing
+    let front = lc.xyz;
+    let seen = dot(front, -dir);
+    if (seen <= 0.0) {
+        return vec3f(0.0);
+    }
+
+    // ld.xyz: the up axis in the emitter's plane
+    let upAxis = ld.xyz;
+    let rightAxis = cross(upAxis, front);
+    var f = vec3f(0.0);
+
+    if (kind == ${LIGHT_KIND.disk}u) {
+        // lc.w: the radius; the octagon's corners lie a little outside the
+        // circle, so the two cover the same area
+        let r = lc.w * ${DISK_OCTAGON_SCALE.toFixed(6)};
+        var prev = normalize(toCentre + rightAxis * r);
+        for (var k = 1u; k <= 8u; k++) {
+            let a = f32(k) * (PI / 4.0);
+            let next = normalize(toCentre + (rightAxis * cos(a) + upAxis * sin(a)) * r);
+            f += edgeTerm(prev, next);
+            prev = next;
+        }
+    } else {
+        // a rectangle: lc.w and ld.w its half width and height
+        let up = upAxis * ld.w;
+        let right = rightAxis * lc.w;
+        let v0 = normalize(toCentre + right + up);
+        let v1 = normalize(toCentre - right + up);
+        let v2 = normalize(toCentre - right - up);
+        let v3 = normalize(toCentre + right - up);
+        f = edgeTerm(v0, v1) + edgeTerm(v1, v2) + edgeTerm(v2, v3) + edgeTerm(v3, v0);
+    }
+    f *= 0.5 / PI;
+    // the winding decides the sign; the vector points at the light either way
+    return select(-f, f, dot(f, dir) >= 0.0);
+}
+
+// The form factor of a sphere filling sin^2 of its angular radius, whose
+// centre is at cosTheta from the normal - clipped to the horizon, where a
+// plain dot product would count light from below the surface as negative.
+// Any emitter is treated as the sphere with its vector form factor's
+// length and direction, which is exact for spheres and close for the rest.
+// (Lagarde and de Rousiers, "Moving Frostbite to PBR", 2014.)
+fn clippedFormFactor(cosTheta: f32, sinSigmaSq: f32) -> f32 {
+    let s2 = clamp(sinSigmaSq, 1e-7, 1.0);
+    if (cosTheta * cosTheta > s2) {
+        return s2 * max(cosTheta, 0.0);
+    }
+    let sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 1e-8));
+    let x = sqrt(max(1.0 / s2 - 1.0, 0.0));
+    let y = clamp(-x * cosTheta / sinTheta, -1.0, 1.0);
+    let sinThetaSqrtY = sinTheta * sqrt(max(1.0 - y * y, 0.0));
+    let e = (cosTheta * acos(y) - x * sinThetaSqrtY) * s2 + atan2(sinThetaSqrtY, x);
+    return max(e / PI, 0.0);
+}
 
 // erode: see erodedTrace; 0 for a plain trace
 fn lightFrom(li: u32, surface: Surface, erode: f32) -> TwoSides {
@@ -769,40 +897,106 @@ fn lightFrom(li: u32, surface: Surface, erode: f32) -> TwoSides {
     let flatness = surface.flatness;
 
     var toLight: vec3f;
-    var falloff = 1.0;
     var tanHalf: f32;
     var maxDist: f32;
+    var lit: TwoSides;
+    // how much this gaussian is itself one of the glowing ones - see below
+    var glow = 0.0;
 
-    if (kind == 2u) {
+    if (kind == ${LIGHT_KIND.sun}u) {
         toLight = la.xyz;
         tanHalf = lb.w;
         maxDist = 3.0e38;
+        lit = wrapped(lb.rgb, n, toLight, flatness);
     } else {
         let d = la.xyz - p;
         let dist = max(length(d), 1e-6);
         toLight = d / dist;
-        let radius = lb.w;
-        falloff = ld.y / max(dist * dist, max(radius * radius, 1e-12));
-        tanHalf = radius / dist;
-        maxDist = dist - radius;
-        if (kind == 1u) {
-            falloff *= smoothstep(lc.w, ld.x, dot(-toLight, lc.xyz));
+
+        if (kind <= ${LIGHT_KIND.spot}u) {
+            // a point or spot: falloff from the aim point's distance
+            let radius = lb.w;
+            var falloff = ld.y / max(dist * dist, max(radius * radius, 1e-12));
+            if (kind == ${LIGHT_KIND.spot}u) {
+                falloff *= smoothstep(lc.w, ld.x, dot(-toLight, lc.xyz));
+            }
+            tanHalf = radius / dist;
+            maxDist = dist - radius;
+            lit = wrapped(lb.rgb * falloff, n, toLight, flatness);
+        } else if (kind <= ${LIGHT_KIND.sphere}u) {
+            // an area light: its form factor per side, horizon clipped.
+            // lb.rgb is scaled so a surface at the aim point facing it gets
+            // the intensity
+            let f = areaVector(kind, la.xyz, lc, ld, lb.w, p);
+            let ff = length(f);
+            if (ff <= 1e-9) {
+                return sides;
+            }
+            let towards = f / ff;
+            let facingShare = 0.5 * ff;
+            lit.plus = lb.rgb * mix(facingShare, clippedFormFactor(dot(n, towards), ff), flatness);
+            lit.minus = lb.rgb * mix(facingShare, clippedFormFactor(dot(-n, towards), ff), flatness);
+
+            // its shadow: a cone as wide as a disk of the same apparent size
+            var reach: f32;
+            if (kind == ${LIGHT_KIND.sphere}u) {
+                reach = lb.w;
+            } else {
+                let seen = max(dot(lc.xyz, -toLight), 0.05);
+                let area = select(PI * lc.w * lc.w, 4.0 * lc.w * ld.w, kind == ${LIGHT_KIND.rect}u);
+                reach = sqrt(area * seen / PI);
+            }
+            tanHalf = reach / dist;
+            maxDist = dist - select(0.5 * reach, reach, kind == ${LIGHT_KIND.sphere}u);
+        } else {
+            // a volume light: its emitters, each with its own falloff and
+            // Lambert term, shadowed together - one cone toward their middle
+            // as wide as they spread, stopping short of the farthest, so the
+            // glowing gaussians do not shadow their own light
+            let first = u32(lc.x + 0.5);
+            let count = u32(lc.y + 0.5);
+            lit = TwoSides(vec3f(0.0), vec3f(0.0));
+            for (var k = 0u; k < count; k++) {
+                let e0 = lights[${EMITTER_BASE}u + (first + k) * 2u];
+                let e1 = lights[${EMITTER_BASE}u + (first + k) * 2u + 1u];
+                let de = e0.xyz - p;
+                let de2 = max(dot(de, de), 1e-12);
+                let falloff = ld.y / max(de2, e0.w * e0.w);
+                let e = wrapped(lb.rgb * e1.rgb * falloff, n, de * inverseSqrt(de2), flatness);
+                lit.plus += e.plus;
+                lit.minus += e.minus;
+                // a cluster's radius is its members' root-mean-square
+                // distance. Where two clusters meet, a gaussian is half as
+                // far again from both, so each counts for part and the
+                // parts add up - where one cluster alone would leave a seam,
+                // and one reaching further would glow onto what is merely
+                // near the lamp
+                glow += 1.0 - smoothstep(1.2, 2.2, sqrt(de2) / max(e0.w, 1e-6));
+            }
+            tanHalf = lb.w / dist;
+            maxDist = dist - ld.x;
         }
     }
 
-    let energy = lb.rgb * falloff;
-    if (max(energy.r, max(energy.g, energy.b)) <= 1e-5) {
+    glow = min(glow, 1.0);
+    let most = max(lit.plus, lit.minus);
+    if (max(most.r, max(most.g, most.b)) <= 1e-5 && glow <= 0.0) {
         return sides;
     }
 
-    let wrap = uniforms.params.y;
-    let ndl = dot(n, toLight);
-    let side = select(-1.0, 1.0, ndl >= 0.0);
-    let facing = abs(ndl);
+    // A glowing gaussian's colour is its own light, not light it reflects,
+    // so relighting it as a surface turns a lamp dark: its emitters sit
+    // inside it, behind the side a camera sees. It glows with the light
+    // instead - the light's intensity added, unshadowed - so it looks as
+    // captured at the usual intensity, brighter turned up, dark turned off.
+    let own = lb.rgb * glow;
 
-    // wrapped Lambert on the lit side; the wrap's tail on the far side
-    let near = (facing + wrap) / (1.0 + wrap);
-    let far = max(0.0, wrap - facing) / (1.0 + wrap);
+    // inside the light's own reach there is nothing to trace through
+    if (maxDist <= 0.0) {
+        sides.plus = lit.plus + own;
+        sides.minus = lit.minus + own;
+        return sides;
+    }
 
     // Leave a few cells off the lit side, along the ray itself: as far along
     // it as it takes to climb that high off a flat gaussian, so the ray is
@@ -813,20 +1007,13 @@ fn lightFrom(li: u32, surface: Surface, erode: f32) -> TwoSides {
     // dark one on the other. Capped for grazing light, where the climb would
     // take a long way; a round gaussian has no surface to climb from.
     let offset = uniforms.params.z * uniforms.gridOrigin.w;
+    let facing = abs(dot(n, toLight));
     let rise = mix(1.0, facing, flatness);
     let along = offset / max(rise, 0.25);
     let visibility = erodedTrace(p + toLight * along, toLight, tanHalf, max(maxDist - along, 0.0), along * rise, rise, erode);
 
-    let lit = energy * visibility;
-    let litNear = lit * mix(0.5, near, flatness);
-    let litFar = lit * mix(0.5, far, flatness);
-    if (side > 0.0) {
-        sides.plus = litNear;
-        sides.minus = litFar;
-    } else {
-        sides.plus = litFar;
-        sides.minus = litNear;
-    }
+    sides.plus = lit.plus * visibility + own;
+    sides.minus = lit.minus * visibility + own;
     return sides;
 }
 `;
@@ -854,11 +1041,24 @@ fn lightFrom(li: u32, surface: Surface, erode: f32) -> TwoSides {
  * worked out the capture's own light was - see delightSource.
  *
  * Light records are four vec4s, those that add light first and those
- * matched to the capture after them:
- *   0: xyz position, or the direction toward a sun; w kind (0 point, 1 spot, 2 sun)
- *   1: rgb colour times intensity; w emitter radius, or the sun's tan(half angle)
- *   2: xyz spot axis; w cos(outer half angle)
- *   3: x cos(inner half angle); y falloff reference distance squared
+ * matched to the capture after them. The first w is the kind - see
+ * LIGHT_KIND - and the rest depends on it:
+ *   point, spot:
+ *     0 xyz position; 1 rgb colour times intensity, w emitter radius;
+ *     2 xyz spot axis, w cos(outer half angle);
+ *     3 x cos(inner half angle), y falloff reference distance squared
+ *   sun:
+ *     0 xyz the direction toward it; 1 rgb, w tan(half angle)
+ *   rectangle, disk, sphere:
+ *     0 xyz centre; 1 rgb scaled so the aim point gets the intensity,
+ *     w a sphere's radius; 2 xyz the way the front faces, w half width
+ *     or a disk's radius; 3 xyz a rectangle's up axis, w half height
+ *   volume:
+ *     0 xyz middle; 1 rgb colour times intensity, w how far the emitters
+ *     spread; 2 x first emitter, y emitter count;
+ *     3 x how far the farthest reaches, y falloff reference distance squared
+ * An emitter is two vec4s after the ambient coefficients: xyz position and
+ * w radius, then rgb its colour times its share of the light.
  */
 const lightingSource = /* wgsl */`
 @group(0) @binding(0) var<storage, read> gaussians: array<vec4f>;
@@ -1047,6 +1247,10 @@ export {
     MAX_LIGHTS,
     AMBIENT_BASE,
     SH_COUNT,
+    MAX_EMITTERS,
+    EMITTER_BASE,
+    LIGHT_KIND,
+    DISK_OCTAGON_SCALE,
     depositSource,
     resolveSource,
     pullSource,

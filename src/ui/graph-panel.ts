@@ -1094,6 +1094,7 @@ class GraphPanel extends Container {
     /** The "add" half of the graph's context menu, shared by node and canvas. */
     private addItems(): MenuEntry[] {
         const splat = this.events.invoke('selection') as Splat;
+        const glowing = !!this.events.invoke('light.selectionSource');
         return [
             {
                 // an import node is a loaded object, so adding one is the load.
@@ -1124,6 +1125,14 @@ class GraphPanel extends Container {
                 // needs nothing selected
                 label: 'add light node',
                 action: () => this.events.invoke('light.addNode')
+            },
+            {
+                // select, then operate: whatever glows - a lamp in the
+                // capture - becomes the light it gives
+                label: 'add light from selection',
+                disabled: !glowing,
+                hint: glowing ? undefined : 'nothing selected',
+                action: () => this.events.invoke('light.addFromSelection')
             },
             {
                 label: 'add select node',

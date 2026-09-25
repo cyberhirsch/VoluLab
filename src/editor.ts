@@ -13,6 +13,7 @@ import type { GridPlane } from './infinite-grid';
 import { MappedReadFileSystem } from './io';
 import { registerLightViewEvents } from './light-view';
 import { registerRelighting } from './relight/relighter';
+import { emittersFromSelection, splatWithSelection } from './relight/volume-light';
 import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
 import { SceneLight } from './scene-light';
@@ -1086,6 +1087,63 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         openInGraph(index);
         events.fire('workspace.reveal', 'node');
         return op;
+    });
+
+    // the object whose selected gaussians a volume light would come from
+    const selectionSource = () => splatWithSelection(
+        events.invoke('selection') as Splat,
+        scene.getElementsByType(ElementType.splat) as Splat[]
+    );
+
+    events.function('light.selectionSource', () => selectionSource());
+
+    /**
+     * A volume light from the selected gaussians: whatever glows in the
+     * capture - a lamp, a window - made into the light it gives, at the
+     * middle of what glows. Its aim point, where its intensity is measured,
+     * starts below it, a quarter of the scene away. Null when nothing is
+     * selected.
+     */
+    events.function('light.addFromSelection', () => {
+        const splat = selectionSource();
+        const source = splat ? emittersFromSelection(splat) : null;
+        if (!source) return null;
+
+        const settings = defaultLightSettings();
+        settings.kind = 'volume';
+        settings.emitters = source.emitters;
+        settings.emitterSource = splat.name;
+
+        const count = (events.invoke('light.list') as unknown[]).length;
+        const light = new SceneLight(`light ${count + 1}`, settings);
+        const extent = scene.bound.halfExtents;
+        const drop = Math.max(4 * source.spread, 0.5 * Math.max(extent.x, extent.y, extent.z), 1e-3);
+        light.position.copy(source.centre);
+        light.target.copy(source.centre).add(new Vec3(0, -drop, 0));
+
+        const op = new LightOp(scene, light, settings);
+        const index = history().cursor;
+        events.fire('edit.add', op);
+        openInGraph(index);
+        events.fire('workspace.reveal', 'node');
+        return op;
+    });
+
+    /**
+     * A volume light made over from whatever is selected now. The light moves
+     * to the new emitters' middle and its aim point comes with it. False when
+     * nothing is selected.
+     */
+    events.function('light.useSelection', (light: SceneLight) => {
+        const splat = selectionSource();
+        const source = splat ? emittersFromSelection(splat) : null;
+        if (!source || !light) return false;
+        light.settings.emitters = source.emitters;
+        light.settings.emitterSource = splat.name;
+        const shift = new Vec3().sub2(source.centre, light.position);
+        light.setPose({ position: source.centre, target: light.target.clone().add(shift) });
+        light.changed();
+        return true;
     });
 
     /**

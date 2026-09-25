@@ -1,7 +1,7 @@
 # What's next
 
 Everything outstanding, phased and ranked in the table below and then
-described in full: the work in flight, then relighting - three of its four
+described in full: the work in flight, then relighting - all four of its
 items built - then the places where something built works and could work
 better. What is already built is in [CHANGELOG.md](CHANGELOG.md), with the
 reasoning kept.
@@ -38,7 +38,7 @@ hard here is rarely the amount of code.
 | 5 | 16 | Relighting: density grid, lights, soft shadows (built, needs a real-GPU run) | |
 | 5 | 17 | Relighting: occlusion and ambient light (built, needs a real-GPU run) | |
 | 5 | 18 | Relighting: de-light by occlusion and a matched sun (built, needs a real-GPU run) | |
-| 5 | 19 | Relighting: area and volume lights | |
+| 5 | 19 | Relighting: area and volume lights (built, needs a real-GPU run) | |
 | — | 10 | Cleanup in a worker | Sonnet 5 |
 | — | 12 | Merge by dragging output onto input | Sonnet 5 |
 | — | 13 | A voxel export path | Sonnet 5 |
@@ -255,7 +255,7 @@ nothing.
 
 ---
 
-## Relighting — three items built, one to go
+## Relighting — built, owing a real-GPU session
 
 The ask: light a capture with lights placed in VoluLab - point, spot, sun,
 area and volume lights, and ambient light - with soft shadows and
@@ -280,8 +280,13 @@ capture's own light out before new light goes on - the capture's sky
 through occlusion, automatically, and any light the user sets to "baked
 in" where the capture's sun was. Verified the same way, on a test capture
 with an analytic sky and sun baked into it, and owing the same session -
-plus a look at how its guards sit on a real sunny capture. Item 19 is not
-started.
+plus a look at how its guards sit on a real sunny capture.
+
+Item 19 completes it: area lights - rectangle, disk and sphere, with exact
+or near-exact irradiance - and volume lights, which turn selected glowing
+gaussians, a lamp in the capture, into light. Verified the same way, against
+exact form factors, and owing the same session - plus a lamp in a real
+capture, to see how its emitters and its glow look.
 
 **For the record, how Octane does it.** Octane 2026 path traces gaussians
 alongside meshes, so they cast and receive shadows and show up in
@@ -321,10 +326,17 @@ on the baked lighting.
   and haze casts partial shadow, because the grid holds density rather
   than a surface.
 - **Area lights** — analytic diffuse irradiance for rectangle, disk and
-  sphere lights, with the cone for visibility.
+  sphere lights, with the cone for visibility. Built: a rectangle's form
+  factor is exact, a disk is an octagon of its area through the same
+  formula, a sphere is exact, and a sphere approximation clips each to the
+  horizon.
 - **Volume lights** — a selection-scoped node: select gaussians, such as a
   lamp in the capture, and they become the emitter, clustered into a few
-  dozen point lights. *Select, then operate*, applied to light.
+  dozen point lights. *Select, then operate*, applied to light. Built as a
+  light kind rather than a node of its own: add a light from the selection,
+  or turn a light into a volume light with gaussians selected. Sixteen
+  emitters, one shared shadow cone, and the glowing gaussians glow with the
+  light rather than being lit as surfaces.
 - **Ambient light** — a flat colour or an HDRI reduced to spherical
   harmonics, dimmed by occlusion. Built: every ambient light is summed into
   one set of nine coefficients, evaluated along each side's bent normal.
@@ -461,6 +473,24 @@ proves slow on real captures.
   at the price of carrying each matched light into that space.
 - While de-light is on, each object costs another grid and 32 bytes per
   gaussian: its captured occlusion and the divisor, both sides.
+
+**Left from item 19**, none of it blocking:
+
+- A volume light does not follow its object. Its emitters sit where the
+  glowing gaussians were, round the light's own position; moving the lamp's
+  object leaves its light behind until the light is moved too.
+- The emitters are a snapshot. Editing the lamp's gaussians afterwards
+  changes nothing until "Use Selection" makes them over.
+- One shadow cone per light. A large area light close to what it lights, or
+  a long strip, gets the visibility of its middle; sampling across the
+  emitter would fix it at a few traces a light.
+- Which gaussians glow is decided by distance to the emitters, so a surface
+  within a cluster's spread of the lamp glows with it too.
+- A rectangle has no roll: its width lies level, or along the world's x axis
+  when it is aimed straight up or down.
+- No textured emitters - a screen showing a picture lights in one colour.
+- The emitters of every volume light share a pool of 256; a light past it
+  is skipped.
 
 ---
 

@@ -29,7 +29,7 @@ import {
 } from 'playcanvas';
 
 import { addAmbientSH } from './environment';
-import { AMBIENT_BASE, MAX_LIGHTS, SH_COUNT, delightSource, depositSource, lightingSource, occlusionSource, pullSource, pushSource, resolveSource, WORKGROUP } from './relight-shaders';
+import { AMBIENT_BASE, DISK_OCTAGON_SCALE, EMITTER_BASE, LIGHT_KIND, MAX_EMITTERS, MAX_LIGHTS, SH_COUNT, delightSource, depositSource, lightingSource, occlusionSource, pullSource, pushSource, resolveSource, WORKGROUP } from './relight-shaders';
 import { ElementType } from '../element';
 import { Events } from '../events';
 import { Scene } from '../scene';
@@ -111,8 +111,10 @@ const DELIGHT_HEAD = 3;
 const STATE_LOCKED = 2;
 const STATE_DELETED = 4;
 
-// the light records, then the ambient coefficients after them
-const LIGHT_BUFFER_FLOATS = (AMBIENT_BASE + SH_COUNT) * 4;
+// the light records, the ambient coefficients after them, then the volume
+// lights' emitters
+const LIGHT_BUFFER_FLOATS = (EMITTER_BASE + MAX_EMITTERS * 2) * 4;
+const EMITTER_FLOATS = 8;
 
 // occlusion cones are 60 degrees wide
 const OCCLUSION_TAN_HALF = Math.tan(30 * Math.PI / 180);
@@ -743,58 +745,158 @@ const robustBox = (entries: SplatLighting[], skip: number, captured: boolean): B
 };
 
 /**
- * One light record per point, spot or sun light - see the lighting kernel
- * for the layout - from record `first` on. Returns how many were written.
+ * A flat polygon's form factor seen squarely from its axis, at a distance -
+ * Lambert's formula over its edges, as the lighting kernel works it, so an
+ * area light's aim point gets exactly its intensity. Corners are in the
+ * polygon's own plane, round its centre.
  */
-const packLights = (lights: SceneLight[], out: Float32Array, first: number) => {
+const formFactorOnAxis = (points: number[][], distance: number) => {
+    const corners = points.map(([x, y]) => {
+        const l = Math.hypot(x, y, distance);
+        return [x / l, y / l, distance / l];
+    });
+    let sum = 0;
+    for (let i = 0; i < corners.length; ++i) {
+        const a = corners[i];
+        const b = corners[(i + 1) % corners.length];
+        const cx = a[1] * b[2] - a[2] * b[1];
+        const cy = a[2] * b[0] - a[0] * b[2];
+        const cz = a[0] * b[1] - a[1] * b[0];
+        const cl = Math.hypot(cx, cy, cz);
+        if (cl < 1e-12) continue;
+        sum += cz / cl * Math.atan2(cl, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
+    }
+    return Math.abs(sum) / (2 * Math.PI);
+};
+
+/** where the next volume light's emitters go in the buffer */
+type EmitterCursor = { next: number };
+
+/**
+ * One light record per point, spot, sun, area or volume light - see the
+ * lighting kernel for the layout - from record `first` on. A volume
+ * light's emitters go after the ambient coefficients, from the cursor on.
+ * Returns how many records were written.
+ */
+const packLights = (lights: SceneLight[], out: Float32Array, first: number, cursor: EmitterCursor) => {
     let n = 0;
     for (const light of lights) {
         if (first + n >= MAX_LIGHTS) break;
         const s = light.settings;
+        // a volume light with no emitters, or none left room, lights nothing
+        const emitters = s.kind === 'volume' ? (s.emitters ?? []).slice(0, MAX_EMITTERS - cursor.next) : [];
+        if (s.kind === 'volume' && emitters.length === 0) continue;
+
         const o = (first + n) * LIGHT_FLOATS;
-
-        const dx = light.target.x - light.position.x;
-        const dy = light.target.y - light.position.y;
-        const dz = light.target.z - light.position.z;
-        const dist = Math.max(Math.hypot(dx, dy, dz), 1e-4);
-        const ax = dx / dist;
-        const ay = dy / dist;
-        const az = dz / dist;
-
+        const { forward, up, distance: dist } = light.frame();
         const intensity = Math.max(0, s.intensity);
         const softness = Math.min(1, Math.max(0, s.softness));
+        const color = s.color;
+
+        out[o + 4] = color[0] * intensity;
+        out[o + 5] = color[1] * intensity;
+        out[o + 6] = color[2] * intensity;
 
         if (s.kind === 'sun') {
             // toward the sun: against the direction it shines
-            out[o] = -ax;
-            out[o + 1] = -ay;
-            out[o + 2] = -az;
-            out[o + 3] = 2;
+            out[o] = -forward.x;
+            out[o + 1] = -forward.y;
+            out[o + 2] = -forward.z;
+            out[o + 3] = LIGHT_KIND.sun;
             out[o + 7] = Math.tan(SUN_MIN_HALF_ANGLE + softness * (SUN_MAX_HALF_ANGLE - SUN_MIN_HALF_ANGLE));
+        } else if (s.kind === 'rect' || s.kind === 'disk' || s.kind === 'sphere') {
+            // centred on the light, facing its aim point, sized by it
+            const width = Math.max(0.01, Number(s.size) || 0.5) * dist;
+            const height = Math.max(0.01, Number(s.height) || 0.5) * dist;
+            out[o] = light.position.x;
+            out[o + 1] = light.position.y;
+            out[o + 2] = light.position.z;
+            out[o + 3] = LIGHT_KIND[s.kind];
+            out[o + 8] = forward.x;
+            out[o + 9] = forward.y;
+            out[o + 10] = forward.z;
+            out[o + 11] = width * 0.5;
+            out[o + 12] = up.x;
+            out[o + 13] = up.y;
+            out[o + 14] = up.z;
+            out[o + 15] = height * 0.5;
+
+            // what a surface at the aim point, facing the light, sees of it -
+            // a disk being the kernel's octagon of the same area
+            const r = width * 0.5;
+            let aim: number;
+            if (s.kind === 'sphere') {
+                out[o + 7] = r;
+                aim = Math.min(1, r * r / (dist * dist));
+            } else if (s.kind === 'disk') {
+                const corner = r * DISK_OCTAGON_SCALE;
+                aim = formFactorOnAxis([0, 1, 2, 3, 4, 5, 6, 7].map(k => [corner * Math.cos(k * Math.PI / 4), corner * Math.sin(k * Math.PI / 4)]), dist);
+            } else {
+                const hw = width * 0.5;
+                const hh = height * 0.5;
+                aim = formFactorOnAxis([[hw, hh], [-hw, hh], [-hw, -hh], [hw, -hh]], dist);
+            }
+            const scale = 1 / Math.max(aim, 1e-9);
+            out[o + 4] *= scale;
+            out[o + 5] *= scale;
+            out[o + 6] *= scale;
+        } else if (s.kind === 'volume') {
+            out[o] = light.position.x;
+            out[o + 1] = light.position.y;
+            out[o + 2] = light.position.z;
+            out[o + 3] = LIGHT_KIND.volume;
+            out[o + 8] = cursor.next;
+            out[o + 9] = emitters.length;
+            // intensity is measured at the aim point
+            out[o + 13] = dist * dist;
+
+            // how widely they spread sets the shadow's softness; how far the
+            // farthest reaches is where its shadow ray stops
+            let spread = 0;
+            let total = 0;
+            let reach = 0;
+            for (const e of emitters) {
+                const e0 = (EMITTER_BASE + cursor.next * 2) * 4;
+                const ox = e.offset[0];
+                const oy = e.offset[1];
+                const oz = e.offset[2];
+                out[e0] = light.position.x + ox;
+                out[e0 + 1] = light.position.y + oy;
+                out[e0 + 2] = light.position.z + oz;
+                out[e0 + 3] = e.radius;
+                out[e0 + 4] = e.color[0] * e.weight;
+                out[e0 + 5] = e.color[1] * e.weight;
+                out[e0 + 6] = e.color[2] * e.weight;
+                const d2 = ox * ox + oy * oy + oz * oz;
+                spread += e.weight * (d2 + e.radius * e.radius);
+                total += e.weight;
+                // a cluster's radius is its members' root-mean-square
+                // distance; twice that takes in nearly all of them
+                reach = Math.max(reach, Math.sqrt(d2) + 2 * e.radius);
+                cursor.next++;
+            }
+            out[o + 7] = Math.sqrt(spread / Math.max(total, 1e-9));
+            out[o + 12] = reach;
         } else {
             out[o] = light.position.x;
             out[o + 1] = light.position.y;
             out[o + 2] = light.position.z;
-            out[o + 3] = s.kind === 'spot' ? 1 : 0;
+            out[o + 3] = s.kind === 'spot' ? LIGHT_KIND.spot : LIGHT_KIND.point;
             // the emitter's radius, as a share of its distance to the aim point
             out[o + 7] = softness * 0.5 * dist;
+
+            const outer = Math.min(179, Math.max(1, s.spotAngle)) * 0.5 * Math.PI / 180;
+            const inner = outer * (1 - Math.min(1, Math.max(0, s.spotBlend)));
+            const cosOuter = Math.cos(outer);
+            out[o + 8] = forward.x;
+            out[o + 9] = forward.y;
+            out[o + 10] = forward.z;
+            out[o + 11] = cosOuter;
+            // smoothstep needs its edges apart
+            out[o + 12] = Math.max(Math.cos(inner), cosOuter + 1e-4);
+            // intensity is measured at the aim point
+            out[o + 13] = dist * dist;
         }
-
-        out[o + 4] = s.color[0] * intensity;
-        out[o + 5] = s.color[1] * intensity;
-        out[o + 6] = s.color[2] * intensity;
-
-        const outer = Math.min(179, Math.max(1, s.spotAngle)) * 0.5 * Math.PI / 180;
-        const inner = outer * (1 - Math.min(1, Math.max(0, s.spotBlend)));
-        const cosOuter = Math.cos(outer);
-        out[o + 8] = ax;
-        out[o + 9] = ay;
-        out[o + 10] = az;
-        out[o + 11] = cosOuter;
-        // smoothstep needs its edges apart
-        out[o + 12] = Math.max(Math.cos(inner), cosOuter + 1e-4);
-        // intensity is measured at the aim point
-        out[o + 13] = dist * dist;
 
         n++;
     }
@@ -804,17 +906,17 @@ const packLights = (lights: SceneLight[], out: Float32Array, first: number) => {
 /**
  * What de-light scales its estimate of the capture's light by: one over
  * what an open surface squarely facing every matched light had - the sky's
- * 1, plus each matched light's colour times intensity. Per channel, so a
- * warm sun in the capture is taken out of the shadows' colour as well as
- * their depth.
+ * 1, plus each matched light's colour times intensity, which is what any
+ * kind of light delivers at its aim point. Per channel, so a warm sun in
+ * the capture is taken out of the shadows' colour as well as their depth.
  */
-const delightScaleOf = (out: Float32Array, first: number, count: number) => {
+const delightScaleOf = (matched: SceneLight[]) => {
     const sum = [1, 1, 1];
-    for (let n = first; n < first + count; ++n) {
-        const o = n * LIGHT_FLOATS;
-        sum[0] += out[o + 4];
-        sum[1] += out[o + 5];
-        sum[2] += out[o + 6];
+    for (const light of matched) {
+        const intensity = Math.max(0, light.settings.intensity);
+        sum[0] += light.settings.color[0] * intensity;
+        sum[1] += light.settings.color[1] * intensity;
+        sum[2] += light.settings.color[2] * intensity;
     }
     return [1 / sum[0], 1 / sum[1], 1 / sum[2]];
 };
@@ -854,7 +956,7 @@ class Relighter {
     // doubles, so the settings are compared exactly - a float copy of 0.2 is
     // never equal to 0.2, and the lighting would rerun forever
     private seenLights = new Float64Array(LIGHT_BUFFER_FLOATS + SEEN_HEAD);
-    private seenDelight = new Float64Array(MAX_LIGHTS * LIGHT_FLOATS + DELIGHT_HEAD);
+    private seenDelight = new Float64Array(MAX_LIGHTS * LIGHT_FLOATS + MAX_EMITTERS * EMITTER_FLOATS + DELIGHT_HEAD);
     private lightsUploaded = false;
     private delightScale = [1, 1, 1];
 
@@ -1041,10 +1143,13 @@ class Relighter {
         const adding = direct.filter(light => light.settings.role !== 'match');
         const matched = direct.filter(light => light.settings.role === 'match');
         this.lightData.fill(0, 0, MAX_LIGHTS * LIGHT_FLOATS);
-        const count = packLights(adding, this.lightData, 0);
-        const matchedCount = packLights(matched, this.lightData, count);
+        this.lightData.fill(0, EMITTER_BASE * 4);
+        const cursor = { next: 0 };
+        const count = packLights(adding, this.lightData, 0, cursor);
+        const firstMatchedEmitter = cursor.next;
+        const matchedCount = packLights(matched, this.lightData, count, cursor);
         const ambient = packAmbient(lights, this.lightData);
-        this.delightScale = delightScaleOf(this.lightData, count, matchedCount);
+        this.delightScale = delightScaleOf(matched.slice(0, matchedCount));
 
         const { settings } = this;
         const seen = this.seenLights;
@@ -1066,10 +1171,14 @@ class Relighter {
             this.lightsUploaded = true;
         }
 
-        // what would make de-light stale: the matched lights - wherever they
-        // sit in the buffer - and its own settings. Lights that add light do
-        // not, so moving one reruns the lighting alone
-        const matchedData = this.lightData.subarray(count * LIGHT_FLOATS, (count + matchedCount) * LIGHT_FLOATS);
+        // what would make de-light stale: the matched lights and their
+        // emitters - wherever they sit in the buffer - and its own settings.
+        // Lights that add light do not, so moving one reruns the lighting alone
+        const matchedRecords = this.lightData.subarray(count * LIGHT_FLOATS, (count + matchedCount) * LIGHT_FLOATS);
+        const matchedEmitters = this.lightData.subarray((EMITTER_BASE + firstMatchedEmitter * 2) * 4, (EMITTER_BASE + cursor.next * 2) * 4);
+        const matchedData = new Float32Array(matchedRecords.length + matchedEmitters.length);
+        matchedData.set(matchedRecords, 0);
+        matchedData.set(matchedEmitters, matchedRecords.length);
         const seenDelight = this.seenDelight;
         const delightHead = [matchedCount, settings.delight, settings.delightFloor];
         let delightChanged = false;

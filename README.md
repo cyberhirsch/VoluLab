@@ -42,8 +42,10 @@ metric and level.
 **Grade it.** Tint, temperature, saturation, brightness, black and white point,
 and transparency, applied to the scene rather than baked in afterwards.
 
-**Light it.** Place point, spot and sun lights and the scene casts their
-shadows onto itself, soft or hard. An ambient light, flat or from an HDRI,
+**Light it.** Place point, spot, sun and area lights - rectangles, disks and
+spheres - and the scene casts their shadows onto itself, soft or hard. Select
+something that glows in the capture, like a lamp, and it becomes a light
+that lights the rest. An ambient light, flat or from an HDRI,
 fills in, darkening where things meet. De-light takes the capture's own
 light out first, so new light doesn't land on old shadows. It handles the
 sky on its own, and a sunny capture's sun once you place a light where it

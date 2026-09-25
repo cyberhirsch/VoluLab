@@ -9,8 +9,9 @@ import { loadEnvironment } from '../relight/environment';
  * The light node's face, mounted in the node pane like the camera's.
  *
  * Two parts. The light itself - its kind, role, colour, strength, softness
- * and, for a spot, its cone, for an ambient light its environment - edits
- * the node's settings in place; a light has no baked result, so the
+ * and, for a spot, its cone, for an area light its size, for an ambient
+ * light its environment, for a volume light the gaussians it came from -
+ * edits the node's settings in place; a light has no baked result, so the
  * relighter simply sees the change on its next frame.
  * Below that, the scene's lighting: settings every light shares, shown on
  * each light's face because there is nowhere else a user would look for
@@ -27,21 +28,26 @@ type NumberField = {
     kinds?: LightKind[];
 };
 
+// An area light's size is its softness, so it has no softness of its own.
+// One setting serves as a rectangle's width and a disk's or sphere's size.
 const LIGHT_FIELDS: NumberField[] = [
     { key: 'intensity', label: 'light.intensity', step: 0.05, min: 0 },
     { key: 'softness', label: 'light.softness', step: 0.05, min: 0, max: 1, kinds: ['point', 'spot', 'sun'] },
+    { key: 'size', label: 'light.width', step: 0.05, min: 0.01, max: 4, kinds: ['rect'] },
+    { key: 'height', label: 'light.height', step: 0.05, min: 0.01, max: 4, kinds: ['rect'] },
+    { key: 'size', label: 'light.size', step: 0.05, min: 0.01, max: 4, kinds: ['disk', 'sphere'] },
     { key: 'spotAngle', label: 'light.spot-angle', step: 1, min: 1, max: 179, kinds: ['spot'] },
     { key: 'spotBlend', label: 'light.spot-blend', step: 0.05, min: 0, max: 1, kinds: ['spot'] },
     { key: 'rotation', label: 'light.rotation', step: 5, kinds: ['ambient'] }
 ];
 
-const KINDS: LightKind[] = ['point', 'spot', 'sun', 'ambient'];
+const KINDS: LightKind[] = ['point', 'spot', 'sun', 'rect', 'disk', 'sphere', 'volume', 'ambient'];
 
 const ROLES: LightRole[] = ['add', 'match'];
 
 // an ambient light always adds light: the capture's own sky is what
 // de-light's occlusion stands for
-const ROLE_KINDS: LightKind[] = ['point', 'spot', 'sun'];
+const ROLE_KINDS: LightKind[] = ['point', 'spot', 'sun', 'rect', 'disk', 'sphere', 'volume'];
 
 const RESOLUTIONS = [64, 96, 128, 192, 256];
 
@@ -72,6 +78,9 @@ class LightFace extends Container {
     private environmentControls: HTMLElement;
     private environmentName: HTMLSpanElement;
     private environmentClear: HTMLButtonElement;
+    private emittersRow: HTMLElement;
+    private emittersControls: HTMLElement;
+    private emittersName: HTMLSpanElement;
 
     constructor(events: Events, args = {}) {
         args = {
@@ -146,7 +155,12 @@ class LightFace extends Container {
         this.kindSelect.addEventListener('change', () => {
             if (!this.op) return;
             this.op.settings.kind = this.kindSelect.value as LightKind;
-            this.showFields();
+            // select, then operate: a light turned into a volume light with
+            // gaussians selected takes them, if it has none of its own yet
+            if (this.op.settings.kind === 'volume' && !this.op.settings.emitters?.length) {
+                events.invoke('light.useSelection', this.op.output);
+            }
+            this.readOp();
             this.changed();
         });
         row(lightSection, 'light.kind', this.kindSelect);
@@ -178,7 +192,8 @@ class LightFace extends Container {
             if (field.max !== undefined) input.max = String(field.max);
             input.addEventListener('input', () => this.write(field, input));
             const el = row(lightSection, field.label, input);
-            this.inputs.set(field.key, { input, row: el, field });
+            // keyed by label too: one setting may show under two names
+            this.inputs.set(`${field.key}:${field.label}`, { input, row: el, field });
         }
 
         // an ambient light's environment: an HDRI or a photo, reduced on the
@@ -242,6 +257,40 @@ class LightFace extends Container {
             this.changed();
         });
         environmentControls.appendChild(this.environmentClear);
+
+        // a volume light's emitters: how many, from which object, and the
+        // button that makes them over from whatever is selected now
+        this.emittersRow = document.createElement('div');
+        this.emittersRow.className = 'tf-field';
+        const emittersLabel = document.createElement('span');
+        emittersLabel.textContent = i18n.t('light.emitters');
+        this.emittersRow.appendChild(emittersLabel);
+        this.emittersName = document.createElement('span');
+        this.emittersName.className = 'tf-source';
+        this.emittersRow.appendChild(this.emittersName);
+        lightSection.appendChild(this.emittersRow);
+
+        this.emittersControls = document.createElement('div');
+        this.emittersControls.className = 'tf-row';
+        lightSection.appendChild(this.emittersControls);
+        const useSelection = document.createElement('button');
+        useSelection.className = 'tf-button';
+        useSelection.type = 'button';
+        useSelection.textContent = i18n.t('light.emitters-use');
+        useSelection.addEventListener('click', async () => {
+            if (!this.op) return;
+            if (!events.invoke('light.useSelection', this.op.output)) {
+                await events.invoke('showPopup', {
+                    type: 'error',
+                    header: i18n.t('light.emitters-failed'),
+                    message: i18n.t('light.emitters-hint')
+                });
+                return;
+            }
+            this.readOp();
+            events.fire('edit.changed');
+        });
+        this.emittersControls.appendChild(useSelection);
 
         // shared by every light
         const sceneSection = section('light.scene-group');
@@ -320,11 +369,15 @@ class LightFace extends Container {
         this.kindSelect.value = s.kind;
         this.roleSelect.value = s.role ?? 'add';
         this.colorInput.value = toHex(s.color);
-        for (const [key, { input }] of this.inputs) {
-            input.value = String((s as any)[key] ?? 0);
+        for (const { input, field } of this.inputs.values()) {
+            input.value = String((s as any)[field.key] ?? 0);
         }
         this.environmentName.textContent = s.environment?.name ?? i18n.t('light.environment-none');
         this.environmentClear.disabled = !s.environment;
+        const emitters = s.emitters?.length ?? 0;
+        this.emittersName.textContent = emitters > 0 ?
+            i18n.t('light.emitters-from', { count: emitters, source: s.emitterSource || '?' }) :
+            i18n.t('light.emitters-none');
         this.showFields();
     }
 
@@ -351,6 +404,9 @@ class LightFace extends Container {
         const ambient = kind === 'ambient' ? '' : 'none';
         this.environmentRow.style.display = ambient;
         this.environmentControls.style.display = ambient;
+        const volume = kind === 'volume' ? '' : 'none';
+        this.emittersRow.style.display = volume;
+        this.emittersControls.style.display = volume;
         this.roleRow.style.display = ROLE_KINDS.includes(kind) ? '' : 'none';
     }
 
