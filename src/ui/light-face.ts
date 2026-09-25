@@ -3,13 +3,15 @@ import { Container } from '@playcanvas/pcui';
 import { i18n } from './localization';
 import { LightKind, LightOp, LightSettings } from '../edit-ops';
 import { Events } from '../events';
+import { loadEnvironment } from '../relight/environment';
 
 /**
  * The light node's face, mounted in the node pane like the camera's.
  *
  * Two parts. The light itself - its kind, colour, strength, softness and,
- * for a spot, its cone - edits the node's settings in place; a light has no
- * baked result, so the relighter simply sees the change on its next frame.
+ * for a spot, its cone, for an ambient light its environment - edits the
+ * node's settings in place; a light has no baked result, so the relighter
+ * simply sees the change on its next frame.
  * Below that, the scene's lighting: settings every light shares, shown on
  * each light's face because there is nowhere else a user would look for
  * them.
@@ -27,12 +29,13 @@ type NumberField = {
 
 const LIGHT_FIELDS: NumberField[] = [
     { key: 'intensity', label: 'light.intensity', step: 0.05, min: 0 },
-    { key: 'softness', label: 'light.softness', step: 0.05, min: 0, max: 1 },
+    { key: 'softness', label: 'light.softness', step: 0.05, min: 0, max: 1, kinds: ['point', 'spot', 'sun'] },
     { key: 'spotAngle', label: 'light.spot-angle', step: 1, min: 1, max: 179, kinds: ['spot'] },
-    { key: 'spotBlend', label: 'light.spot-blend', step: 0.05, min: 0, max: 1, kinds: ['spot'] }
+    { key: 'spotBlend', label: 'light.spot-blend', step: 0.05, min: 0, max: 1, kinds: ['spot'] },
+    { key: 'rotation', label: 'light.rotation', step: 5, kinds: ['ambient'] }
 ];
 
-const KINDS: LightKind[] = ['point', 'spot', 'sun'];
+const KINDS: LightKind[] = ['point', 'spot', 'sun', 'ambient'];
 
 const RESOLUTIONS = [64, 96, 128, 192, 256];
 
@@ -51,7 +54,13 @@ class LightFace extends Container {
     private inputs = new Map<string, { input: HTMLInputElement, row: HTMLElement, field: NumberField }>();
     private capturedInput: HTMLInputElement;
     private resolutionSelect: HTMLSelectElement;
+    private rangeInput: HTMLInputElement;
+    private strengthInput: HTMLInputElement;
     private unsupported: HTMLDivElement;
+    private environmentRow: HTMLElement;
+    private environmentControls: HTMLElement;
+    private environmentName: HTMLSpanElement;
+    private environmentClear: HTMLButtonElement;
 
     constructor(events: Events, args = {}) {
         args = {
@@ -146,6 +155,68 @@ class LightFace extends Container {
             this.inputs.set(field.key, { input, row: el, field });
         }
 
+        // an ambient light's environment: an HDRI or a photo, reduced on the
+        // spot to the small map the light keeps
+        this.environmentRow = document.createElement('div');
+        this.environmentRow.className = 'tf-field';
+        const environmentLabel = document.createElement('span');
+        environmentLabel.textContent = i18n.t('light.environment');
+        this.environmentRow.appendChild(environmentLabel);
+        lightSection.appendChild(this.environmentRow);
+
+        const environmentControls = document.createElement('div');
+        environmentControls.className = 'tf-row';
+        lightSection.appendChild(environmentControls);
+        this.environmentControls = environmentControls;
+        this.environmentName = document.createElement('span');
+        this.environmentName.className = 'tf-source';
+        this.environmentRow.appendChild(this.environmentName);
+
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = '.hdr,.pic,.png,.jpg,.jpeg,.webp';
+        fileInput.style.display = 'none';
+        fileInput.addEventListener('change', async () => {
+            const file = fileInput.files?.[0];
+            fileInput.value = '';
+            if (!file || !this.op) return;
+            const op = this.op;
+            try {
+                op.settings.environment = await loadEnvironment(file);
+            } catch (err) {
+                await events.invoke('showPopup', {
+                    type: 'error',
+                    header: i18n.t('light.environment-failed'),
+                    message: `'${(err as Error)?.message ?? err}'`
+                });
+                return;
+            }
+            // the node may have changed while the file was read
+            if (this.op === op) this.readOp();
+            op.output?.changed();
+            events.fire('edit.changed');
+        });
+        environmentControls.appendChild(fileInput);
+
+        const loadButton = document.createElement('button');
+        loadButton.className = 'tf-button';
+        loadButton.type = 'button';
+        loadButton.textContent = i18n.t('light.environment-load');
+        loadButton.addEventListener('click', () => fileInput.click());
+        environmentControls.appendChild(loadButton);
+
+        this.environmentClear = document.createElement('button');
+        this.environmentClear.className = 'tf-button';
+        this.environmentClear.type = 'button';
+        this.environmentClear.textContent = i18n.t('light.environment-clear');
+        this.environmentClear.addEventListener('click', () => {
+            if (!this.op) return;
+            this.op.settings.environment = null;
+            this.readOp();
+            this.changed();
+        });
+        environmentControls.appendChild(this.environmentClear);
+
         // shared by every light
         const sceneSection = section('light.scene-group');
 
@@ -174,6 +245,26 @@ class LightFace extends Container {
         });
         row(sceneSection, 'light.resolution', this.resolutionSelect);
 
+        // occlusion shapes ambient light only; it is shared because it is a
+        // property of the scene, not of any one light
+        const sceneNumber = (label: string, key: string, step: number, min: number, max: number) => {
+            const input = quiet(document.createElement('input')) as HTMLInputElement;
+            input.type = 'number';
+            input.step = String(step);
+            input.min = String(min);
+            input.max = String(max);
+            input.addEventListener('input', () => {
+                const value = parseFloat(input.value);
+                if (!isFinite(value)) return;
+                events.fire('relight.setSettings', { [key]: Math.min(max, Math.max(min, value)) });
+                events.fire('edit.changed');
+            });
+            row(sceneSection, label, input);
+            return input;
+        };
+        this.rangeInput = sceneNumber('light.occlusion-range', 'occlusionRange', 0.01, 0.01, 1);
+        this.strengthInput = sceneNumber('light.occlusion-strength', 'occlusionStrength', 0.05, 0, 1);
+
         // another light's face, or a loaded project, can change these
         events.on('relight.settingsChanged', () => this.readScene());
     }
@@ -189,8 +280,10 @@ class LightFace extends Container {
         this.kindSelect.value = s.kind;
         this.colorInput.value = toHex(s.color);
         for (const [key, { input }] of this.inputs) {
-            input.value = String((s as any)[key]);
+            input.value = String((s as any)[key] ?? 0);
         }
+        this.environmentName.textContent = s.environment?.name ?? i18n.t('light.environment-none');
+        this.environmentClear.disabled = !s.environment;
         this.showFields();
     }
 
@@ -199,6 +292,8 @@ class LightFace extends Container {
         if (!settings) return;
         this.capturedInput.value = String(settings.capturedLight);
         this.resolutionSelect.value = String(settings.resolution);
+        this.rangeInput.value = String(settings.occlusionRange);
+        this.strengthInput.value = String(settings.occlusionStrength);
     }
 
     /** a spot's cone means nothing to a point light or a sun */
@@ -209,6 +304,9 @@ class LightFace extends Container {
             // hide it through the style instead
             row.style.display = field.kinds && !field.kinds.includes(kind) ? 'none' : '';
         }
+        const ambient = kind === 'ambient' ? '' : 'none';
+        this.environmentRow.style.display = ambient;
+        this.environmentControls.style.display = ambient;
     }
 
     private write(field: NumberField, input: HTMLInputElement) {

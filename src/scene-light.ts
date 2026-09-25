@@ -2,6 +2,7 @@ import { Vec3 } from 'playcanvas';
 
 import { LightSettings } from './edit-ops';
 import { Element, ElementType } from './element';
+import { validEnvironment } from './relight/environment';
 
 /**
  * A light you can see, select, move and aim.
@@ -58,7 +59,16 @@ class SceneLight extends Element {
             position: [this.position.x, this.position.y, this.position.z],
             target: [this.target.x, this.target.y, this.target.z],
             visible: this.visible,
-            settings: { ...this.settings, color: [...this.settings.color] }
+            settings: {
+                ...this.settings,
+                color: [...this.settings.color],
+                // the small map, not the image it came from - a few
+                // thousand numbers, and all the relighter ever needs
+                environment: this.settings.environment ? {
+                    ...this.settings.environment,
+                    data: [...this.settings.environment.data]
+                } : null
+            }
         };
     }
 
@@ -70,11 +80,13 @@ class SceneLight extends Element {
         this.visible = doc.visible !== false;
         if (doc.settings) {
             // in place: the op's record and this light share the object
-            const { color, ...rest } = doc.settings;
+            const { color, environment, ...rest } = doc.settings;
             Object.assign(this.settings, rest);
             if (Array.isArray(color) && color.length === 3) {
                 this.settings.color = [color[0], color[1], color[2]];
             }
+            this.settings.environment = validEnvironment(environment);
+            this.settings.rotation = Number(this.settings.rotation) || 0;
         }
         this.changed();
     }

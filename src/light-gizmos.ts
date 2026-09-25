@@ -15,7 +15,8 @@ import { vertexShader, fragmentShader } from './shaders/debug-shader';
  * Draws every visible light, so a light is a thing you can see and aim.
  *
  * A point light is a small star, a spot adds its cone out to the aim point,
- * and a sun is an arrow along the way it shines. Each is drawn in its own
+ * a sun is an arrow along the way it shines, and an ambient light - light
+ * from all around - is a dome. Each is drawn in its own
  * colour, the selected one at full brightness. Modelled on
  * SceneCameraGizmos: one shared line mesh, rebuilt when anything changes.
  */
@@ -154,6 +155,26 @@ class LightGizmos extends Element {
                     pushLine(tmpA, tmpB);
                 }
             };
+
+            if (settings.kind === 'ambient') {
+                // the horizon circle and two arcs over the top
+                const r = size * 1.5;
+                const arc = (a: Vec3, b: Vec3, from: number, to: number) => {
+                    let prev: Vec3 = null;
+                    for (let i = 0; i <= CONE_SEGMENTS; ++i) {
+                        const angle = from + (to - from) * i / CONE_SEGMENTS;
+                        const p = new Vec3().copy(position)
+                        .addScaled(a, Math.cos(angle) * r)
+                        .addScaled(b, Math.sin(angle) * r);
+                        if (prev) pushLine(prev, p);
+                        prev = p;
+                    }
+                };
+                arc(Vec3.RIGHT, Vec3.BACK, 0, Math.PI * 2);
+                arc(Vec3.RIGHT, Vec3.UP, 0, Math.PI);
+                arc(Vec3.BACK, Vec3.UP, 0, Math.PI);
+                return;
+            }
 
             if (settings.kind === 'sun') {
                 // an arrow along the way the sun shines, rays round its tail

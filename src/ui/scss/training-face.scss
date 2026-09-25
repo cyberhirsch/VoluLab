@@ -53,6 +53,11 @@
         }
     }
 
+    .tf-field .tf-source {
+        margin-top: 0;
+        max-width: 110px;
+    }
+
     .tf-source {
         margin-top: 6px;
         color: $ink-6;

@@ -1,9 +1,9 @@
 # What's next
 
 Everything outstanding, phased and ranked in the table below and then
-described in full: the work in flight, then relighting - the first of
-its four items built - then the places where something built works and
-could work better. What is already built is in [CHANGELOG.md](CHANGELOG.md), with the
+described in full: the work in flight, then relighting - two of its four
+items built - then the places where something built works and could work
+better. What is already built is in [CHANGELOG.md](CHANGELOG.md), with the
 reasoning kept.
 
 Terms used below:
@@ -36,7 +36,7 @@ hard here is rarely the amount of code.
 | 4 | 7 | A real temperature model | Opus 5 |
 | 4 | 15 | Rec.709 luma coefficients | Haiku 4.5 |
 | 5 | 16 | Relighting: density grid, lights, soft shadows (built, needs a real-GPU run) | |
-| 5 | 17 | Relighting: occlusion and ambient light | |
+| 5 | 17 | Relighting: occlusion and ambient light (built, needs a real-GPU run) | |
 | 5 | 18 | Relighting: de-light by occlusion and a matched sun | |
 | 5 | 19 | Relighting: area and volume lights | |
 | — | 10 | Cleanup in a worker | Sonnet 5 |
@@ -255,7 +255,7 @@ nothing.
 
 ---
 
-## Relighting — first item built, three to go
+## Relighting — two items built, two to go
 
 The ask: light a capture with lights placed in VoluLab - point, spot, sun,
 area and volume lights, and ambient light - with soft shadows and
@@ -267,8 +267,13 @@ with the traps written up in [CHANGELOG.md](CHANGELOG.md). It was verified
 in headless Chromium on SwiftShader's software WebGPU, numerically and by
 eye. What it still owes is a session on a real GPU with a real capture:
 timing for a grid build and a relight at a million gaussians and more, and
-a look at two-sided lighting on real surfaces. Items 17 to 19 are not
-started.
+a look at two-sided lighting on real surfaces.
+
+Item 17 is built too: an ambient light kind - a flat colour, or an HDRI
+or photo reduced to spherical harmonics and turned with a rotation - shaped
+by occlusion traced through the same grid, with a range and a strength
+shared by the scene. Verified the same way, and owing the same real-GPU
+session. Items 18 and 19 are not started.
 
 **For the record, how Octane does it.** Octane 2026 path traces gaussians
 alongside meshes, so they cast and receive shadows and show up in
@@ -313,10 +318,13 @@ on the baked lighting.
   lamp in the capture, and they become the emitter, clustered into a few
   dozen point lights. *Select, then operate*, applied to light.
 - **Ambient light** — a flat colour or an HDRI reduced to spherical
-  harmonics, dimmed by occlusion.
+  harmonics, dimmed by occlusion. Built: every ambient light is summed into
+  one set of nine coefficients, evaluated along each side's bent normal.
 - **Occlusion** — a handful of wide cones per gaussian through the same
   grid. It lives in world space, so it holds still as the camera moves,
-  which screen-space occlusion does not.
+  which screen-space occlusion does not. Built: six cones a side, near
+  field by design, computed only while an ambient light is on and only
+  when the grid or the range changes.
 
 Normals come from each gaussian's shortest axis, and nothing decides which
 side is outside - nothing can. The density around a single-layer wall is
@@ -406,6 +414,15 @@ proves slow on real captures.
 - Lights do not animate: no timeline track yet.
 - Changing a light's settings is not an undo step, the same as a camera
   node's settings. Moving or aiming one with the gizmo is.
+
+**Left from item 17**, none of it blocking:
+
+- EXR environments are refused with a message; `.hdr` and ordinary images
+  load. An EXR decoder is a dependency or a few hundred lines.
+- Occlusion ignores bounce light, so a range long enough to see across a
+  room makes the room dark. The range defaults short for that reason.
+- The occlusion textures cost another 16 bytes per gaussian while an
+  ambient light is on, on top of the light textures' 16.
 
 ---
 

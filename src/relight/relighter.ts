@@ -28,7 +28,8 @@ import {
     Vec2
 } from 'playcanvas';
 
-import { depositSource, lightingSource, pullSource, pushSource, resolveSource, WORKGROUP } from './relight-shaders';
+import { addAmbientSH } from './environment';
+import { AMBIENT_BASE, MAX_LIGHTS, SH_COUNT, depositSource, lightingSource, occlusionSource, pullSource, pushSource, resolveSource, WORKGROUP } from './relight-shaders';
 import { ElementType } from '../element';
 import { Events } from '../events';
 import { Scene } from '../scene';
@@ -38,13 +39,16 @@ import { Splat } from '../splat';
 /**
  * Relighting: lights placed in the scene, shadows cast by the scene itself.
  *
- * Two structures and three moments. The density grid holds the scene's
+ * Three structures and three moments. The density grid holds the scene's
  * extinction, built from every drawn gaussian; each object holds two
  * per-gaussian light textures, one per side of each gaussian's flat axis,
- * which the splat shader multiplies in. The grid is rebuilt when the
- * gaussians change - an edit, a transform, a new frame - and the textures
- * when the lights or the grid change. Never when the camera moves: the
- * light is diffuse, so orbiting costs nothing.
+ * which the splat shader multiplies in; and, only while an ambient light
+ * is on, two occlusion textures saying how open each side is. The grid is
+ * rebuilt when the gaussians change - an edit, a transform, a new frame -
+ * occlusion when the grid does, and the light textures when the lights,
+ * the occlusion or the grid change. Never when the camera moves: the light
+ * is diffuse, so orbiting costs nothing, and moving a light leaves the
+ * occlusion alone.
  *
  * WebGPU only. The passes are compute, and the splat shader's lighting
  * branch sits behind a define that is simply never set on WebGL2.
@@ -61,16 +65,27 @@ type RelightSettings = {
     capturedLight: number;
     /** finest grid cells along the scene's longest side */
     resolution: number;
+    /** how far occlusion looks, as a share of the scene's longest side */
+    occlusionRange: number;
+    /** 0 ambient light ignores occlusion, 1 it is fully shut out */
+    occlusionStrength: number;
 };
 
 const defaultRelightSettings = (): RelightSettings => ({
     capturedLight: 0.4,
-    resolution: 128
+    resolution: 128,
+    occlusionRange: 0.1,
+    occlusionStrength: 1
 });
 
-const MAX_LIGHTS = 32;
 const MAX_LEVELS = 8;
 const LIGHT_FLOATS = 16;
+
+// the light records, then the ambient coefficients after them
+const LIGHT_BUFFER_FLOATS = (AMBIENT_BASE + SH_COUNT) * 4;
+
+// occlusion cones are 60 degrees wide
+const OCCLUSION_TAN_HALF = Math.tan(30 * Math.PI / 180);
 
 // wrapped Lambert: how far past 90 degrees light still reaches, which is
 // what keeps a fuzzy gaussian's terminator from being a hard line
@@ -97,13 +112,15 @@ const BOUND_TAIL = 0.005;
 
 const tmpDispatch = new Vec2();
 
-/** The five kernels, compiled once per device. */
+/** The six kernels, compiled once per device. */
 class Kernels {
     deposit: Shader;
     resolve: Shader;
     pull: Shader;
     push: Shader;
+    occlusion: Shader;
     lighting: Shader;
+    noOcclusion: Texture;
 
     constructor(device: GraphicsDevice) {
         const storage = (name: string, readOnly: boolean) => new BindStorageBufferFormat(name, SHADERSTAGE_COMPUTE, readOnly);
@@ -164,6 +181,17 @@ class Kernels {
             storage('levels', true)
         ], countsOnly());
 
+        this.occlusion = make('relightOcclusion', occlusionSource, [
+            storage('gaussians', true),
+            storage('density', true),
+            storage('levels', true),
+            texture('splatState', SAMPLETYPE_FLOAT),
+            texture('splatTransform', SAMPLETYPE_UINT),
+            texture('transformPalette', SAMPLETYPE_UNFILTERABLE_FLOAT),
+            storageTexture('occlusionPlus'),
+            storageTexture('occlusionMinus')
+        ], [...gaussianUniforms(), new UniformFormat('params', UNIFORMTYPE_VEC4)]);
+
         this.lighting = make('relightLighting', lightingSource, [
             storage('gaussians', true),
             storage('density', true),
@@ -173,8 +201,26 @@ class Kernels {
             texture('splatTransform', SAMPLETYPE_UINT),
             texture('transformPalette', SAMPLETYPE_UNFILTERABLE_FLOAT),
             storageTexture('lightPlus'),
-            storageTexture('lightMinus')
-        ], [...gaussianUniforms(), new UniformFormat('params', UNIFORMTYPE_VEC4)]);
+            storageTexture('lightMinus'),
+            texture('occlusionPlus', SAMPLETYPE_FLOAT),
+            texture('occlusionMinus', SAMPLETYPE_FLOAT)
+        ], [
+            ...gaussianUniforms(),
+            new UniformFormat('params', UNIFORMTYPE_VEC4),
+            new UniformFormat('ambient', UNIFORMTYPE_VEC4)
+        ]);
+
+        // bound in place of the occlusion textures while there is no ambient
+        // light to need them - the kernel never reads it
+        this.noOcclusion = new Texture(device, {
+            name: 'relightNoOcclusion',
+            width: 1,
+            height: 1,
+            format: PIXELFORMAT_RGBA16F,
+            mipmaps: false,
+            minFilter: FILTER_NEAREST,
+            magFilter: FILTER_NEAREST
+        });
     }
 
     destroy() {
@@ -182,7 +228,9 @@ class Kernels {
         this.resolve.destroy();
         this.pull.destroy();
         this.push.destroy();
+        this.occlusion.destroy();
         this.lighting.destroy();
+        this.noOcclusion.destroy();
     }
 }
 
@@ -384,6 +432,20 @@ const packGaussians = (data: any, count: number) => {
     return out;
 };
 
+/** A per-gaussian RGBA16F texture the kernels write and the shaders read. */
+const perGaussianTexture = (device: GraphicsDevice, name: string, width: number, height: number) => new Texture(device, {
+    name,
+    width,
+    height,
+    format: PIXELFORMAT_RGBA16F,
+    mipmaps: false,
+    storage: true,
+    minFilter: FILTER_NEAREST,
+    magFilter: FILTER_NEAREST,
+    addressU: ADDRESS_CLAMP_TO_EDGE,
+    addressV: ADDRESS_CLAMP_TO_EDGE
+});
+
 /**
  * Per object: its gaussians packed for the kernels, its two light textures,
  * and what the grid was last built from, to tell when it has changed.
@@ -400,6 +462,12 @@ class SplatLighting {
     lightMinus: Texture;
     deposit: Compute;
     lighting: Compute;
+
+    // how open each side of each gaussian is - only while an ambient light
+    // is on, since nothing else reads them
+    occlusionPlus: Texture = null;
+    occlusionMinus: Texture = null;
+    occlusion: Compute = null;
 
     // what the grid last saw of this object
     seenDeleted = -1;
@@ -418,23 +486,30 @@ class SplatLighting {
         const packed = packGaussians(splat.splatData, this.count);
         this.gaussians.write(0, packed, 0, packed.length);
 
-        const lightTexture = (name: string) => new Texture(device, {
-            name,
-            width: this.width,
-            height: this.height,
-            format: PIXELFORMAT_RGBA16F,
-            mipmaps: false,
-            storage: true,
-            minFilter: FILTER_NEAREST,
-            magFilter: FILTER_NEAREST,
-            addressU: ADDRESS_CLAMP_TO_EDGE,
-            addressV: ADDRESS_CLAMP_TO_EDGE
-        });
+        const lightTexture = (name: string) => perGaussianTexture(device, name, this.width, this.height);
         this.lightPlus = lightTexture('splatLightPlus');
         this.lightMinus = lightTexture('splatLightMinus');
 
         this.deposit = new Compute(device, kernels.deposit, 'RelightDeposit');
         this.lighting = new Compute(device, kernels.lighting, 'RelightLighting');
+    }
+
+    /** true when the textures had to be made, and so hold nothing yet */
+    ensureOcclusion(device: GraphicsDevice, kernels: Kernels) {
+        if (this.occlusion) return false;
+        this.occlusionPlus = perGaussianTexture(device, 'splatOcclusionPlus', this.width, this.height);
+        this.occlusionMinus = perGaussianTexture(device, 'splatOcclusionMinus', this.width, this.height);
+        this.occlusion = new Compute(device, kernels.occlusion, 'RelightOcclusion');
+        return true;
+    }
+
+    releaseOcclusion() {
+        this.occlusionPlus?.destroy();
+        this.occlusionMinus?.destroy();
+        this.occlusion?.destroy();
+        this.occlusionPlus = null;
+        this.occlusionMinus = null;
+        this.occlusion = null;
     }
 
     destroy() {
@@ -443,6 +518,7 @@ class SplatLighting {
         this.lightMinus.destroy();
         this.deposit.destroy();
         this.lighting.destroy();
+        this.releaseOcclusion();
     }
 }
 
@@ -534,10 +610,11 @@ const robustBox = (entries: SplatLighting[]): Box | null => {
  * Returns how many were written.
  */
 const packLights = (lights: SceneLight[], out: Float32Array) => {
-    out.fill(0);
+    out.fill(0, 0, MAX_LIGHTS * LIGHT_FLOATS);
     let n = 0;
     for (const light of lights) {
         if (n >= MAX_LIGHTS) break;
+        if (light.settings.kind === 'ambient') continue;
         const s = light.settings;
         const o = n * LIGHT_FLOATS;
 
@@ -589,6 +666,24 @@ const packLights = (lights: SceneLight[], out: Float32Array) => {
     return n;
 };
 
+/**
+ * Every visible ambient light, summed into the one set of irradiance
+ * coefficients the kernel reads - so ambient lights cost the same however
+ * many there are. Returns whether there was any.
+ */
+const packAmbient = (lights: SceneLight[], out: Float32Array) => {
+    const offset = AMBIENT_BASE * 4;
+    out.fill(0, offset, offset + SH_COUNT * 4);
+    let any = false;
+    for (const light of lights) {
+        const s = light.settings;
+        if (s.kind !== 'ambient') continue;
+        addAmbientSH(out, offset, s.color, Math.max(0, s.intensity), s.environment ?? null, s.rotation ?? 0);
+        any = true;
+    }
+    return any;
+};
+
 class Relighter {
     scene: Scene;
     events: Events;
@@ -601,20 +696,21 @@ class Relighter {
     private grid: DensityGrid = null;
     private entries = new Map<Splat, SplatLighting>();
     private lightBuffer: StorageBuffer = null;
-    private lightData = new Float32Array(MAX_LIGHTS * LIGHT_FLOATS);
-    // doubles, so the captured-light setting is compared exactly - a float
-    // copy of 0.2 is never equal to 0.2, and the lighting would rerun forever
-    private seenLights = new Float64Array(MAX_LIGHTS * LIGHT_FLOATS + 2);
+    private lightData = new Float32Array(LIGHT_BUFFER_FLOATS);
+    // doubles, so the settings are compared exactly - a float copy of 0.2 is
+    // never equal to 0.2, and the lighting would rerun forever
+    private seenLights = new Float64Array(LIGHT_BUFFER_FLOATS + 4);
 
     private active = false;
     private gridDirty = true;
+    private occlusionDirty = true;
     private lightingDirty = true;
     private lastGridBuild = -Infinity;
     private positionsVersion = new Map<Splat, number>();
     private failed = false;
 
     /** for the curious and for tests: what the last build did */
-    stats = { gridBuilds: 0, lightingPasses: 0, lastGridMs: 0, lastLightingMs: 0 };
+    stats = { gridBuilds: 0, occlusionPasses: 0, lightingPasses: 0, lastGridMs: 0, lastOcclusionMs: 0, lastLightingMs: 0 };
 
     constructor(scene: Scene) {
         this.scene = scene;
@@ -714,9 +810,10 @@ class Relighter {
         if (!this.active) {
             this.kernels ??= new Kernels(device);
             this.grid = new DensityGrid(device, this.kernels);
-            this.lightBuffer = new StorageBuffer(device, MAX_LIGHTS * LIGHT_FLOATS * 4, BUFFERUSAGE_COPY_DST);
+            this.lightBuffer = new StorageBuffer(device, LIGHT_BUFFER_FLOATS * 4, BUFFERUSAGE_COPY_DST);
             this.active = true;
             this.gridDirty = true;
+            this.occlusionDirty = true;
             this.lightingDirty = true;
         }
 
@@ -758,18 +855,35 @@ class Relighter {
             }
         }
 
-        // what would make the lighting stale: the lights, the captured share
+        // what would make the lighting stale: the lights, the ambient light,
+        // the captured share, the occlusion strength
         const count = packLights(lights, this.lightData);
+        const ambient = packAmbient(lights, this.lightData);
         const seen = this.seenLights;
-        let lightsChanged = seen[0] !== count || seen[1] !== this.settings.capturedLight;
-        for (let i = 0; i < count * LIGHT_FLOATS && !lightsChanged; ++i) {
-            lightsChanged = seen[i + 2] !== this.lightData[i];
+        const head = [count, this.settings.capturedLight, this.settings.occlusionStrength, ambient ? 1 : 0];
+        let lightsChanged = false;
+        for (let i = 0; i < head.length && !lightsChanged; ++i) {
+            lightsChanged = seen[i] !== head[i];
+        }
+        for (let i = 0; i < LIGHT_BUFFER_FLOATS && !lightsChanged; ++i) {
+            lightsChanged = seen[i + head.length] !== this.lightData[i];
         }
         if (lightsChanged) {
-            seen[0] = count;
-            seen[1] = this.settings.capturedLight;
-            seen.set(this.lightData.subarray(0, count * LIGHT_FLOATS), 2);
+            seen.set(head, 0);
+            seen.set(this.lightData, head.length);
             this.lightingDirty = true;
+        }
+
+        // occlusion exists only while something reads it
+        for (const splat of splats) {
+            const entry = this.entries.get(splat);
+            if (ambient) {
+                if (entry.ensureOcclusion(device, this.kernels)) {
+                    this.occlusionDirty = true;
+                }
+            } else {
+                entry.releaseOcclusion();
+            }
         }
 
         const entries = splats.map(s => this.entries.get(s));
@@ -780,12 +894,19 @@ class Relighter {
                 this.buildGrid(entries);
                 this.lastGridBuild = now;
                 this.gridDirty = false;
+                this.occlusionDirty = true;
                 this.lightingDirty = true;
             }
         }
 
+        if (ambient && this.occlusionDirty && !this.gridDirty) {
+            this.occlude(entries);
+            this.occlusionDirty = false;
+            this.lightingDirty = true;
+        }
+
         if (this.lightingDirty && !this.gridDirty) {
-            this.light(entries, count);
+            this.light(entries, count, ambient);
             this.lightingDirty = false;
             this.scene.forceRender = true;
         }
@@ -831,7 +952,39 @@ class Relighter {
         this.stats.lastGridMs = performance.now() - start;
     }
 
-    private light(entries: SplatLighting[], lightCount: number) {
+    private occlude(entries: SplatLighting[]) {
+        const start = performance.now();
+        const { device, grid } = this;
+
+        // the range is a share of the grid's longest side, so it means the
+        // same on a capture of any scale
+        const longest = Math.max(grid.dims[0], grid.dims[1], grid.dims[2]) * grid.cell;
+        const range = this.settings.occlusionRange * longest;
+
+        for (const entry of entries) {
+            const { splat, occlusion } = entry;
+            occlusion.setParameter('gaussians', entry.gaussians);
+            occlusion.setParameter('density', grid.density);
+            occlusion.setParameter('levels', grid.levelBuffer);
+            occlusion.setParameter('splatState', splat.stateTexture);
+            occlusion.setParameter('splatTransform', splat.transformTexture);
+            occlusion.setParameter('transformPalette', splat.transformPalette.texture);
+            occlusion.setParameter('occlusionPlus', entry.occlusionPlus);
+            occlusion.setParameter('occlusionMinus', entry.occlusionMinus);
+            occlusion.setParameter('matrixModel', splat.entity.getWorldTransform().data);
+            occlusion.setParameter('gridOrigin', grid.gridOrigin);
+            occlusion.setParameter('gridDims', grid.gridDims);
+            occlusion.setParameter('counts', [entry.count, entry.width, 0, 0]);
+            occlusion.setParameter('params', [range, RAY_OFFSET_CELLS, OCCLUSION_TAN_HALF, 0]);
+            dispatchFor(device, occlusion, entry.count);
+            device.computeDispatch([occlusion], 'RelightOcclusion');
+        }
+
+        this.stats.occlusionPasses++;
+        this.stats.lastOcclusionMs = performance.now() - start;
+    }
+
+    private light(entries: SplatLighting[], lightCount: number, ambient: boolean) {
         const start = performance.now();
         const { device, grid } = this;
 
@@ -848,11 +1001,14 @@ class Relighter {
             lighting.setParameter('transformPalette', splat.transformPalette.texture);
             lighting.setParameter('lightPlus', entry.lightPlus);
             lighting.setParameter('lightMinus', entry.lightMinus);
+            lighting.setParameter('occlusionPlus', entry.occlusionPlus ?? this.kernels.noOcclusion);
+            lighting.setParameter('occlusionMinus', entry.occlusionMinus ?? this.kernels.noOcclusion);
             lighting.setParameter('matrixModel', splat.entity.getWorldTransform().data);
             lighting.setParameter('gridOrigin', grid.gridOrigin);
             lighting.setParameter('gridDims', grid.gridDims);
             lighting.setParameter('counts', [entry.count, entry.width, lightCount, 0]);
             lighting.setParameter('params', [this.settings.capturedLight, WRAP, RAY_OFFSET_CELLS, 0]);
+            lighting.setParameter('ambient', [ambient && entry.occlusion ? 1 : 0, this.settings.occlusionStrength, 0, 0]);
             dispatchFor(device, lighting, entry.count);
             device.computeDispatch([lighting], 'RelightLighting');
         }
@@ -865,8 +1021,13 @@ class Relighter {
         const next = { ...this.settings, ...partial };
         next.capturedLight = Math.min(4, Math.max(0, Number(next.capturedLight) || 0));
         next.resolution = Math.round(Math.min(256, Math.max(32, Number(next.resolution) || 128)));
+        next.occlusionRange = Math.min(1, Math.max(0.01, Number(next.occlusionRange) || 0.1));
+        next.occlusionStrength = Math.min(1, Math.max(0, Number.isFinite(Number(next.occlusionStrength)) ? Number(next.occlusionStrength) : 1));
         if (next.resolution !== this.settings.resolution) {
             this.gridDirty = true;
+        }
+        if (next.occlusionRange !== this.settings.occlusionRange) {
+            this.occlusionDirty = true;
         }
         this.settings = next;
         this.lightingDirty = true;
@@ -887,7 +1048,16 @@ class Relighter {
                 levels: grid.levels.map(l => l.slice()),
                 density: grid.density
             } : null,
-            entries: [...this.entries.values()].map(e => ({ splat: e.splat, lightPlus: e.lightPlus, lightMinus: e.lightMinus, width: e.width, height: e.height, count: e.count })),
+            entries: [...this.entries.values()].map(e => ({
+                splat: e.splat,
+                lightPlus: e.lightPlus,
+                lightMinus: e.lightMinus,
+                occlusionPlus: e.occlusionPlus,
+                occlusionMinus: e.occlusionMinus,
+                width: e.width,
+                height: e.height,
+                count: e.count
+            })),
             stats: { ...this.stats }
         };
     }
@@ -909,4 +1079,4 @@ const registerRelighting = (events: Events, scene: Scene) => {
     return relighter;
 };
 
-export { registerRelighting, Relighter, defaultRelightSettings, type RelightSettings, MAX_LIGHTS };
+export { registerRelighting, Relighter, defaultRelightSettings, type RelightSettings };

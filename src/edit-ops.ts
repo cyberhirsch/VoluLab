@@ -6,6 +6,7 @@ import { GradeParams, gradeMatrix } from './color-grade';
 import { composeGrades, toGrade } from './grade-palette';
 import { IndexRanges } from './index-ranges';
 import { Pivot } from './pivot';
+import type { Environment } from './relight/environment';
 import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
 import { SceneLight } from './scene-light';
@@ -1447,7 +1448,7 @@ class CameraPoseOp {
     }
 }
 
-type LightKind = 'point' | 'spot' | 'sun';
+type LightKind = 'point' | 'spot' | 'sun' | 'ambient';
 
 /**
  * What a light node records. Everything is relative, because a capture
@@ -1455,6 +1456,10 @@ type LightKind = 'point' | 'spot' | 'sun';
  * the light is where it is aimed, and softness is the light's size as a
  * fraction of its distance to that point (or, for a sun, of a fixed wide
  * angle). A light set up on one capture means the same on another.
+ *
+ * An ambient light has no position that matters: it is light from every
+ * direction, a flat colour or an environment map, and its intensity is how
+ * bright it makes an unoccluded surface. Occlusion shapes it.
  */
 type LightSettings = {
     kind: LightKind;
@@ -1468,6 +1473,10 @@ type LightSettings = {
     spotAngle: number;
     /** spot only: how much of the cone is soft edge, 0..1 */
     spotBlend: number;
+    /** ambient only: an environment map, or null for the flat colour */
+    environment: Environment | null;
+    /** ambient only: the environment turned about the up axis, in degrees */
+    rotation: number;
 };
 
 const defaultLightSettings = (): LightSettings => ({
@@ -1476,7 +1485,9 @@ const defaultLightSettings = (): LightSettings => ({
     intensity: 0.8,
     softness: 0.15,
     spotAngle: 45,
-    spotBlend: 0.3
+    spotBlend: 0.3,
+    environment: null,
+    rotation: 0
 });
 
 /**

@@ -1053,6 +1053,8 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     events.function('light.addNode', (kind: LightKind = 'point') => {
         const settings = defaultLightSettings();
         settings.kind = kind;
+        // light from everywhere adds up fast; start it gentler than a lamp
+        if (kind === 'ambient') settings.intensity = 0.5;
 
         const count = (events.invoke('light.list') as unknown[]).length;
         const light = new SceneLight(`light ${count + 1}`, settings);

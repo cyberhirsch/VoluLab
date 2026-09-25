@@ -9,6 +9,58 @@ months finds out why before they change it.
 
 ---
 
+## Relighting: ambient light and occlusion
+
+The second relighting item. A light node can now be an ambient light:
+light from every direction, a flat colour or an environment, shaped by
+occlusion traced through the same density grid as the shadows.
+
+- **An environment is nine numbers per channel by the time it lights
+  anything.** A loaded HDRI or photo is decoded straight into a 32 x 16
+  map - scanline by scanline for `.hdr`, so an 8K image never exists as
+  floats - normalised to a mean luminance of 1, and projected onto three
+  bands of spherical harmonics convolved with the cosine lobe. Every
+  ambient light is summed into one set of coefficients after the light
+  records, so ten ambient lights cost what one does. The small map, not
+  the image, is what the project stores; rotating the environment later
+  re-projects from it.
+- **Occlusion is near-field on purpose.** Six cones a side, 60 degrees
+  wide, cosine weighted, out to a range that is a share of the scene. Traced
+  to infinity, the inside of any room would see no sky and ambient light
+  would do nothing indoors - there is no bounce light to make up for it.
+  Each side also gets a bent normal, the direction its open sky lies in,
+  which is where the ambient coefficients are evaluated.
+- **Occlusion runs only when it can matter.** Its textures exist only
+  while an ambient light is on. It reruns when the grid or the range
+  changes; moving or changing a light, or the occlusion strength, only
+  relights.
+
+**The trap: wide cones occlude the surface they leave.** The first run
+said an open floor saw five percent of the sky. A wide cone reads coarse
+levels early, a coarse cell near a surface contains that surface, and a
+trilinear sample reaches a whole coarse cell further - so the cone reads
+the floor it started from. Moving the start further out cannot fix it,
+because the cone widens as fast as it climbs. The fix caps the level a
+sample may read by its height above the surface: the cell may be at most
+half the height, which keeps the surface's own coarse cell out of reach,
+and the cap is applied in whole levels, because blending toward a
+fractional level reads the next coarser cell - the one being kept out.
+Near the surface the cone is sampled narrower than it is. The same cap now
+applies to shadow cones, where a very soft or grazing light had the same
+problem more quietly. The floor went from 0.05 open to 1.00.
+
+Verified on the floor and sphere scene: the open floor and the sphere's
+top and sides fully open, the floor under the sphere at 0.57 and its
+underside at 0.36 at the default range, both darker at a longer one;
+strength 0 removing the effect without touching the occlusion; an HDRI
+sky, loaded through the node's own file button, lighting the sphere's top
+about eight times as brightly as its underside; a half-bright
+environment swapping sides when turned 180 degrees; moving a sun
+relighting without rerunning occlusion; the environment surviving a
+project round trip; the earlier shadow numbers unchanged.
+
+---
+
 ## Relighting: light nodes, soft shadows, a density grid
 
 A light node puts a point, spot or sun light in the scene, and the scene
