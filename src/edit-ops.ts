@@ -7,6 +7,7 @@ import { composeGrades, toGrade } from './grade-palette';
 import { IndexRanges } from './index-ranges';
 import { Pivot } from './pivot';
 import type { Environment } from './relight/environment';
+import type { RelightSettings } from './relight/relighter';
 import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
 import { SceneLight } from './scene-light';
@@ -836,6 +837,41 @@ class CropOp extends StateOp {
  * a limit rather than by truncating the data, so it stays reversible and the
  * bands come back if the node is bypassed.
  */
+/**
+ * A relight node: this object is relit, with these settings. It sits in the
+ * object's own chain and changes nothing in its data. Applied, it hands the
+ * object its settings, which the relighter reads every frame; undone or
+ * bypassed, it takes them back, and lights then only add to the object's
+ * captured light, unshadowed. One per object.
+ */
+class RelightOp {
+    name = 'relight';
+    splat: Splat;
+    settings: RelightSettings;
+    bypassed?: boolean;
+
+    constructor(splat: Splat, settings: RelightSettings) {
+        this.splat = splat;
+        this.settings = settings;
+    }
+
+    /** what the graph writes under the node's title */
+    get sourceLabel() {
+        const { resolution, delight } = this.settings;
+        return delight > 0 ? `grid ${resolution}, de-light ${delight}` : `grid ${resolution}`;
+    }
+
+    do() {
+        this.splat.relight = this.settings;
+    }
+
+    undo() {
+        if (this.splat.relight === this.settings) {
+            this.splat.relight = null;
+        }
+    }
+}
+
 class SetShBandsOp {
     name = 'setShBands';
     splat: Splat;
@@ -1741,6 +1777,7 @@ export {
     type CameraSettings,
     defaultCameraSettings,
     LightOp,
+    RelightOp,
     LightPoseOp,
     type LightKind,
     type LightRole,

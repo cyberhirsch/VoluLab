@@ -19,6 +19,7 @@ import { gradeMatrix } from './color-grade';
 import { CameraSettings } from './edit-ops';
 import { Element, ElementType } from './element';
 import { GradePalette } from './grade-palette';
+import type { RelightSettings } from './relight/relighter';
 import { Serializer } from './serializer';
 import { vertexShader, fragmentShader, gsplatCenter, gsplatModify, vertexShaderWGSL, fragmentShaderWGSL, gsplatCenterWGSL, gsplatModifyWGSL } from './shaders/splat-shader';
 import { State, SplatState } from './splat-state';
@@ -74,6 +75,12 @@ class Splat extends Element {
     _temperature = 0;
     _saturation = 1;
     _shBandLimit = 3;
+
+    /**
+     * This object's relight node's settings while the node is applied, or
+     * null. The node sets and clears it; the relighter reads it each frame.
+     */
+    relight: RelightSettings | null = null;
     _exposure = 0;
     _brightness = 0;
     _blackPoint = 0;

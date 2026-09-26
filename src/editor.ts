@@ -5,14 +5,14 @@ import { registerCameraEffects } from './camera-effects';
 import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings } from './edit-ops';
+import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, RelightOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
 import type { GridPlane } from './infinite-grid';
 import { MappedReadFileSystem } from './io';
 import { registerLightViewEvents } from './light-view';
-import { registerRelighting } from './relight/relighter';
+import { defaultRelightSettings, normalizeRelightSettings, RelightSettings, registerRelighting } from './relight/relighter';
 import { emittersFromSelection, splatWithSelection } from './relight/volume-light';
 import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
@@ -1047,11 +1047,80 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     /**
+     * Relight nodes: one per object, on the object's own lane. The index of
+     * an object's node, applied or bypassed, or -1 - an undone one ahead of
+     * the cursor is on its way out and does not count.
+     */
+    const relightIndex = (splat: Splat) => {
+        const { ops, cursor } = history();
+        for (let i = 0; i < cursor; ++i) {
+            const op = ops[i];
+            if (op instanceof RelightOp && op.splat === splat) return i;
+        }
+        return -1;
+    };
+
+    events.function('relight.nodeIndex', (splat: Splat) => relightIndex(splat));
+
+    // Adds are queued, so a relight node just added is not in the history
+    // yet; lights added one after another would each find none and add
+    // their own. These are the objects with one on its way in.
+    const incoming = new WeakSet<Splat>();
+    events.on('edit.apply', (op: EditOp) => {
+        if (op instanceof RelightOp) incoming.delete(op.splat);
+    });
+    const hasRelight = (splat: Splat) => relightIndex(splat) >= 0 || !!splat.relight || incoming.has(splat);
+    const addRelight = (op: RelightOp) => {
+        incoming.add(op.splat);
+        events.fire('edit.add', op);
+    };
+
+    // a relight node for an object, with these settings; null when the object
+    // has one already
+    events.function('relight.addNode', (splat: Splat, settings?: Partial<RelightSettings>) => {
+        if (!splat || hasRelight(splat)) return null;
+        const op = new RelightOp(splat, normalizeRelightSettings(settings ?? {}));
+        addRelight(op);
+        return op;
+    });
+
+    // from the graph: add one, or open the one the object has
+    events.on('graph.addRelightNode', (target?: Splat) => {
+        addTarget(target).forEach((splat) => {
+            const index = relightIndex(splat);
+            if (index >= 0) {
+                openInGraph(index);
+            } else if (!hasRelight(splat)) {
+                incoming.add(splat);
+                appendAndOpen(new RelightOp(splat, defaultRelightSettings()));
+            }
+        });
+    });
+
+    /**
+     * Adding a light relights what it lights: every object without a relight
+     * node gets one, with the defaults. Without the node an object is still
+     * lit, but the light only adds to its captured light, unshadowed. How
+     * many nodes were added, since each moves the new light's index on.
+     */
+    const relightAll = () => {
+        let added = 0;
+        for (const splat of scene.getElementsByType(ElementType.splat) as Splat[]) {
+            if (!hasRelight(splat)) {
+                addRelight(new RelightOp(splat, defaultRelightSettings()));
+                added++;
+            }
+        }
+        return added;
+    };
+
+    /**
      * A light node: one light, aimed at what you are looking at. It starts
      * above and to one side of the view rather than at the eye, so the first
      * thing it shows is a shadow, not a headlamp's flat light.
      */
-    events.function('light.addNode', (kind: LightKind = 'point') => {
+    // relight: false when a project being opened brings its own relight nodes
+    events.function('light.addNode', (kind: LightKind = 'point', relight = true) => {
         const settings = defaultLightSettings();
         settings.kind = kind;
         // light from everywhere adds up fast; start it gentler than a lamp
@@ -1081,8 +1150,11 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         light.position.copy(target).add(offset);
         light.target.copy(target);
 
+        // the adds are queued, so the light's index counts the relight nodes
+        // that go in ahead of it
+        const added = relight ? relightAll() : 0;
         const op = new LightOp(scene, light, settings);
-        const index = history().cursor;
+        const index = history().cursor + added;
         events.fire('edit.add', op);
         openInGraph(index);
         events.fire('workspace.reveal', 'node');
@@ -1121,8 +1193,9 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         light.position.copy(source.centre);
         light.target.copy(source.centre).add(new Vec3(0, -drop, 0));
 
+        const added = relightAll();
         const op = new LightOp(scene, light, settings);
-        const index = history().cursor;
+        const index = history().cursor + added;
         events.fire('edit.add', op);
         openInGraph(index);
         events.fire('workspace.reveal', 'node');

@@ -5,7 +5,6 @@ import { fieldDefault } from './value-fields';
 import { defaultLightSettings, LightKind, LightOp, LightRole, LightSettings } from '../edit-ops';
 import { Events } from '../events';
 import { loadEnvironment } from '../relight/environment';
-import { defaultRelightSettings } from '../relight/relighter';
 
 /**
  * The light node's face, mounted in the node pane like the camera's.
@@ -14,10 +13,9 @@ import { defaultRelightSettings } from '../relight/relighter';
  * and, for a spot, its cone, for an area light its size, for an ambient
  * light its environment, for a volume light the gaussians it came from -
  * edits the node's settings in place; a light has no baked result, so the
- * relighter simply sees the change on its next frame.
- * Below that, the scene's lighting: settings every light shares, shown on
- * each light's face because there is nowhere else a user would look for
- * them.
+ * relighter simply sees the change on its next frame. How an object is
+ * relit - shadows, occlusion, de-light - is its relight node's (see
+ * relight-face.ts).
  */
 
 type NumberField = {
@@ -51,8 +49,6 @@ const ROLES: LightRole[] = ['add', 'match'];
 // de-light's occlusion stands for
 const ROLE_KINDS: LightKind[] = ['point', 'spot', 'sun', 'rect', 'disk', 'sphere', 'volume'];
 
-const RESOLUTIONS = [64, 96, 128, 192, 256, 512, 768, 1024];
-
 // the picker speaks hex; the settings keep 0..1 per channel
 const toHex = (c: number[]) => `#${c.map(v => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join('')}`;
 const fromHex = (hex: string): [number, number, number] => {
@@ -68,14 +64,6 @@ class LightFace extends Container {
     private roleRow: HTMLElement;
     private colorInput: HTMLInputElement;
     private inputs = new Map<string, { input: HTMLInputElement, row: HTMLElement, field: NumberField }>();
-    private capturedInput: HTMLInputElement;
-    private resolutionSelect: HTMLSelectElement;
-    private resolutionNotice: HTMLDivElement;
-    private rangeInput: HTMLInputElement;
-    private strengthInput: HTMLInputElement;
-    private delightInput: HTMLInputElement;
-    private floorInput: HTMLInputElement;
-    private seesDeletedSelect: HTMLSelectElement;
     private unsupported: HTMLDivElement;
     private environmentRow: HTMLElement;
     private environmentControls: HTMLElement;
@@ -295,81 +283,6 @@ class LightFace extends Container {
             events.fire('edit.changed');
         });
         this.emittersControls.appendChild(useSelection);
-
-        // shared by every light
-        const sceneSection = section('light.scene-group');
-
-        this.capturedInput = quiet(document.createElement('input')) as HTMLInputElement;
-        this.capturedInput.type = 'number';
-        this.capturedInput.step = '0.05';
-        this.capturedInput.min = '0';
-        this.capturedInput.addEventListener('input', () => {
-            const value = parseFloat(this.capturedInput.value);
-            if (!isFinite(value)) return;
-            events.fire('relight.setSettings', { capturedLight: Math.max(0, value) });
-            events.fire('edit.changed');
-        });
-        row(sceneSection, 'light.captured-light', this.capturedInput);
-        fieldDefault(this.capturedInput, defaultRelightSettings().capturedLight);
-
-        this.resolutionSelect = quiet(document.createElement('select')) as HTMLSelectElement;
-        RESOLUTIONS.forEach((resolution) => {
-            const option = document.createElement('option');
-            option.value = String(resolution);
-            option.textContent = String(resolution);
-            this.resolutionSelect.appendChild(option);
-        });
-        this.resolutionSelect.addEventListener('change', () => {
-            events.fire('relight.setSettings', { resolution: parseInt(this.resolutionSelect.value, 10) });
-            events.fire('edit.changed');
-        });
-        row(sceneSection, 'light.resolution', this.resolutionSelect);
-
-        // a grid finer than the GPU can hold is made as fine as it can hold,
-        // and the face says so rather than leave the setting looking obeyed
-        this.resolutionNotice = document.createElement('div');
-        this.resolutionNotice.className = 'tf-notice';
-        this.resolutionNotice.style.display = 'none';
-        sceneSection.appendChild(this.resolutionNotice);
-
-        // occlusion shapes ambient light only; it is shared because it is a
-        // property of the scene, not of any one light
-        const sceneNumber = (label: string, key: string, step: number, min: number, max: number) => {
-            const input = quiet(document.createElement('input')) as HTMLInputElement;
-            input.type = 'number';
-            input.step = String(step);
-            input.min = String(min);
-            input.max = String(max);
-            input.addEventListener('input', () => {
-                const value = parseFloat(input.value);
-                if (!isFinite(value)) return;
-                events.fire('relight.setSettings', { [key]: Math.min(max, Math.max(min, value)) });
-                events.fire('edit.changed');
-            });
-            row(sceneSection, label, input);
-            fieldDefault(input, (defaultRelightSettings() as Record<string, any>)[key]);
-            return input;
-        };
-        this.rangeInput = sceneNumber('light.occlusion-range', 'occlusionRange', 0.01, 0.01, 1);
-        this.strengthInput = sceneNumber('light.occlusion-strength', 'occlusionStrength', 0.05, 0, 1);
-
-        // de-light: how much of the capture's own light is divided back out,
-        // the least it divides by, and whether deleted gaussians still count
-        // as part of the capture - a deleted car's baked shadow comes out of
-        // the road only if they do, cleaned-up floaters stop counting only if
-        // they do not
-        this.delightInput = sceneNumber('light.delight', 'delight', 0.05, 0, 1);
-        this.floorInput = sceneNumber('light.delight-floor', 'delightFloor', 0.05, 0.02, 1);
-        this.seesDeletedSelect = select(['yes', 'no'], answer => `light.${answer}`);
-        this.seesDeletedSelect.addEventListener('change', () => {
-            events.fire('relight.setSettings', { delightSeesDeleted: this.seesDeletedSelect.value === 'yes' });
-            events.fire('edit.changed');
-        });
-        row(sceneSection, 'light.delight-deleted', this.seesDeletedSelect);
-
-        // another light's face, or a loaded project, can change these
-        events.on('relight.settingsChanged', () => this.readScene());
-        events.on('relight.resolutionUsed', () => this.readResolutionUsed());
     }
 
     /** settings -> controls */
@@ -377,8 +290,6 @@ class LightFace extends Container {
         const supported = this.events.invoke('relight.supported') !== false;
         (this.unsupported.parentElement as HTMLElement).style.display = supported ? 'none' : '';
         this.unsupported.hidden = supported;
-        this.readScene();
-        this.readResolutionUsed();
         if (!this.op) return;
         const s = this.op.settings;
         this.kindSelect.value = s.kind;
@@ -394,29 +305,6 @@ class LightFace extends Container {
             i18n.t('light.emitters-from', { count: emitters, source: s.emitterSource || '?' }) :
             i18n.t('light.emitters-none');
         this.showFields();
-    }
-
-    private readScene() {
-        const settings = this.events.invoke('relight.settings');
-        if (!settings) return;
-        this.capturedInput.value = String(settings.capturedLight);
-        this.resolutionSelect.value = String(settings.resolution);
-        this.rangeInput.value = String(settings.occlusionRange);
-        this.strengthInput.value = String(settings.occlusionStrength);
-        this.delightInput.value = String(settings.delight);
-        this.floorInput.value = String(settings.delightFloor);
-        this.seesDeletedSelect.value = settings.delightSeesDeleted ? 'yes' : 'no';
-    }
-
-    /** whether the grid came out coarser than asked, because the GPU could not hold it */
-    private readResolutionUsed() {
-        const settings = this.events.invoke('relight.settings');
-        const used = this.events.invoke('relight.resolutionUsed');
-        const short = !!settings && typeof used === 'number' && used < settings.resolution;
-        this.resolutionNotice.style.display = short ? '' : 'none';
-        if (short) {
-            this.resolutionNotice.textContent = i18n.t('light.resolution-used', { used });
-        }
     }
 
     /** a spot's cone means nothing to a point light or a sun */

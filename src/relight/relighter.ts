@@ -108,17 +108,33 @@ const MAX_LEVELS = 10;
 const MAX_RESOLUTION = 1024;
 const MIN_RESOLUTION = 32;
 
+/** A relight node's settings, each held to what the passes can take. */
+const normalizeRelightSettings = (s: Partial<RelightSettings>): RelightSettings => {
+    const d = defaultRelightSettings();
+    const num = (v: unknown, fallback: number) => (v !== null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : fallback);
+    return {
+        capturedLight: Math.min(4, Math.max(0, num(s.capturedLight, d.capturedLight))),
+        resolution: Math.round(Math.min(MAX_RESOLUTION, Math.max(MIN_RESOLUTION, num(s.resolution, d.resolution)))),
+        occlusionRange: Math.min(1, Math.max(0.01, num(s.occlusionRange, d.occlusionRange))),
+        occlusionStrength: Math.min(1, Math.max(0, num(s.occlusionStrength, d.occlusionStrength))),
+        delight: Math.min(1, Math.max(0, num(s.delight, d.delight))),
+        delightFloor: Math.min(1, Math.max(0.02, num(s.delightFloor, d.delightFloor))),
+        delightSeesDeleted: s.delightSeesDeleted !== false
+    };
+};
+
 // what WebGPU guarantees every device, for a device that does not say
 const DEFAULT_BINDING_BYTES = 128 * 1024 * 1024;
 const DEFAULT_BUFFER_BYTES = 256 * 1024 * 1024;
 
 const LIGHT_FLOATS = 16;
 
-// the settings the lighting pass depends on, compared ahead of the lights
-const SEEN_HEAD = 5;
+// what the lighting pass depends on besides the lights and each object's
+// relight settings, compared ahead of the lights
+const SEEN_HEAD = 2;
 
-// the settings the de-light pass depends on, compared ahead of the matched lights
-const DELIGHT_HEAD = 3;
+// the same for the de-light pass, ahead of the matched lights
+const DELIGHT_HEAD = 1;
 
 // state bits: hidden - which this app records as locked, and draws as all
 // but invisible - and deleted
@@ -178,6 +194,9 @@ class Kernels {
     lighting: Shader;
     delight: Shader;
     noOcclusion: Texture;
+    // bound for the grid by an object that never reads it - one with no
+    // relight node, while there may be no grid at all
+    emptyGrid: StorageBuffer;
 
     constructor(device: GraphicsDevice) {
         const storage = (name: string, readOnly: boolean) => new BindStorageBufferFormat(name, SHADERSTAGE_COMPUTE, readOnly);
@@ -299,6 +318,7 @@ class Kernels {
             minFilter: FILTER_NEAREST,
             magFilter: FILTER_NEAREST
         });
+        this.emptyGrid = new StorageBuffer(device, 16, BUFFERUSAGE_COPY_DST);
     }
 
     destroy() {
@@ -472,6 +492,16 @@ class DensityGrid {
         });
     }
 
+    /** Give the buffers back while no relight node needs the grid; a layout makes them again. */
+    release() {
+        this.accum?.destroy();
+        this.density?.destroy();
+        this.accum = null;
+        this.density = null;
+        this.capacity = 0;
+        this.resolution = 0;
+    }
+
     get levelCount() {
         return this.levels.length;
     }
@@ -631,6 +661,12 @@ class SplatLighting {
     lightMinus: Texture;
     deposit: Compute;
     lighting: Compute;
+
+    // this object's relight node's settings, or null: without one, lights
+    // only add to its captured light, unshadowed
+    settings: RelightSettings | null = null;
+    // the same as last seen, to tell what changed
+    seenSettings: number[] = [];
 
     // how open each side of each gaussian is - only while an ambient light
     // is on, since nothing else reads them
@@ -1036,7 +1072,6 @@ class Relighter {
     scene: Scene;
     events: Events;
     device: GraphicsDevice;
-    settings = defaultRelightSettings();
 
     readonly supported: boolean;
 
@@ -1057,7 +1092,8 @@ class Relighter {
     private occlusionDirty = true;
     private lightingDirty = true;
     private lastGridBuild = -Infinity;
-    private reportedResolution = 0;
+    private gridResolution = 0;
+    private reportedResolution = '';
     private positionsVersion = new Map<Splat, number>();
     private failed = false;
 
@@ -1217,21 +1253,46 @@ class Relighter {
                 this.gridDirty = true;
             }
 
+            // The object's relight node, if it has one. Without one, lights
+            // only add to its captured light: no shadows, no occlusion and no
+            // de-light, since those are what the node asks for.
+            const settings = splat.relight ? normalizeRelightSettings(splat.relight) : null;
+            const seenSettings = settings ? [
+                1, settings.capturedLight, settings.resolution, settings.occlusionRange,
+                settings.occlusionStrength, settings.delight, settings.delightFloor, settings.delightSeesDeleted ? 1 : 0
+            ] : [0];
+            const changed = (i: number) => entry.seenSettings[i] !== seenSettings[i];
+            if (changed(0)) {
+                // relit or not decides whether the grid is needed at all
+                this.gridDirty = true;
+                this.lightingDirty = true;
+            } else if (settings) {
+                if (changed(2)) this.gridDirty = true;
+                if (changed(3)) this.occlusionDirty = true;
+                if (changed(1) || changed(4)) this.lightingDirty = true;
+                if (changed(5) || changed(6)) {
+                    entry.delightDirty = true;
+                    this.lightingDirty = true;
+                }
+            }
+            entry.settings = settings;
+            entry.seenSettings = seenSettings;
+
             // De-light's grid sees the object as it was captured, so far less
             // makes it stale: the object's own transform - its captured light
             // moved with it - the resolution, and deletions only when it is
             // told to leave deleted gaussians out. Never the palette or hiding.
-            if (this.settings.delight > 0) {
+            if (settings && settings.delight > 0) {
                 entry.ensureDelight(device, this.kernels);
-                const deleted = this.settings.delightSeesDeleted ? -1 : splat.numDeleted;
-                if (!sameMatrix(matrix, entry.capturedMatrix) || entry.capturedDeleted !== deleted || entry.capturedResolution !== this.settings.resolution) {
+                const deleted = settings.delightSeesDeleted ? -1 : splat.numDeleted;
+                if (!sameMatrix(matrix, entry.capturedMatrix) || entry.capturedDeleted !== deleted || entry.capturedResolution !== settings.resolution) {
                     entry.capturedDirty = true;
                 }
                 if (entry.captured.outOfMemory) {
                     entry.captured.outOfMemory = false;
                     entry.capturedDirty = true;
                 }
-                if (entry.capturedRange !== this.settings.occlusionRange) {
+                if (entry.capturedRange !== settings.occlusionRange) {
                     entry.capturedSkyDirty = true;
                 }
             } else {
@@ -1254,9 +1315,8 @@ class Relighter {
         const ambient = packAmbient(lights, this.lightData);
         this.delightScale = delightScaleOf(matched.slice(0, matchedCount));
 
-        const { settings } = this;
         const seen = this.seenLights;
-        const head = [count, settings.capturedLight, settings.occlusionStrength, ambient ? 1 : 0, settings.delight > 0 ? 1 : 0];
+        const head = [count, ambient ? 1 : 0];
         let lightsChanged = false;
         for (let i = 0; i < SEEN_HEAD && !lightsChanged; ++i) {
             lightsChanged = seen[i] !== head[i];
@@ -1283,7 +1343,7 @@ class Relighter {
         matchedData.set(matchedRecords, 0);
         matchedData.set(matchedEmitters, matchedRecords.length);
         const seenDelight = this.seenDelight;
-        const delightHead = [matchedCount, settings.delight, settings.delightFloor];
+        const delightHead = [matchedCount];
         let delightChanged = false;
         for (let i = 0; i < DELIGHT_HEAD && !delightChanged; ++i) {
             delightChanged = seenDelight[i] !== delightHead[i];
@@ -1299,10 +1359,11 @@ class Relighter {
             });
         }
 
-        // occlusion exists only while something reads it
+        // occlusion exists only while something reads it: an ambient light,
+        // on an object with a relight node
         for (const splat of splats) {
             const entry = this.entries.get(splat);
-            if (ambient) {
+            if (ambient && entry.settings) {
                 if (entry.ensureOcclusion(device, this.kernels)) {
                     this.occlusionDirty = true;
                 }
@@ -1313,13 +1374,28 @@ class Relighter {
 
         const entries = splats.map(s => this.entries.get(s));
 
+        // The scene's grid is for shadows and occlusion, which only an object
+        // with a relight node gets - but every object casts them, so every
+        // one goes in. It is as fine as the finest any relight node asks for,
+        // and it is not kept while none asks for it.
+        const relit = entries.filter(entry => entry.settings);
+        const resolution = relit.reduce((r, entry) => Math.max(r, entry.settings.resolution), 0);
+        if (resolution !== this.gridResolution) {
+            this.gridResolution = resolution;
+            this.gridDirty = true;
+        }
+        const needGrid = relit.length > 0;
+        if (!needGrid && this.grid.capacity > 0) {
+            this.grid.release();
+        }
+
         // grids are rebuilt together, and no more often than the interval
         const stale = entries.filter(entry => entry.captured && entry.capturedDirty);
-        if (this.gridDirty || stale.length > 0) {
+        if ((needGrid && this.gridDirty) || stale.length > 0) {
             const now = performance.now();
             if (now - this.lastGridBuild >= GRID_MIN_INTERVAL_MS) {
-                if (this.gridDirty) {
-                    this.buildGrid(entries);
+                if (needGrid && this.gridDirty) {
+                    this.buildGrid(entries, resolution);
                     this.gridDirty = false;
                     this.occlusionDirty = true;
                 }
@@ -1333,8 +1409,9 @@ class Relighter {
             }
         }
 
-        if (ambient && this.occlusionDirty && !this.gridDirty) {
-            this.occlude(entries);
+        const occluded = relit.filter(entry => entry.occlusion);
+        if (occluded.length > 0 && this.occlusionDirty && !this.gridDirty) {
+            this.occlude(occluded);
             this.occlusionDirty = false;
             this.lightingDirty = true;
         }
@@ -1354,7 +1431,7 @@ class Relighter {
         }
 
         // lighting waits for everything it reads
-        const ready = !this.gridDirty && entries.every(entry => !entry.captured || !entry.capturedDirty);
+        const ready = (!needGrid || !this.gridDirty) && entries.every(entry => !entry.captured || !entry.capturedDirty);
         if (this.lightingDirty && ready) {
             this.light(entries, count, ambient);
             this.lightingDirty = false;
@@ -1365,29 +1442,30 @@ class Relighter {
             this.bindMaterial(splat, this.entries.get(splat));
         }
 
-        const used = this.usedResolution();
+        const used = splats.map(splat => this.usedResolution(splat)).join();
         if (used !== this.reportedResolution) {
             this.reportedResolution = used;
-            this.events.fire('relight.resolutionUsed', used);
+            this.events.fire('relight.resolutionUsed');
         }
     }
 
     /**
-     * The resolution the grids actually came to: the setting, unless the GPU
-     * could not hold a grid that fine - then the coarsest any grid in use
-     * had to settle for.
+     * The resolution an object's grids actually came to: what its relight
+     * node asks for, unless the GPU could not hold a grid that fine - the
+     * scene's, which serves every object, or the object's own for de-light.
+     * Null for an object with no relight node.
      */
-    usedResolution() {
-        let used = this.grid?.resolution || this.settings.resolution;
-        this.entries.forEach((entry) => {
-            if (entry.captured?.resolution) {
-                used = Math.min(used, entry.captured.resolution);
-            }
-        });
+    usedResolution(splat: Splat) {
+        const entry = this.entries.get(splat);
+        const settings = entry?.settings;
+        if (!settings) return null;
+        let used = settings.resolution;
+        if (this.grid?.resolution) used = Math.min(used, this.grid.resolution);
+        if (entry.captured?.resolution) used = Math.min(used, entry.captured.resolution);
         return used;
     }
 
-    private buildGrid(entries: SplatLighting[]) {
+    private buildGrid(entries: SplatLighting[], resolution: number) {
         const start = performance.now();
         const { device, grid } = this;
 
@@ -1395,7 +1473,7 @@ class Relighter {
         // no shadow
         const skip = STATE_LOCKED | STATE_DELETED;
         const box = robustBox(entries, skip, false) ?? { min: [-1, -1, -1], max: [1, 1, 1] };
-        grid.layout(box, this.settings.resolution);
+        grid.layout(box, resolution);
         grid.clear();
 
         for (const entry of entries) {
@@ -1439,11 +1517,12 @@ class Relighter {
         const start = performance.now();
         const { device } = this;
         const { splat, captured, capturedDeposit: deposit } = entry;
-        const skip = this.settings.delightSeesDeleted ? 0 : STATE_DELETED;
+        const { settings } = entry;
+        const skip = settings.delightSeesDeleted ? 0 : STATE_DELETED;
         const matrix = splat.entity.getWorldTransform().data;
 
         const box = robustBox([entry], skip, true) ?? { min: [-1, -1, -1], max: [1, 1, 1] };
-        captured.layout(box, this.settings.resolution);
+        captured.layout(box, settings.resolution);
         captured.clear();
 
         deposit.setParameter('gaussians', entry.gaussians);
@@ -1462,8 +1541,8 @@ class Relighter {
         captured.finish();
 
         entry.capturedMatrix.set(matrix);
-        entry.capturedDeleted = this.settings.delightSeesDeleted ? -1 : splat.numDeleted;
-        entry.capturedResolution = this.settings.resolution;
+        entry.capturedDeleted = settings.delightSeesDeleted ? -1 : splat.numDeleted;
+        entry.capturedResolution = settings.resolution;
 
         this.stats.capturedBuilds++;
         this.stats.lastCapturedMs = performance.now() - start;
@@ -1473,12 +1552,11 @@ class Relighter {
         const start = performance.now();
         const { device, grid } = this;
 
-        // the range is a share of the grid's longest side, so it means the
-        // same on a capture of any scale
-        const range = this.settings.occlusionRange * grid.longest;
-
         for (const entry of entries) {
             const { splat, occlusion } = entry;
+            // the range is a share of the grid's longest side, so it means
+            // the same on a capture of any scale
+            const range = entry.settings.occlusionRange * grid.longest;
             occlusion.setParameter('gaussians', entry.gaussians);
             occlusion.setParameter('density', grid.density);
             occlusion.setParameter('levels', grid.levelBuffer);
@@ -1509,7 +1587,7 @@ class Relighter {
     private occludeCaptured(entry: SplatLighting) {
         const { device } = this;
         const { splat, captured, capturedOcclusion: occlusion } = entry;
-        const range = this.settings.occlusionRange * captured.longest;
+        const range = entry.settings.occlusionRange * captured.longest;
 
         occlusion.setParameter('gaussians', entry.gaussians);
         occlusion.setParameter('density', captured.density);
@@ -1527,14 +1605,14 @@ class Relighter {
         dispatchFor(device, occlusion, entry.count);
         device.computeDispatch([occlusion], 'RelightCapturedOcclusion');
 
-        entry.capturedRange = this.settings.occlusionRange;
+        entry.capturedRange = entry.settings.occlusionRange;
         this.stats.capturedOcclusionPasses++;
     }
 
     /** What the capture's own light was, for lighting to divide by. */
     private delightPass(entry: SplatLighting, firstMatched: number, matchedCount: number) {
-        const { device, settings } = this;
-        const { splat, captured, delighting } = entry;
+        const { device } = this;
+        const { splat, captured, delighting, settings } = entry;
 
         delighting.setParameter('gaussians', entry.gaussians);
         delighting.setParameter('density', captured.density);
@@ -1561,12 +1639,13 @@ class Relighter {
 
     private light(entries: SplatLighting[], lightCount: number, ambient: boolean) {
         const start = performance.now();
-        const { device, grid, kernels, settings } = this;
+        const { device, grid, kernels } = this;
 
         for (const entry of entries) {
-            const { splat, lighting } = entry;
+            const { splat, lighting, settings } = entry;
             lighting.setParameter('gaussians', entry.gaussians);
-            lighting.setParameter('density', grid.density);
+            // an object with no relight node reads no grid, and there may be none
+            lighting.setParameter('density', grid.density ?? kernels.emptyGrid);
             lighting.setParameter('levels', grid.levelBuffer);
             lighting.setParameter('lights', this.lightBuffer);
             lighting.setParameter('splatState', splat.stateTexture);
@@ -1582,34 +1661,16 @@ class Relighter {
             lighting.setParameter('delightPlus', entry.delightPlus ?? kernels.noOcclusion);
             lighting.setParameter('delightMinus', entry.delightMinus ?? kernels.noOcclusion);
             lighting.setParameter('counts', [entry.count, entry.width, lightCount, 0]);
-            lighting.setParameter('params', [settings.capturedLight, WRAP, RAY_OFFSET_CELLS, 0]);
-            lighting.setParameter('ambient', [ambient && entry.occlusion ? 1 : 0, settings.occlusionStrength, entry.delightPlus ? 1 : 0, 0]);
+            // without a relight node: all of the captured light, and the
+            // lights added to it unshadowed
+            lighting.setParameter('params', settings ? [settings.capturedLight, WRAP, RAY_OFFSET_CELLS, 0] : [1, WRAP, RAY_OFFSET_CELLS, 1]);
+            lighting.setParameter('ambient', [ambient ? 1 : 0, settings?.occlusionStrength ?? 0, entry.delightPlus ? 1 : 0, entry.occlusion ? 1 : 0]);
             dispatchFor(device, lighting, entry.count);
             device.computeDispatch([lighting], 'RelightLighting');
         }
 
         this.stats.lightingPasses++;
         this.stats.lastLightingMs = performance.now() - start;
-    }
-
-    setSettings(partial: Partial<RelightSettings>) {
-        const next = { ...this.settings, ...partial };
-        next.capturedLight = Math.min(4, Math.max(0, Number(next.capturedLight) || 0));
-        next.resolution = Math.round(Math.min(MAX_RESOLUTION, Math.max(MIN_RESOLUTION, Number(next.resolution) || 128)));
-        next.occlusionRange = Math.min(1, Math.max(0.01, Number(next.occlusionRange) || 0.1));
-        next.occlusionStrength = Math.min(1, Math.max(0, Number.isFinite(Number(next.occlusionStrength)) ? Number(next.occlusionStrength) : 1));
-        next.delight = Math.min(1, Math.max(0, Number.isFinite(Number(next.delight)) ? Number(next.delight) : 0.5));
-        next.delightFloor = Math.min(1, Math.max(0.02, Number(next.delightFloor) || 0.2));
-        next.delightSeesDeleted = next.delightSeesDeleted !== false;
-        if (next.resolution !== this.settings.resolution) {
-            this.gridDirty = true;
-        }
-        if (next.occlusionRange !== this.settings.occlusionRange) {
-            this.occlusionDirty = true;
-        }
-        this.settings = next;
-        this.lightingDirty = true;
-        this.events.fire('relight.settingsChanged', this.settings);
     }
 
     /** grid and per-object state, for tests and debugging */
@@ -1647,6 +1708,7 @@ class Relighter {
                     resolution: e.captured.resolution,
                     levels: e.captured.levels.length
                 } : null,
+                settings: e.settings ? { ...e.settings } : null,
                 width: e.width,
                 height: e.height,
                 count: e.count
@@ -1660,17 +1722,10 @@ const registerRelighting = (events: Events, scene: Scene) => {
     const relighter = new Relighter(scene);
 
     events.function('relight.supported', () => relighter.supported);
-    events.function('relight.settings', () => ({ ...relighter.settings }));
     events.function('relight.debug', () => relighter.debugState());
-    events.function('relight.resolutionUsed', () => relighter.usedResolution());
-    events.on('relight.setSettings', (partial: Partial<RelightSettings>) => relighter.setSettings(partial));
-
-    events.function('docSerialize.lighting', () => ({ ...relighter.settings }));
-    events.on('docDeserialize.lighting', (doc: Partial<RelightSettings> | undefined) => {
-        relighter.setSettings({ ...defaultRelightSettings(), ...(doc ?? {}) });
-    });
+    events.function('relight.resolutionUsed', (splat: Splat) => relighter.usedResolution(splat));
 
     return relighter;
 };
 
-export { registerRelighting, Relighter, defaultRelightSettings, type RelightSettings };
+export { registerRelighting, Relighter, defaultRelightSettings, normalizeRelightSettings, type RelightSettings };

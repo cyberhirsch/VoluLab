@@ -9,6 +9,57 @@ months finds out why before they change it.
 
 ---
 
+## Relighting: a relight node per object
+
+The scene lighting settings - captured light, grid resolution, occlusion
+range and strength, de-light, its floor, and whether deleted gaussians count
+- moved off the light's panel onto a node of their own. The relight node
+sits on an object's lane, and each object has at most one.
+
+- **Adding a light adds relight nodes.** Every object without one gets a
+  relight node with the defaults, just ahead of the light in history. Asking
+  for another opens the one there is.
+- **Without one, a light only adds.** An object whose relight node is
+  deleted or bypassed is still lit: its captured light is kept whole and the
+  lights are added to it, with no shadows, no occlusion and no de-light.
+  Those three need the grid, and the grid is the relight node's.
+- **Per object.** Each object's pipeline runs with its own node's settings.
+  The one scene grid that everything's shadows are traced through is built
+  only while some object has a relight node. It is as fine as the finest any
+  node asks for, and its memory is given back when none asks. Every object
+  still goes into it, so an object with no relight node still casts
+  shadows on those that have one.
+- **The panel** is the old scene section, with the note about a grid the GPU
+  could not hold. It edits the node's settings in place, like the light's
+  panel, and the relighter sees the change on its next frame.
+- **Projects** save each object's relight settings by the object's place in
+  the list, and reopen them on the same objects. A project from before this
+  had one lighting for the whole scene, and its lights relit every object,
+  so each object comes back with a relight node holding that lighting.
+
+Checked headless: with the node's settings the same as the old global ones,
+every relighting texture is bit for bit what the build before made, at 128
+and 256. Bypassed, the floor under a sphere is lit evenly at its captured
+light plus the light. Typing a value, saving and reopening, and opening a
+project from before relight nodes all work.
+
+**The trap: adds are queued.** Eight lights added in one go each found no
+relight node yet - the first one's add had not landed - and each queued its
+own, the last applied winning. The nodes on their way in are counted now.
+
+**Fixed on the way: typing into the light and camera panels.** Each
+keystroke's edit rebuilt the node pane, which took the panel out from under
+the field and wrote the setting back over what was being typed - "1.5" came
+out as 1, and "0." was read back as "0". The pane now leaves a panel that
+edits its node in place alone while it shows the same node, and anything else
+that rebuilds while a field is being typed in puts back its focus and text.
+
+**Fixed on the way: a camera node's port offered object nodes.** Dragging out
+of it offered select, colour, crop and the rest, for a lane that holds a
+camera. Only an object's lane offers them now.
+
+---
+
 ## Number fields: drag, wheel, right and middle click
 
 Every number field in the app now behaves the same way: the light, camera

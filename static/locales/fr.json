@@ -367,6 +367,8 @@
     "light.emitters-failed": "Rien n'est sélectionné",
     "light.emitters-hint": "Sélectionnez les gaussiennes qui brillent - une lampe, une fenêtre - puis réessayez.",
     "light.resolution-used": "{{used}} utilisé : le GPU ne peut pas contenir de grille plus fine pour cette scène.",
+    "relight.group": "Rééclairer",
+    "relight.note": "Ombres, occlusion et retrait de l'éclairage pour cet objet. Sans ce nœud, les lumières s'ajoutent seulement à sa lumière capturée.",
     "training.dataset": "Jeu de données",
     "training.pick-folder": "Choisir un dossier…",
     "training.pick-files": "Choisir des fichiers…",

@@ -79,6 +79,7 @@ const OP_LABELS: Record<string, string> = {
     camera: 'camera',
     light: 'light',
     lightPose: 'aim light',
+    relight: 'relight',
     train: 'train',
     crop: 'crop',
     cleanup: 'cleanup',
@@ -905,8 +906,9 @@ class GraphPanel extends Container {
                     return;
                 }
 
-                // a light's lane holds a light, not an object to edit
-                const splat = node.splat instanceof SceneLight ? null : node.splat;
+                // only an object's lane takes these - a light's or a camera's
+                // lane holds that light or camera, not an object to edit
+                const splat = node.splat instanceof Splat ? node.splat : null;
                 const items: MenuEntry[] = splat ? [
                     {
                         label: 'select',
@@ -931,6 +933,10 @@ class GraphPanel extends Container {
                     {
                         label: 'sh bands',
                         action: () => this.events.fire('graph.addShBandsNode', splat)
+                    },
+                    {
+                        label: 'relight',
+                        action: () => this.events.fire('graph.addRelightNode', splat)
                     },
                     {
                         label: 'voxelise',
@@ -1169,6 +1175,14 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addShBandsNode')
+            },
+            {
+                // shadows, occlusion and de-light for this object; one per
+                // object, so asking again opens the one it has
+                label: 'add relight node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addRelightNode')
             },
             {
                 label: 'add output node',

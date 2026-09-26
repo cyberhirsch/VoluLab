@@ -2,7 +2,7 @@ import { Container } from '@playcanvas/pcui';
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { fieldDefault } from './value-fields';
-import { AddVoxelsOp, CameraOp, LightOp, CleanupOp, CropOp, DatasetOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { AddVoxelsOp, CameraOp, LightOp, RelightOp, CleanupOp, CropOp, DatasetOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -43,6 +43,9 @@ class NodePanel extends Container {
     private empty: HTMLElement;
 
     private selected: number | null = null;
+
+    /** the node a face that edits in place is showing, while it shows it */
+    private shown: { op: EditOp, panel: HTMLElement } | null = null;
 
     /** set when the graph has an import node open - its settings are the object */
     private importSplat: Splat | null = null;
@@ -103,6 +106,40 @@ class NodePanel extends Container {
     }
 
     private rebuild() {
+        // The light, camera and relight faces edit their node's settings in
+        // place and announce each edit, one keystroke at a time, and it comes
+        // back here. Rebuilding would take the face out from under the field
+        // being typed in, and binding it again would write the setting back
+        // over what is being typed - "0." read back as "0". The same node in
+        // the same face needs nothing done.
+        const current = this.currentOp();
+        const same = !this.importSplat && current && this.shown &&
+            principalOp(current.op) === this.shown.op && this.shown.panel.parentElement === this.body;
+        if (same) {
+            return;
+        }
+
+        // Anything else that rebuilds while a field is being typed in keeps
+        // the field's focus and what was typed.
+        const active = document.activeElement;
+        const typing = active instanceof HTMLInputElement && [...this.mounts.values()].some(el => el.contains(active)) ? active : null;
+        const typed = typing?.value;
+        try {
+            this.build();
+        } finally {
+            if (typing?.isConnected) {
+                if (typing.value !== typed) typing.value = typed;
+                typing.focus({ preventScroll: true });
+            }
+        }
+
+        const op = current ? principalOp(current.op) : null;
+        const panel = [...this.mounts.values()].find(el => el.parentElement === this.body);
+        const inPlace = op instanceof LightOp || op instanceof CameraOp || op instanceof RelightOp;
+        this.shown = panel && inPlace ? { op, panel } : null;
+    }
+
+    private build() {
         // take mounted panels out before clearing, or they are destroyed with
         // the chrome around them
         this.mounts.forEach(el => el.remove());
@@ -218,6 +255,16 @@ class NodePanel extends Container {
 
         if (op instanceof CameraOp) {
             const panel = this.mounts.get('camera');
+            if (panel) {
+                this.empty.hidden = true;
+                (panel as any).bindNode?.(op, index);
+                this.body.appendChild(panel);
+                return;
+            }
+        }
+
+        if (op instanceof RelightOp) {
+            const panel = this.mounts.get('relight');
             if (panel) {
                 this.empty.hidden = true;
                 (panel as any).bindNode?.(op, index);

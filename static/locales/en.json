@@ -367,6 +367,8 @@
     "light.emitters-failed": "Nothing is selected",
     "light.emitters-hint": "Select the gaussians that glow - a lamp, a window - then try again.",
     "light.resolution-used": "Using {{used}}: the GPU can't hold a finer grid for this scene.",
+    "relight.group": "Relight",
+    "relight.note": "Shadows, occlusion and de-light for this object. Without this node, lights only add to its captured light.",
     "training.dataset": "Dataset",
     "training.pick-folder": "Pick Folder…",
     "training.pick-files": "Pick Files…",

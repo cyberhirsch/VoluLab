@@ -367,6 +367,8 @@
     "light.emitters-failed": "No hay nada seleccionado",
     "light.emitters-hint": "Selecciona las gaussianas que brillan - una lámpara, una ventana - y vuelve a intentarlo.",
     "light.resolution-used": "Se usa {{used}}: la GPU no puede alojar una cuadrícula más fina para esta escena.",
+    "relight.group": "Reiluminar",
+    "relight.note": "Sombras, oclusión y quitar iluminación para este objeto. Sin este nodo, las luces solo se suman a su luz capturada.",
     "training.dataset": "Conjunto de datos",
     "training.pick-folder": "Elegir carpeta…",
     "training.pick-files": "Elegir archivos…",

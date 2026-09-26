@@ -19,6 +19,7 @@ import { OutlinerPanel } from './outliner-panel';
 import { Popup, ShowOptions } from './popup';
 import { Progress } from './progress';
 import { PublishSettingsDialog } from './publish-settings-dialog';
+import { RelightFace } from './relight-face';
 import { RightToolbar } from './right-toolbar';
 import { SettingsPanel } from './settings-panel';
 import { Spinner } from './spinner';
@@ -145,6 +146,8 @@ class EditorUI {
         // a light node's light, and the scene lighting every light shares
         const lightFace = new LightFace(events);
         nodePanel.mount('light', lightFace.dom);
+        const relightFace = new RelightFace(events);
+        nodePanel.mount('relight', relightFace.dom);
         // the colour controls are a node's parameters now, so they live inside
         // the node pane rather than in a pane of their own
         nodePanel.mount('colour', colorPanel.dom);

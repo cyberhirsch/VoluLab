@@ -974,7 +974,9 @@ fn clippedFormFactor(cosTheta: f32, sinSigmaSq: f32) -> f32 {
 }
 
 // erode: see erodedTrace; 0 for a plain trace
-fn lightFrom(li: u32, surface: Surface, erode: f32) -> TwoSides {
+// shadowed: trace the light's visibility through the grid. An object
+// without a relight node has no shadows - only its light added.
+fn lightFrom(li: u32, surface: Surface, erode: f32, shadowed: bool) -> TwoSides {
     var sides = TwoSides(vec3f(0.0), vec3f(0.0));
 
     let la = lights[li * 4u];
@@ -1101,8 +1103,11 @@ fn lightFrom(li: u32, surface: Surface, erode: f32) -> TwoSides {
     let offset = uniforms.params.z * uniforms.gridOrigin.w;
     let facing = abs(dot(n, toLight));
     let rise = mix(1.0, facing, flatness);
-    let along = leaveBy(surface, toLight, offset * cellScale(surface) / max(rise, 0.25));
-    let visibility = erodedTrace(p + toLight * along, toLight, tanHalf, max(maxDist - along, 0.0), along * rise, rise, erode);
+    var visibility = 1.0;
+    if (shadowed) {
+        let along = leaveBy(surface, toLight, offset * cellScale(surface) / max(rise, 0.25));
+        visibility = erodedTrace(p + toLight * along, toLight, tanHalf, max(maxDist - along, 0.0), along * rise, rise, erode);
+    }
 
     sides.plus = lit.plus * visibility + own;
     sides.minus = lit.minus * visibility + own;
@@ -1172,8 +1177,8 @@ struct Uniforms {
     gridOrigin: vec4f,      // xyz: grid min corner, w: finest cell size
     gridDims: vec4u,        // xyz: finest dims, w: level count
     counts: vec4u,          // x: gaussians, y: texture width, z: lights that add
-    params: vec4f,          // x: captured light, y: wrap, z: ray offset in cells
-    ambient: vec4f          // x: 1 when there is ambient light, y: occlusion strength, z: 1 when de-light is on
+    params: vec4f,          // x: captured light, y: wrap, z: ray offset in cells, w: 1 for no shadows
+    ambient: vec4f          // x: 1 when there is ambient light, y: occlusion strength, z: 1 when de-light is on, w: 1 when occlusion is there
 };
 @group(0) @binding(13) var<uniform> uniforms: Uniforms;
 
@@ -1223,20 +1228,28 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, 
     var plus = base;
     var minus = base;
     for (var li = 0u; li < uniforms.counts.z; li++) {
-        let lit = lightFrom(li, surface, 0.0);
+        let lit = lightFrom(li, surface, 0.0, uniforms.params.w < 0.5);
         plus += lit.plus;
         minus += lit.minus;
     }
 
     // ambient: what each side's open sky delivers, dimmed by how much of it
     // is shut out. The strength fades occlusion's effect without touching
-    // the light itself.
+    // the light itself. Without occlusion - an object with no relight node -
+    // the whole sky reaches both sides; a round gaussian, having no sides,
+    // takes the sky's average.
     if (uniforms.ambient.x > 0.5) {
-        let strength = uniforms.ambient.y;
-        let occPlus = textureLoad(occlusionPlus, uv, 0);
-        let occMinus = textureLoad(occlusionMinus, uv, 0);
-        plus += ambientAt(occPlus.xyz) * mix(1.0, occPlus.w, strength);
-        minus += ambientAt(occMinus.xyz) * mix(1.0, occMinus.w, strength);
+        if (uniforms.ambient.w > 0.5) {
+            let strength = uniforms.ambient.y;
+            let occPlus = textureLoad(occlusionPlus, uv, 0);
+            let occMinus = textureLoad(occlusionMinus, uv, 0);
+            plus += ambientAt(occPlus.xyz) * mix(1.0, occPlus.w, strength);
+            minus += ambientAt(occMinus.xyz) * mix(1.0, occMinus.w, strength);
+        } else {
+            let average = max(lights[${AMBIENT_BASE}u].xyz * 0.282095, vec3f(0.0));
+            plus += mix(average, ambientAt(surface.n), surface.flatness);
+            minus += mix(average, ambientAt(-surface.n), surface.flatness);
+        }
     }
 
     // new light over the capture's own, rather than on top of its shadows
@@ -1323,7 +1336,7 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, 
     // for its neighbours'
     let erode = uniforms.scale.w * uniforms.gridOrigin.w * cellScale(surface);
     for (var k = 0u; k < uniforms.counts.w; k++) {
-        let lit = lightFrom(uniforms.counts.z + k, surface, erode);
+        let lit = lightFrom(uniforms.counts.z + k, surface, erode, true);
         bakedPlus += lit.plus;
         bakedMinus += lit.minus;
     }

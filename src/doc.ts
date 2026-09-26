@@ -129,7 +129,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             docSource.close();
             const document = JSON.parse(new TextDecoder().decode(docData));
 
-            // run through each splat and load it
+            // run through each splat and load it, keeping the order: nodes
+            // that hang off an object refer to it by its place in the list
+            const loaded: Splat[] = [];
             for (let i = 0; i < document.splats.length; ++i) {
                 const filename = `splat_${i}.ply`;
                 const splatSettings = document.splats[i];
@@ -141,6 +143,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 await scene.add(splat);
 
                 splat.docDeserialize(splatSettings);
+                loaded.push(splat);
             }
 
             // FIXME: trigger scene bound calc in a better way
@@ -165,16 +168,31 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 events.fire('camera.effects.refresh');
             }
 
-            // lights come back as light nodes, the same way; a project from
-            // before lights simply has none, and default scene lighting
+            // lights come back as light nodes, the same way - without the relight
+            // nodes a new light brings, since the project has its own
             if (Array.isArray(document.lights)) {
                 for (const stored of document.lights) {
-                    const op = events.invoke('light.addNode', stored?.settings?.kind);
+                    const op = events.invoke('light.addNode', stored?.settings?.kind, false);
                     op?.output?.docDeserialize(stored);
                 }
                 events.fire('edit.changed');
             }
-            events.fire('docDeserialize.lighting', document.lighting);
+
+            // relight nodes come back on the objects they were on. A project
+            // from before relight nodes had one lighting for the whole scene,
+            // and its lights relit every object - so each gets a node with it.
+            if (Array.isArray(document.relights)) {
+                for (const stored of document.relights) {
+                    const splat = loaded[stored?.splat];
+                    if (splat) events.invoke('relight.addNode', splat, stored.settings);
+                }
+                events.fire('edit.changed');
+            } else if (Array.isArray(document.lights) && document.lights.length > 0) {
+                for (const splat of loaded) {
+                    events.invoke('relight.addNode', splat, document.lighting ?? {});
+                }
+                events.fire('edit.changed');
+            }
 
             // the session around the scene. Preferences are applied inside a
             // suspend window already opened by the caller, so applying them
@@ -232,9 +250,13 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 // the camera objects: pose, lens, lock and their animation
                 cameras: cameras.map(c => c.docSerialize()),
 
-                // the lights, and the lighting they share
+                // the lights
                 lights: lights.map(l => l.docSerialize()),
-                lighting: events.invoke('docSerialize.lighting'),
+
+                // each object's relight node, by the object's place in the list
+                relights: splats
+                .map((s, i) => (s.relight ? { splat: i, settings: { ...s.relight } } : null))
+                .filter(Boolean),
 
                 // the session around the scene, so a project reopens in the
                 // workspace it was authored in

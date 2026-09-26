@@ -49,8 +49,10 @@ that lights the rest. An ambient light, flat or from an HDRI,
 fills in, darkening where things meet. De-light takes the capture's own
 light out first, so new light doesn't land on old shadows. It handles the
 sky on its own, and a sunny capture's sun once you place a light where it
-was. Controls set how much of the baked lighting to keep and how hard to
-de-light. Relighting needs a WebGPU browser.
+was. Each object's relight node, added with the first light, holds the
+controls: how much of the baked lighting to keep, how fine the shadows are,
+and how hard to de-light. Without it, lights only add to what was captured,
+with no shadows. Relighting needs a WebGPU browser.
 
 **Move the camera.** Store camera poses, lay them out on a timeline and let
 VoluLab interpolate between them along a spline. Orbit and fly navigation for

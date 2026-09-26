@@ -38,6 +38,9 @@ the bottom, with what was seen and a screenshot.
   3. a sunny scene with hard shadows: ____
   4. a scene with something that glows - a lamp, a window, a screen: ____
   5. optional, a sequence of a few frames: ____
+- [ ] **Where the settings are.** Captured light, grid resolution,
+  occlusion and de-light are on each object's relight node, which the first
+  light adds. Select it in the graph to change them.
 - [ ] **The timing helper.** Paste this into the console once per page load:
 
 ```js
@@ -94,18 +97,21 @@ Changes that each rerun one part:
 
 ```js
 const light = scene.events.invoke('light.list')[0];
+// the object's relight node holds the grid, occlusion and de-light settings;
+// the relighter sees a change to them on its next frame
+const relight = scene.events.invoke('edit.history').ops.find(op => op.name === 'relight').settings;
 // lighting alone: nudge a light
 await relightTime(() => { light.position.x += 1e-3; light.changed(); });
 // the scene's grid, and everything after it - with de-light at 0, so no
 // captured grid rebuilds alongside
-await relightTime(() => scene.events.fire('relight.setSettings', { resolution: 192 }));
-await relightTime(() => scene.events.fire('relight.setSettings', { resolution: 128 }));
+await relightTime(() => { relight.delight = 0; relight.resolution = 192; });
+await relightTime(() => { relight.resolution = 128; });
 // occlusion, with an ambient light on: nudge the range
-await relightTime(() => scene.events.fire('relight.setSettings', { occlusionRange: 0.11 }));
+await relightTime(() => { relight.occlusionRange = 0.11; });
 // every captured grid, its occlusion and de-light: turn de-light on from 0
-await relightTime(() => scene.events.fire('relight.setSettings', { delight: 0.5 }));
+await relightTime(() => { relight.delight = 0.5; });
 // de-light's own pass alone: nudge its strength
-await relightTime(() => scene.events.fire('relight.setSettings', { delight: 0.55 }));
+await relightTime(() => { relight.delight = 0.55; });
 ```
 
 ---

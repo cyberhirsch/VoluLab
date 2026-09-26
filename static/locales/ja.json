@@ -367,6 +367,8 @@
     "light.emitters-failed": "何も選択されていません",
     "light.emitters-hint": "光っているガウシアン(ランプや窓など)を選択してから、もう一度お試しください。",
     "light.resolution-used": "{{used}} を使用中：このシーンでは、GPU がこれより細かいグリッドを保持できません。",
+    "relight.group": "再照明",
+    "relight.note": "このオブジェクトの影、遮蔽、ライティング除去。このノードがない場合、ライトは撮影時の光に加算されるだけです。",
     "training.dataset": "データセット",
     "training.pick-folder": "フォルダを選択…",
     "training.pick-files": "ファイルを選択…",
