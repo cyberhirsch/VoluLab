@@ -911,9 +911,11 @@ const packLights = (lights: SceneLight[], out: Float32Array, first: number, curs
     for (const light of lights) {
         if (first + n >= MAX_LIGHTS) break;
         const s = light.settings;
-        // a volume light with no emitters, or none left room, lights nothing
-        const emitters = s.kind === 'volume' ? (s.emitters ?? []).slice(0, MAX_EMITTERS - cursor.next) : [];
-        if (s.kind === 'volume' && emitters.length === 0) continue;
+        // a volume or mesh light with no emitters, or none left room, lights
+        // nothing
+        const emitting = s.kind === 'volume' || s.kind === 'mesh';
+        const emitters = emitting ? (s.emitters ?? []).slice(0, MAX_EMITTERS - cursor.next) : [];
+        if (emitting && emitters.length === 0) continue;
 
         const o = (first + n) * LIGHT_FLOATS;
         const { forward, up, distance: dist } = light.frame();
@@ -968,13 +970,16 @@ const packLights = (lights: SceneLight[], out: Float32Array, first: number, curs
             out[o + 4] *= scale;
             out[o + 5] *= scale;
             out[o + 6] *= scale;
-        } else if (s.kind === 'volume') {
+        } else if (emitting) {
             out[o] = light.position.x;
             out[o + 1] = light.position.y;
             out[o + 2] = light.position.z;
             out[o + 3] = LIGHT_KIND.volume;
             out[o + 8] = cursor.next;
             out[o + 9] = emitters.length;
+            // gaussians near a volume light's emitters are the lamp itself and
+            // glow; a mesh light's are only near a shape, and are lit
+            out[o + 10] = s.kind === 'mesh' ? 0 : 1;
             // intensity is measured at the aim point
             out[o + 13] = dist * dist;
 

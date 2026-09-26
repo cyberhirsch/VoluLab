@@ -1,6 +1,7 @@
-import { Vec3 } from 'playcanvas';
+import { Mat4, Vec3 } from 'playcanvas';
 
 import type { VolumeEmitter } from '../edit-ops';
+import type { ScenePrimitive } from '../scene-primitive';
 import type { Splat } from '../splat';
 
 /**
@@ -46,9 +47,13 @@ const splatWithSelection = (selected: Splat | null, splats: Splat[]) => {
     return splats.find(splat => splat.visible && splat.numSelected > 0) ?? null;
 };
 
-const emittersFromSelection = (splat: Splat, maxEmitters = 16): VolumeSource | null => {
+/**
+ * A volume light's emitters from the gaussians `include` takes, tested in
+ * ascending order - a selection's, an object's, or those a select node
+ * picked. Null when it takes none.
+ */
+const emittersFromGaussians = (splat: Splat, include: (i: number) => boolean, maxEmitters = 16): VolumeSource | null => {
     const data = splat.splatData;
-    const state = data.getProp('state') as Uint8Array;
     const prop = (name: string) => data.getProp(name) as Float32Array;
     const x = prop('x');
     const y = prop('y');
@@ -65,8 +70,7 @@ const emittersFromSelection = (splat: Splat, maxEmitters = 16): VolumeSource | n
 
     const selected: number[] = [];
     for (let i = 0; i < data.numSplats; ++i) {
-        // selected, and neither hidden nor deleted
-        if (state[i] === 1) selected.push(i);
+        if (include(i)) selected.push(i);
     }
     if (selected.length === 0) return null;
 
@@ -228,4 +232,114 @@ const emittersFromSelection = (splat: Splat, maxEmitters = 16): VolumeSource | n
     };
 };
 
-export { emittersFromSelection, splatWithSelection, type VolumeSource };
+/** from the selected gaussians: selected, and neither hidden nor deleted */
+const emittersFromSelection = (splat: Splat, maxEmitters = 16): VolumeSource | null => {
+    const state = splat.splatData.getProp('state') as Uint8Array;
+    return emittersFromGaussians(splat, i => state[i] === 1, maxEmitters);
+};
+
+// points spread evenly over the unit sphere (radius 0.5), the Fibonacci way
+const fibonacci = (n: number) => {
+    const points: Vec3[] = [];
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < n; ++i) {
+        const y = 1 - 2 * (i + 0.5) / n;
+        const r = Math.sqrt(1 - y * y);
+        points.push(new Vec3(Math.cos(i * golden) * r * 0.5, y * 0.5, Math.sin(i * golden) * r * 0.5));
+    }
+    return points;
+};
+
+/**
+ * Where a primitive's surface is sampled, on the unit shape: each point with
+ * the direction its patch faces and the patch's area there. Fixed per kind,
+ * so a mesh light that follows its primitive keeps its emitters in step.
+ */
+type SurfaceSample = { point: Vec3, normal: Vec3, area: number };
+
+const SURFACE_SAMPLES = new Map<string, SurfaceSample[]>();
+
+const surfaceSamples = (kind: ScenePrimitive['kind']) => {
+    if (SURFACE_SAMPLES.has(kind)) return SURFACE_SAMPLES.get(kind);
+    const samples: SurfaceSample[] = [];
+    if (kind === 'sphere') {
+        const n = 24;
+        // the unit sphere's area is pi, shared evenly
+        fibonacci(n).forEach(p => samples.push({ point: p, normal: p.clone().normalize(), area: Math.PI / n }));
+    } else if (kind === 'cylinder') {
+        // two rings of eight round the side, four on each cap
+        const side = Math.PI;
+        const cap = Math.PI * 0.25;
+        for (const y of [-0.25, 0.25]) {
+            for (let k = 0; k < 8; ++k) {
+                const a = (k + (y > 0 ? 0.5 : 0)) / 8 * Math.PI * 2;
+                const normal = new Vec3(Math.cos(a), 0, Math.sin(a));
+                samples.push({ point: normal.clone().mulScalar(0.5).add(new Vec3(0, y, 0)), normal, area: side / 16 });
+            }
+        }
+        for (const y of [-0.5, 0.5]) {
+            for (let k = 0; k < 4; ++k) {
+                const a = (k + 0.5) / 4 * Math.PI * 2;
+                samples.push({ point: new Vec3(Math.cos(a) * 0.3, y, Math.sin(a) * 0.3), normal: new Vec3(0, Math.sign(y), 0), area: cap / 4 });
+            }
+        }
+    } else {
+        // a box: each face as four quarters
+        const axes: [number, number, number][] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+        axes.forEach((axis, a) => {
+            const u = axes[(a + 1) % 3];
+            const v = axes[(a + 2) % 3];
+            for (const side of [-1, 1]) {
+                for (const [su, sv] of [[-0.25, -0.25], [-0.25, 0.25], [0.25, -0.25], [0.25, 0.25]]) {
+                    const point = new Vec3(
+                        axis[0] * side * 0.5 + u[0] * su + v[0] * sv,
+                        axis[1] * side * 0.5 + u[1] * su + v[1] * sv,
+                        axis[2] * side * 0.5 + u[2] * su + v[2] * sv
+                    );
+                    samples.push({ point, normal: new Vec3(axis[0] * side, axis[1] * side, axis[2] * side), area: 0.25 });
+                }
+            }
+        });
+    }
+    SURFACE_SAMPLES.set(kind, samples);
+    return samples;
+};
+
+const worldPoint = new Vec3();
+const scaled = new Vec3();
+
+/**
+ * A mesh light's emitters: the primitive's surface, sampled evenly, each
+ * sample weighted by the area of its patch as the primitive is sized - a
+ * box's long faces give more of the light than its ends. White: the
+ * light's own colour tints them. Radii are the patches', so neighbours
+ * blend into one glowing surface.
+ */
+const emittersFromPrimitive = (primitive: ScenePrimitive): VolumeSource => {
+    const transform = primitive.transform(new Mat4());
+    const { size } = primitive;
+    const centre = primitive.position.clone();
+    const samples = surfaceSamples(primitive.kind);
+
+    // a patch's area under the primitive's size: det(S) |S^-1 n| of the
+    // unit shape's, for a surface stretched by S along its axes
+    const det = size.x * size.y * size.z;
+    const areas = samples.map(({ normal, area }) => {
+        scaled.set(normal.x / size.x, normal.y / size.y, normal.z / size.z);
+        return area * det * scaled.length();
+    });
+    const total = areas.reduce((a, b) => a + b, 0) || 1;
+
+    let spread = 0;
+    const emitters: VolumeEmitter[] = samples.map(({ point }, k) => {
+        transform.transformPoint(point, worldPoint);
+        const offset: [number, number, number] = [worldPoint.x - centre.x, worldPoint.y - centre.y, worldPoint.z - centre.z];
+        const weight = areas[k] / total;
+        spread += weight * (offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2]);
+        return { offset, weight, color: [1, 1, 1], radius: Math.sqrt(areas[k] / Math.PI) };
+    });
+
+    return { centre, emitters, count: samples.length, spread: Math.sqrt(spread) };
+};
+
+export { emittersFromGaussians, emittersFromPrimitive, emittersFromSelection, splatWithSelection, type VolumeSource };

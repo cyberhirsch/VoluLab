@@ -287,6 +287,11 @@ class SelectOp extends StateOp {
     steps: SelectStep[];
     /** a box, sphere or cylinder wired into the node, taken ahead of the steps */
     mesh: SelectMesh | null = null;
+    /**
+     * What is selected once the node has run, for a light that glows with
+     * it: a new set each time it runs, so a light can tell it has changed.
+     */
+    result: IndexRanges | null = null;
 
     constructor(splat: Splat, steps: SelectStep[]) {
         // TOGGLE, always: the op states the result, not the gesture
@@ -324,6 +329,10 @@ class SelectOp extends StateOp {
                     }
                 }
             }
+
+            // what is selected afterwards: only a gaussian neither hidden
+            // nor deleted can be
+            this.result = IndexRanges.fromPredicate(numSplats, i => desired[i] === 1 && (state[i] & (State.locked | State.deleted)) === 0);
 
             return combineWithState(s, 'set', i => desired[i] === 1);
         };
@@ -1534,7 +1543,9 @@ class CameraPoseOp {
     }
 }
 
-type LightKind = 'point' | 'spot' | 'sun' | 'rect' | 'disk' | 'sphere' | 'volume' | 'ambient';
+// volume is shown as "gauss": light from gaussians. A mesh light is light
+// from a primitive's surface; both are emitters around the light.
+type LightKind = 'point' | 'spot' | 'sun' | 'rect' | 'disk' | 'sphere' | 'volume' | 'mesh' | 'ambient';
 
 /**
  * One glowing cluster of a volume light: where it sits, how much of the
@@ -1601,9 +1612,9 @@ type LightSettings = {
     size: number;
     /** rectangle only: height, as a share of the distance to the aim point */
     height: number;
-    /** volume only: the glowing gaussians the light was made from, clustered */
+    /** volume and mesh: the glowing gaussians or the primitive's surface the light comes from */
     emitters: VolumeEmitter[];
-    /** volume only: the object they came from, for the node to show */
+    /** volume and mesh: what they came from, for the node to show */
     emitterSource: string;
 };
 
@@ -1631,6 +1642,18 @@ const defaultLightSettings = (): LightSettings => ({
  * without the relighter having to read history. The relighter lights with
  * whatever lights are in the scene.
  */
+/**
+ * What a light's source input takes in: a primitive, whose surface it then
+ * shines from, or gaussians - an object's, or those a select node picks -
+ * which it then glows with, following them as they change. `seen` is what
+ * the emitters were last taken from, so the editor knows when to take them
+ * again.
+ */
+type LightSource = {
+    source: ScenePrimitive | Splat | SelectOp;
+    seen: unknown[] | null;
+};
+
 class LightOp {
     name = 'light';
 
@@ -1641,6 +1664,13 @@ class LightOp {
     scene: Scene;
     settings: LightSettings;
     bypassed?: boolean;
+    /** wired into its source input, if anything is */
+    source: LightSource | null = null;
+
+    /** where a mesh or gauss light comes from */
+    get ports(): PortSpec[] {
+        return [{ name: 'source', label: 'source', accepts: ['primitive', 'selection', 'object'], source: this.source?.source ?? null }];
+    }
 
     constructor(scene: Scene, output: SceneLight, settings: LightSettings) {
         this.scene = scene;
@@ -1896,6 +1926,7 @@ export {
     type CameraSettings,
     defaultCameraSettings,
     LightOp,
+    type LightSource,
     RelightOp,
     LightPoseOp,
     PrimitiveOp,

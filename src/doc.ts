@@ -1,5 +1,6 @@
 import { ZipFileSystem, ZipReadFileSystem } from '@playcanvas/splat-transform';
 
+import { EditOp, LightOp, PrimitiveOp } from './edit-ops';
 import { Events } from './events';
 import { BrowserFileSystem, BlobReadSource } from './io';
 import { recentFiles } from './recent-files';
@@ -169,23 +170,40 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 events.fire('camera.effects.refresh');
             }
 
-            // primitives come back as primitive nodes, the same way
+            // primitives come back as primitive nodes, the same way - quietly,
+            // taking neither the selection nor the graph's open node
+            const primitiveOps: PrimitiveOp[] = [];
             if (Array.isArray(document.primitives)) {
                 for (const stored of document.primitives) {
-                    const op = events.invoke('primitive.addNode', stored?.kind);
+                    const op = events.invoke('primitive.addNode', stored?.kind, true);
                     op?.output?.docDeserialize(stored);
+                    primitiveOps.push(op);
                 }
                 events.fire('edit.changed');
             }
 
             // lights come back as light nodes, the same way - without the relight
             // nodes a new light brings, since the project has its own
+            const lightOps: LightOp[] = [];
             if (Array.isArray(document.lights)) {
                 for (const stored of document.lights) {
                     const op = events.invoke('light.addNode', stored?.settings?.kind, false);
                     op?.output?.docDeserialize(stored);
+                    lightOps.push(op);
                 }
                 events.fire('edit.changed');
+            }
+
+            // and what feeds a mesh or gauss light: a primitive or an object,
+            // by their places in the lists. A select node is not kept, so a
+            // light fed by one comes back with the emitters it last took.
+            if (Array.isArray(document.lightSources)) {
+                for (const stored of document.lightSources) {
+                    const op = lightOps[stored?.light];
+                    const source = typeof stored?.primitive === 'number' ? primitiveOps[stored.primitive]?.output :
+                        (typeof stored?.splat === 'number' ? loaded[stored.splat] : null);
+                    if (op && source) events.fire('light.rewire', op, source);
+                }
             }
 
             // relight nodes come back on the objects they were on. A project
@@ -246,6 +264,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             const cameras = (events.invoke('camera.list') ?? []) as SceneCamera[];
             const lights = (events.invoke('light.list') ?? []) as SceneLight[];
             const primitives = (events.invoke('primitive.list') ?? []) as ScenePrimitive[];
+            const history = (events.invoke('edit.history')?.ops ?? []) as EditOp[];
 
             const document = {
                 // .vlp starts its own numbering; an .ssproj is version 0 of a
@@ -266,6 +285,15 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
                 // the boxes, spheres and cylinders
                 primitives: primitives.map(p => p.docSerialize()),
+
+                // what feeds each mesh or gauss light, by places in the lists
+                lightSources: lights.map((light, i) => {
+                    const op = history.find(o => o instanceof LightOp && o.output === light) as LightOp;
+                    const source = op?.source?.source;
+                    if (source instanceof ScenePrimitive) return { light: i, primitive: primitives.indexOf(source) };
+                    if (source instanceof Splat) return { light: i, splat: splats.indexOf(source) };
+                    return null;
+                }).filter(Boolean),
 
                 // each object's relight node, by the object's place in the list
                 relights: splats

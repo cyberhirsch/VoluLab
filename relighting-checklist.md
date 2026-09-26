@@ -189,10 +189,14 @@ await relightTime(() => { relight.delight = 0.55; });
 
 ## 6. Volume lights (item 19) - capture 4
 
-- [ ] Select the glowing gaussians, then use "add light from selection" in the
-  graph's menu. Time it with
-  `console.time('v'); scene.events.invoke('light.addFromSelection'); console.timeEnd('v')`:
-  ____ ms.
+- [ ] Select the glowing gaussians with a select node, add a light node, and
+  drag the select node's output onto the light's source input. Time the
+  clustering with
+  `console.time('v'); scene.events.invoke('light.addFromSelection'); console.timeEnd('v')`
+  while they are selected: ____ ms.
+- [ ] Wire a box, sphere or cylinder into a light's source input instead: a
+  mesh light. Its surface lights what is round it, and dragging the
+  primitive drags the light. Smooth?
 - [ ] Check three things:
   - the surroundings light up from where the lamp is;
   - the lamp itself still looks as captured;

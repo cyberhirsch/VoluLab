@@ -232,6 +232,13 @@ class LightGizmos extends Element {
                 return;
             }
 
+            if (settings.kind === 'mesh') {
+                // the primitive it shines from is drawn already
+                star(size * 0.5);
+                aim();
+                return;
+            }
+
             if (settings.kind === 'volume') {
                 // each emitter where it glows, as big as its gaussians spread
                 for (const e of settings.emitters ?? []) {

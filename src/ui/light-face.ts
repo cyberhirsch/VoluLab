@@ -41,13 +41,16 @@ const LIGHT_FIELDS: NumberField[] = [
     { key: 'rotation', label: 'light.rotation', step: 5, kinds: ['ambient'] }
 ];
 
-const KINDS: LightKind[] = ['point', 'spot', 'sun', 'rect', 'disk', 'sphere', 'volume', 'ambient'];
+// A mesh light is what a primitive wired into the source input makes, so it
+// is offered only while it is what the light is; wired, the input decides
+// the kind (mesh, or gauss - the volume light's name - for gaussians).
+const KINDS: LightKind[] = ['point', 'spot', 'sun', 'rect', 'disk', 'sphere', 'volume', 'mesh', 'ambient'];
 
 const ROLES: LightRole[] = ['add', 'match'];
 
 // an ambient light always adds light: the capture's own sky is what
 // de-light's occlusion stands for
-const ROLE_KINDS: LightKind[] = ['point', 'spot', 'sun', 'rect', 'disk', 'sphere', 'volume'];
+const ROLE_KINDS: LightKind[] = ['point', 'spot', 'sun', 'rect', 'disk', 'sphere', 'volume', 'mesh'];
 
 // the picker speaks hex; the settings keep 0..1 per channel
 const toHex = (c: number[]) => `#${c.map(v => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join('')}`;
@@ -283,6 +286,29 @@ class LightFace extends Container {
             events.fire('edit.changed');
         });
         this.emittersControls.appendChild(useSelection);
+
+        // a wired light takes its emitters again as its source changes; only
+        // what that touches is read back, never a field being typed into
+        events.on('light.changed', (light: unknown) => {
+            if (this.op && light === this.op.output) this.readSource();
+        });
+    }
+
+    /** the kind and where the emitters came from, which a source input sets */
+    private readSource() {
+        const s = this.op?.settings;
+        if (!s) return;
+        const wired = !!this.op.source;
+        this.kindSelect.value = s.kind;
+        this.kindSelect.disabled = wired;
+        [...this.kindSelect.options].forEach((option) => {
+            option.hidden = option.value === 'mesh' && s.kind !== 'mesh';
+        });
+        const emitters = s.emitters?.length ?? 0;
+        this.emittersName.textContent = emitters > 0 ?
+            i18n.t('light.emitters-from', { count: emitters, source: s.emitterSource || '?' }) :
+            i18n.t('light.emitters-none');
+        this.showFields();
     }
 
     /** settings -> controls */
@@ -300,11 +326,7 @@ class LightFace extends Container {
         }
         this.environmentName.textContent = s.environment?.name ?? i18n.t('light.environment-none');
         this.environmentClear.disabled = !s.environment;
-        const emitters = s.emitters?.length ?? 0;
-        this.emittersName.textContent = emitters > 0 ?
-            i18n.t('light.emitters-from', { count: emitters, source: s.emitterSource || '?' }) :
-            i18n.t('light.emitters-none');
-        this.showFields();
+        this.readSource();
     }
 
     /** a spot's cone means nothing to a point light or a sun */
@@ -318,9 +340,10 @@ class LightFace extends Container {
         const ambient = kind === 'ambient' ? '' : 'none';
         this.environmentRow.style.display = ambient;
         this.environmentControls.style.display = ambient;
-        const volume = kind === 'volume' ? '' : 'none';
-        this.emittersRow.style.display = volume;
-        this.emittersControls.style.display = volume;
+        // taking the selection again is for a gauss light nothing is wired into
+        const emitting = kind === 'volume' || kind === 'mesh';
+        this.emittersRow.style.display = emitting ? '' : 'none';
+        this.emittersControls.style.display = kind === 'volume' && !this.op?.source ? '' : 'none';
         this.roleRow.style.display = ROLE_KINDS.includes(kind) ? '' : 'none';
     }
 

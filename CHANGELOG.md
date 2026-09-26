@@ -9,6 +9,53 @@ months finds out why before they change it.
 
 ---
 
+## Lights: a source input, mesh and gauss lights
+
+A light node takes in what it shines from, through a source input on its
+top edge, and "add light from selection" is gone from the graph's menu.
+
+- **A primitive makes a mesh light.** Its surface is sampled evenly - 24
+  points on a sphere, four on each face of a box, rings and caps on a
+  cylinder - each weighted by the area of its patch as the primitive is
+  sized, and the light shines from those. The light's colour tints them.
+  The primitive is followed live: drag it, and the light comes along.
+- **Gaussians make a gauss light**, the volume light under its new name:
+  an object's live gaussians, or those a select node picks. A select node
+  now keeps what it selected, a new set each time it runs, so the light
+  can tell the pick has changed. Gaussians are followed whenever history
+  settles - read once it is at rest, like the select nodes' shapes.
+- **The kind is the input's** while something is wired in: the light's face
+  shows mesh or gauss and does not let it be changed, and hides Use
+  Selection. Unwired, a light keeps the emitters it last took, and every
+  kind is back on offer.
+- **Aimed on wiring.** Wired by hand, a light aims below what feeds it,
+  four of its spreads away or half the scene, as a light made from a
+  selection always did - its intensity is measured there. After that, the
+  aim point moves with the light.
+- **Mesh lights do not glow.** The gaussians round a volume light's emitters
+  are the lamp itself and glow with its light; round a mesh light's they
+  are only near a shape. The light record carries which, and the lighting
+  kernel counts the glow only for gauss lights, which come out
+  bit-identical to before.
+- **Projects** keep what feeds each light - a primitive or an object, by
+  their places in the lists - and wire it again, keeping the aim it was
+  saved with. A select node is not kept, so a light fed by one comes back
+  with the emitters it last took.
+
+Checked headless: a light node's source input takes a primitive, a
+selection or an object; a sphere wired in makes a mesh light of 24
+emitters where the sphere is, aimed below it, that lights the floor under it
+far more than elsewhere; moved, the light follows and the floor it left
+goes back to what it was; a box gives 24 samples of its faces; the face
+fixes the kind; a select node picking the top of the ball makes a gauss
+light at their middle, and moving the node's box moves the light; an object
+makes a gauss light of 16 emitters; unwired, the light keeps them; the menu
+has no "add light from selection"; a saved project reopens the light wired
+to its primitive, aimed as saved. The area and volume light report is
+identical to the build before this change.
+
+---
+
 ## Select: a mesh input
 
 A select node takes a box, sphere or cylinder in, through a mesh input on

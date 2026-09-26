@@ -1063,7 +1063,7 @@ fn lightFrom(li: u32, surface: Surface, erode: f32, shadowed: bool) -> TwoSides 
                 // parts add up - where one cluster alone would leave a seam,
                 // and one reaching further would glow onto what is merely
                 // near the lamp
-                glow += 1.0 - smoothstep(1.2, 2.2, sqrt(de2) / max(e0.w, 1e-6));
+                glow += (1.0 - smoothstep(1.2, 2.2, sqrt(de2) / max(e0.w, 1e-6))) * lc.z;
             }
             tanHalf = lb.w / dist;
             maxDist = dist - ld.x;
@@ -1150,9 +1150,10 @@ fn lightFrom(li: u32, surface: Surface, erode: f32, shadowed: bool) -> TwoSides 
  *     0 xyz centre; 1 rgb scaled so the aim point gets the intensity,
  *     w a sphere's radius; 2 xyz the way the front faces, w half width
  *     or a disk's radius; 3 xyz a rectangle's up axis, w half height
- *   volume:
+ *   volume, mesh:
  *     0 xyz middle; 1 rgb colour times intensity, w how far the emitters
- *     spread; 2 x first emitter, y emitter count;
+ *     spread; 2 x first emitter, y emitter count, z 1 when the gaussians
+ *     round the emitters glow (a volume light's) and 0 when not (a mesh's);
  *     3 x how far the farthest reaches, y falloff reference distance squared
  * An emitter is two vec4s after the ambient coefficients: xyz position and
  * w radius, then rgb its colour times its share of the light.

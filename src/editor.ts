@@ -5,7 +5,7 @@ import { registerCameraEffects } from './camera-effects';
 import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, RelightOp, PrimitiveOp } from './edit-ops';
+import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -14,7 +14,7 @@ import { MappedReadFileSystem } from './io';
 import { registerLightViewEvents } from './light-view';
 import { registerPrimitiveViewEvents } from './primitive-view';
 import { defaultRelightSettings, normalizeRelightSettings, RelightSettings, registerRelighting } from './relight/relighter';
-import { emittersFromSelection, splatWithSelection } from './relight/volume-light';
+import { VolumeSource, emittersFromGaussians, emittersFromPrimitive, emittersFromSelection, splatWithSelection } from './relight/volume-light';
 import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
 import { SceneLight } from './scene-light';
@@ -1354,6 +1354,109 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     /**
+     * A light's source input. A primitive makes it a mesh light, shining
+     * from the primitive's surface; an object's gaussians, or those a select
+     * node picks, make it a gauss light, glowing with them. Either way it
+     * follows what feeds it: a primitive live as it moves, gaussians when
+     * history settles. What the emitters were taken from is kept as a list
+     * of what they depend on, and they are taken again when it changes.
+     * With its source gone - undone, bypassed, out of the scene - a light
+     * keeps what it had, as it does when unwired.
+     */
+    const lightSourceSeen = (source: LightSource['source']): unknown[] | null => {
+        if (source instanceof ScenePrimitive) {
+            return source.scene ? [source.kind, ...source.transform().data] : null;
+        }
+        if (source instanceof Splat) {
+            if (!source.scene) return null;
+            return [source.splatData.numSplats, source.numDeleted, source.numLocked, ...source.entity.getWorldTransform().data];
+        }
+        if (source instanceof SelectOp) {
+            const { ops, cursor } = history();
+            const index = ops.indexOf(source);
+            if (index < 0 || index >= cursor || (source as EditOp).bypassed || !source.result || !source.splat?.scene) return null;
+            return [source.result, source.splat.numDeleted, ...source.splat.entity.getWorldTransform().data];
+        }
+        return null;
+    };
+
+    // aim: newly wired by hand, so aimed afresh
+    const takeLightSource = (op: LightOp, aim = false) => {
+        const wired = op.source;
+        const seen = wired ? lightSourceSeen(wired.source) : null;
+        if (!seen || (wired.seen && seen.length === wired.seen.length && seen.every((v, i) => v === wired.seen[i]))) return false;
+        wired.seen = seen;
+
+        const { source } = wired;
+        let taken: VolumeSource | null;
+        let name: string;
+        const live = (splat: Splat) => {
+            const state = splat.splatData.getProp('state') as Uint8Array;
+            return (i: number) => (state[i] & (State.locked | State.deleted)) === 0;
+        };
+        if (source instanceof ScenePrimitive) {
+            taken = emittersFromPrimitive(source);
+            name = source.name;
+        } else if (source instanceof Splat) {
+            taken = emittersFromGaussians(source, live(source));
+            name = source.name;
+        } else {
+            // called for every index in turn, as a hit predicate must be
+            const picked = source.result.predicate();
+            const alive = live(source.splat);
+            taken = emittersFromGaussians(source.splat, i => picked(i) && alive(i));
+            name = `${source.splat.name} · select`;
+        }
+
+        const light = op.output;
+        const settings = op.settings;
+        settings.kind = source instanceof ScenePrimitive ? 'mesh' : 'volume';
+        settings.emitters = taken?.emitters ?? [];
+        settings.emitterSource = name;
+        if (taken && aim) {
+            // newly wired, it aims below what feeds it, as a light made from
+            // a selection always has: its intensity is measured there, so a
+            // few spreads away keeps it as bright as a lamp that size
+            const extent = scene.bound.halfExtents;
+            const drop = Math.max(4 * taken.spread, 0.5 * Math.max(extent.x, extent.y, extent.z), 1e-3);
+            light.setPose({ position: taken.centre, target: taken.centre.clone().add(new Vec3(0, -drop, 0)) });
+        } else if (taken) {
+            // the aim point comes along, so the light keeps its brightness
+            const shift = new Vec3().sub2(taken.centre, light.position);
+            light.setPose({ position: taken.centre, target: light.target.clone().add(shift) });
+        }
+        light.changed();
+        return true;
+    };
+
+    const lightOps = () => history().ops.filter(op => op instanceof LightOp && op.source) as LightOp[];
+
+    // wired again from a project, keeping the aim it was saved with
+    events.on('light.rewire', (op: LightOp, source: LightSource['source']) => {
+        if (!(op instanceof LightOp) || !source) return;
+        op.source = { source, seen: null };
+        takeLightSource(op);
+    });
+
+    // gaussians change with history, and are read once it is at rest
+    let lightCheck = false;
+    events.on('edit.changed', () => {
+        if (lightCheck || !lightOps().length) return;
+        lightCheck = true;
+        events.invoke('queue', () => {
+            lightCheck = false;
+            lightOps().forEach(op => takeLightSource(op));
+        });
+    });
+
+    // a primitive is followed as it moves
+    const followPrimitive = (primitive: ScenePrimitive) => {
+        lightOps().filter(op => op.source.source === primitive).forEach(op => takeLightSource(op));
+    };
+    events.on('primitive.moved', followPrimitive);
+    events.on('primitive.changed', followPrimitive);
+
+    /**
      * A dataset entering the graph as an import node of its own. Nothing
      * is wired automatically - the user drags its output into a train
      * node's input.
@@ -1383,6 +1486,13 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         if (op instanceof SelectOp && port === 'mesh' && source instanceof ScenePrimitive) {
             setMesh(op, { source, mode: op.mesh?.mode ?? 'set', used: shapeOf(source) });
         }
+        // a light's source: a primitive's surface, or gaussians
+        if (op instanceof LightOp && port === 'source' &&
+            (source instanceof ScenePrimitive || source instanceof Splat || source instanceof SelectOp)) {
+            op.source = { source, seen: null };
+            takeLightSource(op, true);
+            events.fire('edit.changed');
+        }
     });
 
     events.on('graph.disconnect', (op: EditOp, port: string) => {
@@ -1393,6 +1503,12 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         }
         if (op instanceof SelectOp && port === 'mesh' && op.mesh) {
             setMesh(op, null);
+        }
+        // unwired, a light keeps the emitters it last took
+        if (op instanceof LightOp && port === 'source' && op.source) {
+            op.source = null;
+            op.output.changed();
+            events.fire('edit.changed');
         }
     });
 
