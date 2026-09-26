@@ -6,6 +6,7 @@ import { recentFiles } from './recent-files';
 import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
 import { SceneLight } from './scene-light';
+import { ScenePrimitive } from './scene-primitive';
 import { Splat } from './splat';
 import { writeSplatFile } from './splat-serialize';
 import { Transform } from './transform';
@@ -168,6 +169,15 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 events.fire('camera.effects.refresh');
             }
 
+            // primitives come back as primitive nodes, the same way
+            if (Array.isArray(document.primitives)) {
+                for (const stored of document.primitives) {
+                    const op = events.invoke('primitive.addNode', stored?.kind);
+                    op?.output?.docDeserialize(stored);
+                }
+                events.fire('edit.changed');
+            }
+
             // lights come back as light nodes, the same way - without the relight
             // nodes a new light brings, since the project has its own
             if (Array.isArray(document.lights)) {
@@ -235,6 +245,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
             const cameras = (events.invoke('camera.list') ?? []) as SceneCamera[];
             const lights = (events.invoke('light.list') ?? []) as SceneLight[];
+            const primitives = (events.invoke('primitive.list') ?? []) as ScenePrimitive[];
 
             const document = {
                 // .vlp starts its own numbering; an .ssproj is version 0 of a
@@ -252,6 +263,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
                 // the lights
                 lights: lights.map(l => l.docSerialize()),
+
+                // the boxes, spheres and cylinders
+                primitives: primitives.map(p => p.docSerialize()),
 
                 // each object's relight node, by the object's place in the list
                 relights: splats

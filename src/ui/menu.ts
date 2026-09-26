@@ -258,6 +258,12 @@ class Menu extends Container {
             canRedo = value;
         });
 
+        // a box, sphere or cylinder placed as an object, for nodes to take in
+        const primitiveMenuPanel = new MenuPanel(['box', 'sphere', 'cylinder'].map(kind => ({
+            text: () => i18n.t(`primitive.${kind}`),
+            onSelect: () => events.invoke('primitive.addNode', kind)
+        })));
+
         const editMenuPanel = new MenuPanel([{
             text: () => i18n.t('menu.edit.undo'),
             icon: createSvg(editUndo),
@@ -282,6 +288,12 @@ class Menu extends Container {
             icon: createSvg(selectSeparate),
             isEnabled: () => events.invoke('selection.splats'),
             onSelect: () => events.fire('edit.separate')
+        }, {
+            // separator
+        }, {
+            text: () => i18n.t('menu.edit.add-primitive'),
+            icon: createSvg(sceneNew),
+            subMenu: primitiveMenuPanel
         }]);
 
         const selectionMenuPanel = new MenuPanel([{
@@ -338,6 +350,7 @@ class Menu extends Container {
         this.append(openRecentMenuPanel);
         this.append(exportMenuPanel);
         this.append(editMenuPanel);
+        this.append(primitiveMenuPanel);
         this.append(selectionMenuPanel);
         this.append(renderMenuPanel);
 

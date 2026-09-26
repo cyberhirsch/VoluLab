@@ -5,18 +5,20 @@ import { registerCameraEffects } from './camera-effects';
 import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, RelightOp } from './edit-ops';
+import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, RelightOp, PrimitiveOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
 import type { GridPlane } from './infinite-grid';
 import { MappedReadFileSystem } from './io';
 import { registerLightViewEvents } from './light-view';
+import { registerPrimitiveViewEvents } from './primitive-view';
 import { defaultRelightSettings, normalizeRelightSettings, RelightSettings, registerRelighting } from './relight/relighter';
 import { emittersFromSelection, splatWithSelection } from './relight/volume-light';
 import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
 import { SceneLight } from './scene-light';
+import { PrimitiveKind, ScenePrimitive } from './scene-primitive';
 import { RangeQuery, SelectQuery } from './select-query';
 import { Splat } from './splat';
 import { writeSplatFile } from './splat-serialize';
@@ -1161,6 +1163,37 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         return op;
     });
 
+    /**
+     * A primitive node: a box, sphere or cylinder where you are looking,
+     * a quarter as big as the view is deep or half as big as the scene,
+     * whichever is bigger, so it lands on what you were looking at and at
+     * a size you can see.
+     */
+    events.function('primitive.addNode', (kind: PrimitiveKind = 'box') => {
+        // named by kind, with the first number no other primitive has
+        const names = new Set((events.invoke('primitive.list') as ScenePrimitive[]).map(p => p.name));
+        let n = 1;
+        while (names.has(`${kind} ${n}`)) n++;
+        const primitive = new ScenePrimitive(`${kind} ${n}`, kind);
+
+        // the pose arrives as plain numbers, not vectors
+        const pose = events.invoke('camera.getPose');
+        const target = pose ? new Vec3(pose.target.x, pose.target.y, pose.target.z) : scene.bound.center.clone();
+        const eye = pose ? new Vec3(pose.position.x, pose.position.y, pose.position.z) : target.clone().add(new Vec3(0, 0, 1));
+        const size = Math.max(1e-2, eye.distance(target) * 0.25, scene.bound.halfExtents.length() * 0.5);
+
+        primitive.position.copy(target);
+        primitive.size.set(size, size, size);
+        primitive.madeSize.copy(primitive.size);
+
+        const op = new PrimitiveOp(scene, primitive);
+        const index = history().cursor;
+        events.fire('edit.add', op);
+        openInGraph(index);
+        events.fire('workspace.reveal', 'node');
+        return op;
+    });
+
     // the object whose selected gaussians a volume light would come from
     const selectionSource = () => splatWithSelection(
         events.invoke('selection') as Splat,
@@ -1259,6 +1292,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     registerCameraEffects(events, scene);
     registerCameraViewEvents(events, scene);
     registerLightViewEvents(events, scene);
+    registerPrimitiveViewEvents(events, scene);
     registerRelighting(events, scene);
 
     /**

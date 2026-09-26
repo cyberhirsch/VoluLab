@@ -11,6 +11,7 @@ import type { RelightSettings } from './relight/relighter';
 import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
 import { SceneLight } from './scene-light';
+import { PrimitivePose, ScenePrimitive } from './scene-primitive';
 import { SelectQuery, resolveHits } from './select-query';
 import { SphereShape } from './sphere-shape';
 import { Splat } from './splat';
@@ -1658,6 +1659,67 @@ class LightPoseOp {
     }
 }
 
+/**
+ * A primitive node: a box, sphere or cylinder in the scene, for other nodes
+ * to wire in. Like a light node it produces the object it stands for and
+ * takes nothing in.
+ */
+class PrimitiveOp {
+    name = 'primitive';
+
+    inputs: Splat[] = [];
+    /** the shape this node puts in the scene */
+    output: ScenePrimitive;
+    scene: Scene;
+    bypassed?: boolean;
+
+    constructor(scene: Scene, output: ScenePrimitive) {
+        this.scene = scene;
+        this.output = output;
+    }
+
+    /** what the graph writes under the node's title */
+    get sourceLabel() {
+        return this.output?.name ?? 'primitive';
+    }
+
+    async do() {
+        await this.scene.add(this.output);
+    }
+
+    undo() {
+        this.scene.remove(this.output);
+    }
+
+    destroy() {
+        this.output?.destroy();
+    }
+}
+
+/** Moving, turning or resizing a primitive, as one undoable step. */
+class PrimitivePoseOp {
+    name = 'primitivePose';
+
+    primitive: ScenePrimitive;
+    oldPose: PrimitivePose;
+    newPose: PrimitivePose;
+
+    constructor(primitive: ScenePrimitive, oldPose: PrimitivePose, newPose: PrimitivePose) {
+        const copy = (pose: PrimitivePose) => ({ position: pose.position.clone(), rotation: pose.rotation.clone(), size: pose.size.clone() });
+        this.primitive = primitive;
+        this.oldPose = copy(oldPose);
+        this.newPose = copy(newPose);
+    }
+
+    do() {
+        this.primitive.setPose(this.newPose);
+    }
+
+    undo() {
+        this.primitive.setPose(this.oldPose);
+    }
+}
+
 /** The record a train node keeps: what was trained, how, and what came out. */
 type TrainSettings = {
     datasetName: string;
@@ -1769,8 +1831,8 @@ const principalOp = (op: EditOp): EditOp => {
 
 export {
     EditOp,
-    PortSpec,
-    SourceKind,
+    type PortSpec,
+    type SourceKind,
     SelectMode,
     SelectStep,
     StateOp,
@@ -1805,6 +1867,8 @@ export {
     LightOp,
     RelightOp,
     LightPoseOp,
+    PrimitiveOp,
+    PrimitivePoseOp,
     type LightKind,
     type LightRole,
     type LightSettings,

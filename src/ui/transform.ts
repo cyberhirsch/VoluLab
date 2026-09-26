@@ -191,6 +191,16 @@ class Transform extends Container {
             }
         });
 
+        // a primitive moves, turns and scales like an object
+        events.on('primitive.selectionChanged', (primitive) => {
+            if (primitive) {
+                setEnabled(true, true);
+            } else {
+                setEnabled(!!events.invoke('selection') || !!events.invoke('camera.selected') || !!events.invoke('light.selected'),
+                    !events.invoke('camera.selected') && !events.invoke('light.selected'));
+            }
+        });
+
         events.on('pivot.placed', (pivot: Pivot) => {
             updateUI(pivot);
         });

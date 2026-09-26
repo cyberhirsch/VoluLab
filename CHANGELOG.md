@@ -9,6 +9,52 @@ months finds out why before they change it.
 
 ---
 
+## Primitives: box, sphere and cylinder
+
+Shapes placed in the scene for other nodes to take in: a select node's
+volume, a light's surface. Each is an object and a node at once, the way a
+light is - a primitive node in the graph with the shape in its lane, and the
+shape in the scene and the outliner.
+
+- **The shape** is the unit box, sphere or cylinder (side, diameter and
+  height 1, the cylinder standing along its own y) under a position, a
+  rotation and a size along each of its own axes. So a box can be any
+  cuboid, a sphere can be drawn out into an ellipsoid, and the same matrix
+  is what a volume test runs on: what is drawn is what is caught.
+- **Adding one**: "add box node", "add sphere node" and "add cylinder node"
+  in the graph's menu, or Edit > Add Primitive for the same thing from the
+  viewport's side. It lands on the view's focus, a quarter as big as the
+  view is deep, and is named by its kind with the first free number.
+- **Placing it**: it shares the one selection with objects, cameras and
+  lights. Selected - from the outliner, or by clicking its node - it takes
+  the move, rotate and scale gizmo and the transform pane. The pivot's
+  single scale carries the size along x, and scaling scales all three
+  together, so a box keeps its proportions. Each drag is one undo step,
+  which the graph does not draw, like aiming a light.
+- **Its node's face** sets the shape and the width, height and depth. A size
+  moves the shape live while it is typed or dragged, and becomes one undo
+  step when it settles.
+- **Drawn** as a wireframe, the selected one bright. It is drawn twice, as
+  the measure tool's lines are: in the world, where gaussians in front
+  cover it, and faintly after them, so a shape placed in among them still
+  shows.
+- **Projects** save each primitive's name, kind, pose, size and visibility,
+  and reopen them as primitive nodes.
+
+Picking a light or a primitive that was already picked let go of any
+camera first, which popped the gizmo's handler and left nothing to move.
+Both now let go of a camera only when one is held.
+
+Checked headless: a box node puts a selected box in the scene, listed and
+drawn as its twelve edges; the pivot moves, turns and scales it keeping its
+proportions, as one undo step that undo reverses with the pivot following;
+the face turns it into a sphere and types a width without losing the typing,
+one undo step when it settles; picking it again keeps the gizmo on it; the
+Edit menu adds a cylinder; the eye hides a wireframe; undoing a node takes
+its shape out; a saved project reopens with the same three shapes.
+
+---
+
 ## Graph: named inputs
 
 A node can take things in besides its chain, through named inputs on its

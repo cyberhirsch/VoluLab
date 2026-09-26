@@ -17,6 +17,7 @@ import { Menu } from './menu';
 import { NodePanel } from './node-panel';
 import { OutlinerPanel } from './outliner-panel';
 import { Popup, ShowOptions } from './popup';
+import { PrimitiveFace } from './primitive-face';
 import { Progress } from './progress';
 import { PublishSettingsDialog } from './publish-settings-dialog';
 import { RelightFace } from './relight-face';
@@ -148,6 +149,8 @@ class EditorUI {
         nodePanel.mount('light', lightFace.dom);
         const relightFace = new RelightFace(events);
         nodePanel.mount('relight', relightFace.dom);
+        const primitiveFace = new PrimitiveFace(events);
+        nodePanel.mount('primitive', primitiveFace.dom);
         // the colour controls are a node's parameters now, so they live inside
         // the node pane rather than in a pane of their own
         nodePanel.mount('colour', colorPanel.dom);

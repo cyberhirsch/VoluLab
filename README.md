@@ -29,6 +29,10 @@ eyedropper that picks by colour. Selections combine — add, subtract, intersect
 so you can carve out an awkward region in a few passes instead of one perfect
 one.
 
+**Place shapes.** Boxes, spheres and cylinders are objects in the scene and
+nodes in the graph, sized along each axis and moved with the same gizmo as
+everything else, for other nodes to take in.
+
 **Clean up.** Delete floaters and unwanted background outright, or lock parts of
 the scene so a later selection cannot touch them. Everything is undoable, and
 the splat data panel shows you the distributions behind the scene so you can

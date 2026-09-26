@@ -5,6 +5,7 @@ import { Element, ElementType } from '../element';
 import { Events } from '../events';
 import { SceneCamera } from '../scene-camera';
 import { SceneLight } from '../scene-light';
+import { ScenePrimitive } from '../scene-primitive';
 import { Splat } from '../splat';
 import deleteSvg from './svg/delete.svg';
 import hiddenSvg from './svg/hidden.svg';
@@ -287,7 +288,56 @@ class SplatList extends Container {
             }
         });
 
+        // Primitives as well: shapes placed in the scene. The eye hides the
+        // wireframe; what uses the shape still does.
+        const primitiveItems = new Map<ScenePrimitive, SplatItem>();
+
+        events.on('scene.elementAdded', (element: Element) => {
+            if (!(element instanceof ScenePrimitive)) return;
+            const primitive = element as ScenePrimitive;
+            const item = new SplatItem(primitive.name, edit);
+            item.class.add('primitive-item');
+            item.visible = primitive.visible;
+            this.append(item);
+            primitiveItems.set(primitive, item);
+
+            item.on('visible', () => {
+                primitive.visible = true;
+                primitive.changed();
+            });
+            item.on('invisible', () => {
+                primitive.visible = false;
+                primitive.changed();
+            });
+            item.on('rename', (value: string) => {
+                primitive.name = value;
+                primitive.changed();
+                events.fire('edit.changed');
+            });
+        });
+
+        events.on('primitive.selectionChanged', (primitive: ScenePrimitive | null) => {
+            primitiveItems.forEach((value, key) => {
+                value.selected = key === primitive;
+            });
+        });
+
+        events.on('primitive.changed', (primitive: ScenePrimitive) => {
+            const item = primitiveItems.get(primitive);
+            if (item) {
+                item.name = primitive.name;
+                item.visible = primitive.visible;
+            }
+        });
+
         events.on('scene.elementRemoved', (element: Element) => {
+            if (element instanceof ScenePrimitive) {
+                const item = primitiveItems.get(element as ScenePrimitive);
+                if (item) {
+                    this.remove(item);
+                    primitiveItems.delete(element as ScenePrimitive);
+                }
+            }
             if (element instanceof SceneLight) {
                 const item = lightItems.get(element as SceneLight);
                 if (item) {
@@ -364,6 +414,13 @@ class SplatList extends Container {
             for (const [key, value] of lightItems) {
                 if (item === value) {
                     events.fire('light.select', key);
+                    return;
+                }
+            }
+
+            for (const [key, value] of primitiveItems) {
+                if (item === value) {
+                    events.fire('primitive.select', key);
                     return;
                 }
             }

@@ -1,8 +1,9 @@
 import { Container } from '@playcanvas/pcui';
 
-import { AnimTrackEditOp, DatasetOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, PortSpec, SelectOp, SelectStep, ShapeTransformOp, SourceKind, principalOp } from '../edit-ops';
+import { AnimTrackEditOp, DatasetOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, PortSpec, PrimitivePoseOp, SelectOp, SelectStep, ShapeTransformOp, SourceKind, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SceneLight } from '../scene-light';
+import { ScenePrimitive } from '../scene-primitive';
 import { describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
 import { MenuEntry, contributeMenuItems, showContextMenu } from './context-menu';
@@ -89,6 +90,8 @@ const OP_LABELS: Record<string, string> = {
     light: 'light',
     lightPose: 'aim light',
     relight: 'relight',
+    primitive: 'primitive',
+    primitivePose: 'move primitive',
     train: 'train',
     crop: 'crop',
     cleanup: 'cleanup',
@@ -148,7 +151,8 @@ const isGestureOnly = (op: EditOp) => {
     return op instanceof AnimTrackEditOp ||
         op instanceof PlacePivotOp ||
         op instanceof ShapeTransformOp ||
-        op instanceof LightPoseOp;
+        op instanceof LightPoseOp ||
+        op instanceof PrimitivePoseOp;
 };
 
 // The object an op belongs to, or null for ops that act on the scene at large
@@ -763,6 +767,7 @@ class GraphPanel extends Container {
             if (node.key instanceof DatasetOp) offers.push({ kind: 'dataset', source: node.key });
             if (node.select) offers.push({ kind: 'selection', source: node.key });
             if (node.splat instanceof Splat) offers.push({ kind: 'object', source: node.splat });
+            if (node.splat instanceof ScenePrimitive) offers.push({ kind: 'primitive', source: node.splat });
             node.offers = offers;
         });
 
@@ -1124,9 +1129,11 @@ class GraphPanel extends Container {
                 // means it was a click after all, which picks out just this one.
                 if (!extend && this.selection.size > 1) this.setSelection([node.key]);
                 // a light node's lane is its light, which is selected as a
-                // light rather than as an object
+                // light rather than as an object; a primitive's likewise
                 if (node.splat instanceof SceneLight) {
                     this.events.fire('light.select', node.splat);
+                } else if (node.splat instanceof ScenePrimitive) {
+                    this.events.fire('primitive.select', node.splat);
                 } else if (node.splat) {
                     this.events.fire('selection', node.splat);
                 }
@@ -1242,6 +1249,11 @@ class GraphPanel extends Container {
                 label: 'add light node',
                 action: () => this.events.invoke('light.addNode')
             },
+            // a shape for other nodes to take in; it needs nothing selected
+            ...(['box', 'sphere', 'cylinder'] as const).map(kind => ({
+                label: `add ${kind} node`,
+                action: () => this.events.invoke('primitive.addNode', kind)
+            })),
             {
                 // select, then operate: whatever glows - a lamp in the
                 // capture - becomes the light it gives

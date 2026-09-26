@@ -6,10 +6,10 @@ import { SceneLight } from './scene-light';
 /**
  * Which light is selected, and what selecting one means.
  *
- * A light shares the one selection with objects and cameras: picking a
- * light lets go of whatever else was picked, and picking anything else lets
- * go of the light. That keeps the move/rotate gizmo unambiguous - it acts on
- * the one thing selected, through the handler that thing needs.
+ * A light shares the one selection with objects, cameras and primitives:
+ * picking a light lets go of whatever else was picked, and picking anything
+ * else lets go of the light. That keeps the move/rotate gizmo unambiguous -
+ * it acts on the one thing selected, through the handler that thing needs.
  */
 const registerLightViewEvents = (events: Events, scene: Scene) => {
     let selected: SceneLight | null = null;
@@ -30,7 +30,10 @@ const registerLightViewEvents = (events: Events, scene: Scene) => {
     events.on('light.select', (light: SceneLight | null) => {
         if (light) {
             events.fire('selection', null);
-            events.fire('camera.select', null);
+            // letting go of a camera pops the gizmo's handler, so only
+            // when one is held - picking this light again must not leave
+            // it without one
+            if (events.invoke('camera.selected')) events.fire('camera.select', null);
         }
         select(light);
     });
@@ -41,6 +44,10 @@ const registerLightViewEvents = (events: Events, scene: Scene) => {
 
     events.on('camera.selectionChanged', (camera: unknown) => {
         if (camera) select(null);
+    });
+
+    events.on('primitive.selectionChanged', (primitive: unknown) => {
+        if (primitive) select(null);
     });
 
     // a new light is the thing you are about to aim, the way a new import

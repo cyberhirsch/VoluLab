@@ -3,6 +3,7 @@ import { EntityTransformHandler } from './entity-transform-handler';
 import { Events } from './events';
 import { LightTransformHandler } from './light-transform-handler';
 import { registerPivotEvents } from './pivot';
+import { PrimitiveTransformHandler } from './primitive-transform-handler';
 import { Splat } from './splat';
 import { SplatsTransformHandler } from './splats-transform-handler';
 
@@ -39,6 +40,7 @@ const registerTransformHandlerEvents = (events: Events) => {
     const splatsTransformHandler = new SplatsTransformHandler(events);
     const cameraTransformHandler = new CameraTransformHandler(events);
     const lightTransformHandler = new LightTransformHandler(events);
+    const primitiveTransformHandler = new PrimitiveTransformHandler(events);
 
     const update = (splat: Splat) => {
         pop();
@@ -71,6 +73,16 @@ const registerTransformHandlerEvents = (events: Events) => {
             pop();
             push(lightTransformHandler);
         } else if (transformHandlers[transformHandlers.length - 1] === lightTransformHandler) {
+            pop();
+        }
+    });
+
+    // a primitive too, the same way
+    events.on('primitive.selectionChanged', (primitive: unknown) => {
+        if (primitive) {
+            pop();
+            push(primitiveTransformHandler);
+        } else if (transformHandlers[transformHandlers.length - 1] === primitiveTransformHandler) {
             pop();
         }
     });

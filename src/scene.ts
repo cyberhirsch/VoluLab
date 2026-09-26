@@ -24,6 +24,7 @@ import { InfiniteGrid as Grid } from './infinite-grid';
 import { LightGizmos } from './light-gizmos';
 import { Outline } from './outline';
 import { PCApp } from './pc-app';
+import { PrimitiveGizmos } from './primitive-gizmos';
 import { SceneCameraGizmos } from './scene-camera-gizmos';
 import { SceneConfig } from './scene-config';
 import { SceneState } from './scene-state';
@@ -100,6 +101,7 @@ class Scene {
     cameraPoseGizmos: CameraPoseGizmos;
     sceneCameraGizmos: SceneCameraGizmos;
     lightGizmos: LightGizmos;
+    primitiveGizmos: PrimitiveGizmos;
     splatOverlay: SplatOverlay;
     grid: Grid;
     outline: Outline;
@@ -245,6 +247,9 @@ class Scene {
 
         this.lightGizmos = new LightGizmos();
         this.add(this.lightGizmos);
+
+        this.primitiveGizmos = new PrimitiveGizmos();
+        this.add(this.primitiveGizmos);
 
         this.splatOverlay = new SplatOverlay();
         this.add(this.splatOverlay);
