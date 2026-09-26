@@ -115,6 +115,16 @@ const describeSteps = (steps: SelectStep[]) => {
     return `${steps.length} steps`;
 };
 
+// how a mesh input combines, in the fewest characters that still read
+const MESH_MODES: Record<string, string> = { set: 'in', add: '+', remove: '−', intersect: '∩' };
+
+// ...and with a primitive wired in, that first: it is taken ahead of the steps
+const describeSelect = (op: SelectOp) => {
+    const mesh = op.mesh ? `${MESH_MODES[op.mesh.mode]} ${op.mesh.source.name}` : '';
+    if (!op.steps.length) return mesh || 'empty';
+    return mesh ? `${mesh} · ${describeSteps(op.steps)}` : describeSteps(op.steps);
+};
+
 // Pointer capture throws on an id the element does not hold - a pointer that
 // was already released, or one the browser cancelled underneath us. Neither is
 // worth losing a drag over, so both directions are advisory.
@@ -694,14 +704,14 @@ class GraphPanel extends Container {
                 kind: select ? 'select' : opLabel(op),
                 // a pending producer (a train node before its first run) sits
                 // here too, and names its dataset rather than nothing
-                name: select ? describeSteps(steps) : ((op as any).sourceLabel ?? ''),
+                name: select ? describeSelect(select) : ((op as any).sourceLabel ?? ''),
                 applied: i < cursor,
                 splat,
                 select: !!select,
                 terminal: op.name === 'output',
                 bypassed: !!op.bypassed,
                 // frozen only when nothing in it can be re-run
-                frozen: steps.length ? steps.every(s => !isParametric(s.query)) : undefined,
+                frozen: steps.length && !select?.mesh ? steps.every(s => !isParametric(s.query)) : undefined,
                 ports: portsOf(op),
                 key: op
             });

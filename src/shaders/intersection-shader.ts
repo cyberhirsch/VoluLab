@@ -16,7 +16,7 @@ const fragmentShader = /* glsl */ `
 
     uniform uvec2 output_params;                    // output width, height
 
-    // 0: mask, 1: rect, 2: sphere, 3: box
+    // 0: mask, 1: rect, 2: sphere, 3: box, 4: cylinder
     uniform int mode;
 
     // mask params
@@ -26,8 +26,9 @@ const fragmentShader = /* glsl */ `
     // rect params
     uniform vec4 rect_params;                       // rect x, y, width, height
 
-    // sphere/box params: transforms world space into the shape's local space,
-    // where the shape is the unit sphere (diameter 1) or unit cube (side 1)
+    // sphere/box/cylinder params: transforms world space into the shape's
+    // local space, where the shape is the unit sphere (diameter 1), the unit
+    // cube (side 1) or the unit cylinder (diameter and height 1, along y)
     uniform mat4 shape_matrix_inv;
 
     void main(void) {
@@ -96,6 +97,11 @@ const fragmentShader = /* glsl */ `
                 // unit cube test in shape-local space
                 vec3 local = (shape_matrix_inv * vec4(world, 1.0)).xyz;
                 clr[i] = all(lessThanEqual(abs(local), vec3(0.5))) ? 1.0 : 0.0;
+            } else if (mode == 4) {
+                // select by cylinder: within half a unit of the y axis, and
+                // no further than half a unit along it
+                vec3 local = (shape_matrix_inv * vec4(world, 1.0)).xyz;
+                clr[i] = (abs(local.y) <= 0.5 && length(local.xz) < 0.5) ? 1.0 : 0.0;
             }
         }
 

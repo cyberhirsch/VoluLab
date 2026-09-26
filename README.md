@@ -31,7 +31,9 @@ one.
 
 **Place shapes.** Boxes, spheres and cylinders are objects in the scene and
 nodes in the graph, sized along each axis and moved with the same gizmo as
-everything else, for other nodes to take in.
+everything else, for other nodes to take in. Wired into a select node, a
+shape selects what is inside it, and selects again wherever it is moved -
+the sphere and box selection tools work this way.
 
 **Clean up.** Delete floaters and unwanted background outright, or lock parts of
 the scene so a later selection cannot touch them. Everything is undoable, and

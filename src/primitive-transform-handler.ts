@@ -68,6 +68,7 @@ class PrimitiveTransformHandler implements TransformHandler {
     }
 
     start() {
+        this.primitive.live = true;
         this.startPose = this.primitive.getPose();
         const { size } = this.primitive;
         this.proportions.set(1, size.y / size.x, size.z / size.x);
@@ -82,6 +83,7 @@ class PrimitiveTransformHandler implements TransformHandler {
     }
 
     end() {
+        this.primitive.live = false;
         const now = this.primitive.getPose();
         const was = this.startPose;
         const moved = !was.position.equals(now.position) || !was.rotation.equals(now.rotation) || !was.size.equals(now.size);

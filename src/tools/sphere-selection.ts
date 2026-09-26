@@ -1,12 +1,12 @@
 import { Button, Container, Element, Label, NumericInput, VectorInput } from '@playcanvas/pcui';
 import { Vec3 } from 'playcanvas';
 
+import { PrimitiveToolShape } from './primitive-tool-shape';
 import { ShapeGizmoMode, ShapeTransformGizmo } from './shape-transform-gizmo';
-import { ShapeTransformOp } from '../edit-ops';
 import { Events } from '../events';
 import { Scene } from '../scene';
+import { ScenePrimitive } from '../scene-primitive';
 import { ShortcutManager } from '../shortcut-manager';
-import { SphereShape } from '../sphere-shape';
 import { Splat } from '../splat';
 import { i18n } from '../ui/localization';
 import addSvg from '../ui/svg/select-add.svg';
@@ -21,6 +21,11 @@ const createSvg = (svgString: string) => {
     return new DOMParser().parseFromString(decodedStr, 'image/svg+xml').documentElement;
 };
 
+/**
+ * Select what is inside a sphere: a sphere primitive, wired into the select
+ * node as its mesh input, so moving the sphere later selects again. See
+ * PrimitiveToolShape.
+ */
 class SphereSelection {
     activate: () => void;
     deactivate: () => void;
@@ -29,7 +34,8 @@ class SphereSelection {
     active = false;
 
     constructor(events: Events, scene: Scene, canvasContainer: Container, tooltips: Tooltips) {
-        const sphere = new SphereShape();
+        const shape = new PrimitiveToolShape(events, scene, 'sphere');
+        const radiusOf = (p: ScenePrimitive | null) => (p ? p.size.x * 0.5 : 0.5);
 
         // ui
         const selectToolbar = new Container({
@@ -80,7 +86,7 @@ class SphereSelection {
 
         const radius = new NumericInput({
             precision: 2,
-            value: sphere.radius,
+            value: 0.5,
             min: 0.01
         });
         fieldDefault(radius, radius.value);
@@ -99,14 +105,15 @@ class SphereSelection {
 
         canvasContainer.append(selectToolbar);
 
-        // write the volume's transform into the ui without retriggering the
-        // inputs' change handlers
+        // write the sphere into the ui without retriggering the inputs'
+        // change handlers
         let uiUpdating = false;
         const updateUI = () => {
+            const p = shape.primitive;
+            if (!p) return;
             uiUpdating = true;
-            const p = sphere.pivot.getPosition();
-            position.value = [p.x, p.y, p.z];
-            radius.value = sphere.radius;
+            position.value = [p.position.x, p.position.y, p.position.z];
+            radius.value = radiusOf(p);
             uiUpdating = false;
         };
 
@@ -115,57 +122,16 @@ class SphereSelection {
             scaleButton.class[mode === 'scale' ? 'add' : 'remove']('active');
         };
 
-        // undo/redo support for volume transforms
-        const captureState = () => ({
-            position: sphere.pivot.getPosition().clone(),
-            radius: sphere.radius
-        });
-
-        type SphereState = ReturnType<typeof captureState>;
-
-        const statesEqual = (a: SphereState, b: SphereState) => {
-            return a.position.equals(b.position) && a.radius === b.radius;
-        };
-
-        const addOp = (oldState: SphereState, newState: SphereState) => {
-            if (!statesEqual(oldState, newState)) {
-                // the change is already applied, so suppress the op's do()
-                events.fire('edit.add', new ShapeTransformOp({ shape: sphere, oldState, newState }), true);
-            }
-        };
-
-        // record an undo op for the state change performed by fn
-        const recordOp = (fn: () => void) => {
-            const oldState = captureState();
-            fn();
-            addOp(oldState, captureState());
-        };
-
-        let dragState: SphereState | null = null;
-
         const gizmo = new ShapeTransformGizmo(events, scene, {
             rotate: false,
             uniformScale: true,
             lowerBoundScale: new Vec3(0.02, 0.02, 0.02),
-            onTransformStart: () => {
-                dragState = captureState();
-            },
-            onTransform: (mode) => {
-                if (mode === 'scale') {
-                    // the pivot's uniform scale is the sphere's diameter;
-                    // the radius setter refreshes the bound
-                    sphere.radius = sphere.pivot.getLocalScale().x * 0.5;
-                } else {
-                    sphere.moved();
-                }
+            onTransformStart: () => shape.startDrag(),
+            onTransform: () => {
+                shape.drag();
                 updateUI();
             },
-            onTransformEnd: () => {
-                if (dragState) {
-                    addOp(dragState, captureState());
-                    dragState = null;
-                }
-            },
+            onTransformEnd: () => shape.endDrag(),
             onModeChanged: syncModeUI
         });
         syncModeUI(gizmo.mode);
@@ -175,8 +141,9 @@ class SphereSelection {
             return true;
         };
 
+        // the sphere into the select node, combined by this mode
         const apply = (op: 'set' | 'add' | 'remove' | 'intersect') => {
-            events.fire('select.bySphere', op, sphere.pivot.getWorldTransform().clone());
+            if (shape.primitive) events.fire('select.byPrimitive', op, shape.primitive);
         };
 
         translateButton.dom.addEventListener('pointerdown', (e) => {
@@ -200,38 +167,43 @@ class SphereSelection {
             e.stopPropagation(); apply('intersect');
         });
         position.on('change', (v: number[]) => {
-            if (!uiUpdating) {
-                recordOp(() => {
-                    sphere.pivot.setPosition(v[0], v[1], v[2]);
-                    sphere.moved();
-                });
-                gizmo.attach(sphere.pivot);
+            if (!uiUpdating && shape.primitive) {
+                const pose = shape.primitive.getPose();
+                pose.position.set(v[0], v[1], v[2]);
+                shape.setPose(pose);
             }
         });
         radius.on('change', () => {
-            if (!uiUpdating) {
-                recordOp(() => {
-                    sphere.radius = radius.value;
-                });
+            if (!uiUpdating && shape.primitive) {
+                const pose = shape.primitive.getPose();
+                const d = radius.value * 2;
+                pose.size.set(d, d, d);
+                shape.setPose(pose);
             }
         });
 
         events.on('camera.focalPointPicked', (details: { splat: Splat, position: Vec3 }) => {
-            if (this.active) {
-                recordOp(() => {
-                    sphere.pivot.setPosition(details.position);
-                    sphere.moved();
-                });
-                gizmo.attach(sphere.pivot);
+            if (this.active && shape.primitive) {
+                const pose = shape.primitive.getPose();
+                pose.position.copy(details.position);
+                shape.setPose(pose);
+            }
+        });
+
+        // undo, redo and the primitive's own node move it too
+        events.on('primitive.moved', (primitive: ScenePrimitive) => {
+            if (this.active && primitive === shape.primitive && !shape.dragging) {
+                shape.syncPivot();
                 updateUI();
             }
         });
 
-        // refresh the ui when undo/redo changes the volume while the tool is active
-        events.on('shapeSelection.changed', (shape: unknown) => {
-            if (this.active && shape === sphere) {
-                updateUI();
-            }
+        // an undo can take the sphere out of the scene, and a redo bring it back
+        events.on('scene.elementRemoved', (element: unknown) => {
+            if (this.active && element === shape.primitive) gizmo.detach();
+        });
+        events.on('scene.elementAdded', (element: unknown) => {
+            if (this.active && element === shape.primitive) gizmo.attach(shape.pivot);
         });
 
         // compose localized tooltip text with the shortcut key
@@ -251,11 +223,11 @@ class SphereSelection {
 
         this.activate = () => {
             this.active = true;
-            scene.add(sphere);
+            shape.acquire();
             if (gizmo.mode === 'none') {
                 gizmo.setMode('translate');
             }
-            gizmo.attach(sphere.pivot);
+            gizmo.attach(shape.pivot);
             updateUI();
             selectToolbar.hidden = false;
         };
@@ -263,13 +235,9 @@ class SphereSelection {
         this.deactivate = () => {
             selectToolbar.hidden = true;
             gizmo.detach();
-            scene.remove(sphere);
             this.active = false;
-
-            // the volume is transient tool state: drop its ops from history so
-            // undo/redo never hits steps that visibly change nothing while the
-            // tool is hidden
-            events.fire('edit.removeForShape', sphere);
+            // a sphere that went into no select node is taken out again
+            shape.release();
         };
     }
 }

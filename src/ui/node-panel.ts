@@ -768,10 +768,50 @@ class NodePanel extends Container {
         toolRow.appendChild(tools);
         this.body.appendChild(toolRow);
 
+        // the mesh input: a primitive wired in, taken ahead of the steps,
+        // with how it combines and a way to cut it loose
+        const meshRow = this.row('mesh');
+        meshRow.classList.add('nd-step');
+        if (op.mesh) {
+            const mesh = op.mesh;
+            const modes = document.createElement('div');
+            modes.className = 'nd-choices';
+            SELECT_MODES.forEach(({ mode, label }) => {
+                const b = document.createElement('button');
+                b.className = 'nd-choice';
+                b.type = 'button';
+                b.textContent = label;
+                if (mesh.mode === mode) b.classList.add('nd-choice-active');
+                b.addEventListener('click', () => this.events.fire('select.meshMode', op, mode as SelectMode));
+                modes.appendChild(b);
+            });
+            meshRow.appendChild(modes);
+
+            const by = document.createElement('div');
+            by.className = 'nd-value nd-step-by';
+            by.textContent = mesh.used ? mesh.source.name : `${mesh.source.name} (gone)`;
+            by.title = mesh.used ? `inside ${mesh.source.name}` : `${mesh.source.name} is not in the scene, so the input is skipped`;
+            meshRow.appendChild(by);
+
+            const drop = document.createElement('button');
+            drop.type = 'button';
+            drop.className = 'nd-drop';
+            drop.textContent = '×';
+            drop.title = 'disconnect the mesh';
+            drop.addEventListener('click', () => this.events.fire('graph.disconnect', op, 'mesh'));
+            meshRow.appendChild(drop);
+        } else {
+            const none = document.createElement('div');
+            none.className = 'nd-value';
+            none.textContent = 'none - wire a box, sphere or cylinder into it';
+            meshRow.appendChild(none);
+        }
+        this.body.appendChild(meshRow);
+
         if (!op.steps.length) {
             const note = document.createElement('div');
             note.className = 'nd-note';
-            note.textContent = 'empty - pick a tool and draw in the viewport';
+            note.textContent = op.mesh ? 'no steps - draw in the viewport to refine it' : 'empty - pick a tool and draw in the viewport';
             this.body.appendChild(note);
             return;
         }

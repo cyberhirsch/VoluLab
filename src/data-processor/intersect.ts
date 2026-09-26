@@ -36,6 +36,12 @@ type BoxOptions = {
     box: { transform: Mat4 };
 };
 
+type CylinderOptions = {
+    // transform mapping the unit cylinder (diameter and height 1, along y)
+    // to world space
+    cylinder: { transform: Mat4 };
+};
+
 // A screen-space query means nothing without the view it was made on, so a
 // caller replaying one supplies the matrix it captured. Omitted, the live
 // camera is used, which is what an interactive gesture wants.
@@ -43,7 +49,7 @@ type ViewOverride = {
     viewProjection?: Mat4;
 };
 
-type IntersectOptions = (MaskOptions | RectOptions | SphereOptions | BoxOptions) & ViewOverride;
+type IntersectOptions = (MaskOptions | RectOptions | SphereOptions | BoxOptions | CylinderOptions) & ViewOverride;
 
 const shapeInvMat = new Mat4();
 const identityMat = new Mat4();
@@ -181,6 +187,7 @@ class Intersect {
 
         const sphereOptions = options as SphereOptions;
         const boxOptions = options as BoxOptions;
+        const cylinderOptions = options as CylinderOptions;
         if (sphereOptions.sphere) {
             shapeInvMat.copy(sphereOptions.sphere.transform).invert();
             resolve(scope, {
@@ -191,6 +198,12 @@ class Intersect {
             shapeInvMat.copy(boxOptions.box.transform).invert();
             resolve(scope, {
                 mode: 3,
+                shape_matrix_inv: shapeInvMat.data
+            });
+        } else if (cylinderOptions.cylinder) {
+            shapeInvMat.copy(cylinderOptions.cylinder.transform).invert();
+            resolve(scope, {
+                mode: 4,
                 shape_matrix_inv: shapeInvMat.data
             });
         } else {
@@ -215,4 +228,4 @@ class Intersect {
     }
 }
 
-export { Intersect, IntersectOptions, MaskOptions, RectOptions, SphereOptions, BoxOptions };
+export { Intersect, IntersectOptions, MaskOptions, RectOptions, SphereOptions, BoxOptions, CylinderOptions };

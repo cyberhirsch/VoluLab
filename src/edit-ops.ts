@@ -12,7 +12,7 @@ import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
 import { SceneLight } from './scene-light';
 import { PrimitivePose, ScenePrimitive } from './scene-primitive';
-import { SelectQuery, resolveHits } from './select-query';
+import { SelectQuery, ShapeQuery, resolveHits } from './select-query';
 import { SphereShape } from './sphere-shape';
 import { Splat } from './splat';
 import { State } from './splat-state';
@@ -248,6 +248,25 @@ const combineWithState = (splat: Splat, mode: SelectMode, isHit: (i: number) => 
 type SelectStep = { mode: SelectMode; query: SelectQuery };
 
 /**
+ * A primitive wired into a select node's mesh input: the gaussians inside it,
+ * combined by its mode.
+ *
+ * The node selects with the shape as it was when the primitive last settled,
+ * kept here, not with the live primitive. A primitive is moved by edits later
+ * in the history than the node, and replaying the node winds those back
+ * first - so read live, the shape would be wherever the replay had wound it
+ * to. The editor takes a new copy whenever the primitive settles somewhere
+ * else, and replays the node with it. Null while the primitive is out of the
+ * scene - its node undone or bypassed - when the input is skipped, as if
+ * nothing were wired in.
+ */
+type SelectMesh = {
+    source: ScenePrimitive;
+    mode: SelectMode;
+    used: ShapeQuery | null;
+};
+
+/**
  * A selection node.
  *
  * It holds a list of steps rather than a single query, because refining a
@@ -266,6 +285,8 @@ class SelectOp extends StateOp {
     name = 'selectOp';
 
     steps: SelectStep[];
+    /** a box, sphere or cylinder wired into the node, taken ahead of the steps */
+    mesh: SelectMesh | null = null;
 
     constructor(splat: Splat, steps: SelectStep[]) {
         // TOGGLE, always: the op states the result, not the gesture
@@ -285,7 +306,11 @@ class SelectOp extends StateOp {
                 desired[i] = (state[i] & State.selected) ? 1 : 0;
             }
 
-            for (const step of this.steps) {
+            // the wired shape goes first, so the node's own gestures refine
+            // what it caught - drawn with shift, a lasso adds to the sphere
+            const steps = this.mesh?.used ? [{ mode: this.mesh.mode, query: this.mesh.used }, ...this.steps] : this.steps;
+
+            for (const step of steps) {
                 // one pass per step, ascending, which is what a hit predicate
                 // requires - each step gets a fresh one
                 const isHit = await resolveHits(s, step.query);
@@ -302,6 +327,11 @@ class SelectOp extends StateOp {
 
             return combineWithState(s, 'set', i => desired[i] === 1);
         };
+    }
+
+    /** the mesh input, as a named input on the node */
+    get ports(): PortSpec[] {
+        return [{ name: 'mesh', label: 'mesh', accepts: ['primitive'], source: this.mesh?.source ?? null }];
     }
 
     /** The last gesture, which is what the node is labelled by. */
@@ -1835,6 +1865,7 @@ export {
     type SourceKind,
     SelectMode,
     SelectStep,
+    type SelectMesh,
     StateOp,
     SelectAllOp,
     SelectNoneOp,

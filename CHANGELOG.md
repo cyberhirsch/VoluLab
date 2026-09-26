@@ -9,6 +9,59 @@ months finds out why before they change it.
 
 ---
 
+## Select: a mesh input
+
+A select node takes a box, sphere or cylinder in, through a mesh input on
+its top edge, and selects the gaussians inside it. When the primitive moves,
+the node selects again, and so does everything downstream of it: a delete
+after it deletes what is inside the shape where it is now.
+
+- **Wiring** is the graph's: drag a primitive node's output onto the select
+  node. The node pane's mesh row sets how it combines - set, add, remove or
+  keep - and cuts it loose again, as does the node's menu.
+- **Ahead of the steps.** The mesh input is taken first, so the node's own
+  gestures refine what the shape caught: a lasso drawn with shift adds to
+  the sphere.
+- **A copy, not the live shape.** A primitive is moved by edits later in the
+  history than the node that uses it, and replaying the node winds those
+  back first, so the node cannot read the primitive as it is mid-replay.
+  It keeps a copy of the shape - its kind and matrix - taken when the
+  primitive settles. Whenever history settles, each applied select node
+  whose primitive is no longer where its copy says gets a new copy and is
+  replayed, all of them in one replay from the earliest. Settling means a
+  drag ending, a size typed in, an undo or redo, or the shape's kind
+  changing; nothing re-runs while a primitive is being dragged or typed
+  into.
+- **Gone is skipped.** With the primitive's node undone or bypassed, the
+  input is skipped, as if nothing were wired in, and it comes back with it.
+- **Cylinders** are a fourth volume test in the intersection shader: within
+  half a unit of the axis, and no further than half a unit along it.
+- **The sphere and box tools** now place primitives. Picking one up takes
+  the primitive the open select node already takes in, if it is the tool's
+  kind, so the tool goes on editing it; otherwise it makes one, quietly -
+  the object stays selected and its node stays open. Set, add, remove and
+  intersect wire it into that node with that mode, or into a new node when
+  the open one takes another shape in. Put down without having been wired
+  into anything, the tool's new shape is taken out of history again. The
+  tools' own fields and gizmo move the primitive, a step at a time.
+- **New lights and primitives are selected once, when made.** They used to
+  be selected whenever they entered the scene, which a replay does too - so
+  re-running a select node took the selection off the object being worked
+  on.
+
+Checked headless, counting on the CPU what each shape holds: wired, the node
+selects what is inside the sphere; moved by the pivot, what is inside where
+it is now, and undo and redo move the selection with it; a delete after the
+node follows the sphere; the four modes over everything selected give the
+shape, everything, everything but the shape, and the shape; a cylinder
+selects its own; bypassing the primitive skips the input and turning it back
+on restores it; disconnecting passes the selection through. The sphere tool
+makes a sphere without taking the selection, "set" wires it into a select
+node, its radius field re-selects, and picking the tool up again edits the
+same sphere; the box tool tried and put down leaves nothing in history.
+
+---
+
 ## Primitives: box, sphere and cylinder
 
 Shapes placed in the scene for other nodes to take in: a select node's

@@ -5,7 +5,7 @@ import { registerCameraEffects } from './camera-effects';
 import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, RelightOp, PrimitiveOp } from './edit-ops';
+import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, RelightOp, PrimitiveOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -19,7 +19,7 @@ import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
 import { SceneLight } from './scene-light';
 import { PrimitiveKind, ScenePrimitive } from './scene-primitive';
-import { RangeQuery, SelectQuery } from './select-query';
+import { RangeQuery, SelectQuery, ShapeQuery } from './select-query';
 import { Splat } from './splat';
 import { writeSplatFile } from './splat-serialize';
 import { State } from './splat-state';
@@ -663,14 +663,104 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         selectedSplats().forEach(splat => addSelect(splat, op, query));
     });
 
-    // transform maps the unit sphere (diameter 1) to world space
-    events.on('select.bySphere', (op: SelectMode, transform: Mat4) => {
-        selectedSplats().forEach(splat => addSelect(splat, op, { kind: 'sphere', transform }));
+    /**
+     * A primitive as a select node's mesh input.
+     *
+     * The node selects with a copy of the shape taken when the primitive
+     * settles (see SelectMesh), so it is the copy that is replaced here, and
+     * the node replayed with it: wired, cut, a new mode, or the primitive
+     * settling somewhere new.
+     */
+    const shapeOf = (primitive: ScenePrimitive): ShapeQuery | null => {
+        return primitive.scene ? { kind: primitive.kind, transform: primitive.transform() } : null;
+    };
+
+    const sameShape = (a: ShapeQuery | null, b: ShapeQuery | null) => {
+        if (!a || !b) return a === b;
+        return a.kind === b.kind && a.transform.equals(b.transform);
+    };
+
+    const setMesh = (op: SelectOp, mesh: SelectMesh | null) => {
+        const index = history().ops.indexOf(op);
+        if (index < 0) return;
+        events.invoke('edit.refresh', index, () => {
+            op.mesh = mesh;
+        });
+    };
+
+    events.on('select.meshMode', (op: SelectOp, mode: SelectMode) => {
+        if (op?.mesh && op.mesh.mode !== mode) setMesh(op, { ...op.mesh, mode });
     });
 
-    // transform maps the unit cube (side 1) to world space
-    events.on('select.byBox', (op: SelectMode, transform: Mat4) => {
-        selectedSplats().forEach(splat => addSelect(splat, op, { kind: 'box', transform }));
+    /**
+     * Whenever history settles, each applied select node whose primitive is
+     * no longer where its copy says is replayed with a new copy - one replay
+     * from the earliest of them, however many there are. The check runs in
+     * the command queue, behind whatever is in flight, so it sees the scene
+     * at rest; and not while a primitive is being dragged or typed into,
+     * which settles with an edit of its own.
+     */
+    let shapeCheck = false;
+    const checkShapes = () => {
+        if (shapeCheck) return;
+        shapeCheck = true;
+        events.invoke('queue', () => {
+            shapeCheck = false;
+            const primitives = events.invoke('primitive.list') as ScenePrimitive[];
+            if (primitives.some(p => p.live)) return;
+
+            const { ops, cursor } = history();
+            const stale: { op: SelectOp, used: ShapeQuery | null }[] = [];
+            let first = -1;
+            for (let i = 0; i < cursor; ++i) {
+                const op = ops[i];
+                if (op.bypassed || !(op instanceof SelectOp) || !op.mesh) continue;
+                const used = shapeOf(op.mesh.source);
+                if (!sameShape(used, op.mesh.used)) {
+                    stale.push({ op, used });
+                    if (first < 0) first = i;
+                }
+            }
+            // queued behind this task, not awaited: waiting on it from here
+            // would wait on itself
+            if (stale.length) {
+                events.invoke('edit.refresh', first, () => {
+                    stale.forEach(({ op, used }) => {
+                        if (op.mesh) op.mesh.used = used;
+                    });
+                });
+            }
+        });
+    };
+    events.on('edit.changed', checkShapes);
+    events.on('primitive.changed', checkShapes);
+
+    /**
+     * From the sphere and box tools: their primitive into the select node
+     * being worked on, combined by mode. With no node being worked on - or
+     * one that takes another shape in, which this one would push out - a new
+     * node is made with just this input.
+     */
+    events.on('select.byPrimitive', (mode: SelectMode, primitive: ScenePrimitive) => {
+        selectedSplats().forEach((splat) => {
+            const target = nodeToEdit(splat, op => op instanceof SelectOp);
+            const existing = target !== null ? history().ops[target] as SelectOp : null;
+            if (existing && (!existing.mesh || existing.mesh.source === primitive)) {
+                setMesh(existing, { source: primitive, mode, used: shapeOf(primitive) });
+                return;
+            }
+            const op = new SelectOp(splat, []);
+            op.mesh = { source: primitive, mode, used: shapeOf(primitive) };
+            appendAndOpen(op);
+        });
+    });
+
+    /** The primitive the select node being worked on takes in, if it is of this kind. */
+    events.function('select.editingMesh', (kind: PrimitiveKind) => {
+        const splat = selectedSplats()[0];
+        const target = splat ? nodeToEdit(splat, op => op instanceof SelectOp) : null;
+        const source = target !== null ? (history().ops[target] as SelectOp).mesh?.source : null;
+        return source?.kind === kind ? source : null;
     });
 
     events.function('select.rect', async (op: SelectMode, rect: any) => {
@@ -1158,6 +1248,9 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         const op = new LightOp(scene, light, settings);
         const index = history().cursor + added;
         events.fire('edit.add', op);
+        // the thing you are about to aim, once it is in - and only now, not
+        // whenever a replay puts it back
+        events.invoke('queue', () => events.fire('light.select', light));
         openInGraph(index);
         events.fire('workspace.reveal', 'node');
         return op;
@@ -1169,7 +1262,9 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
      * whichever is bigger, so it lands on what you were looking at and at
      * a size you can see.
      */
-    events.function('primitive.addNode', (kind: PrimitiveKind = 'box') => {
+    // quiet: made for a tool, which keeps the object selected and the node
+    // it is working on open
+    events.function('primitive.addNode', (kind: PrimitiveKind = 'box', quiet = false) => {
         // named by kind, with the first number no other primitive has
         const names = new Set((events.invoke('primitive.list') as ScenePrimitive[]).map(p => p.name));
         let n = 1;
@@ -1189,8 +1284,14 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         const op = new PrimitiveOp(scene, primitive);
         const index = history().cursor;
         events.fire('edit.add', op);
-        openInGraph(index);
-        events.fire('workspace.reveal', 'node');
+        if (!quiet) {
+            // selected once it is in, like a new import - and only now, not
+            // whenever a replay puts it back, which would take the selection
+            // from the object being worked on
+            events.invoke('queue', () => events.fire('primitive.select', primitive));
+            openInGraph(index);
+            events.fire('workspace.reveal', 'node');
+        }
         return op;
     });
 
@@ -1278,6 +1379,10 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             op.settings.datasetName = source.sourceName;
             events.fire('edit.changed');
         }
+        // a select node's mesh: what is inside the primitive, set by default
+        if (op instanceof SelectOp && port === 'mesh' && source instanceof ScenePrimitive) {
+            setMesh(op, { source, mode: op.mesh?.mode ?? 'set', used: shapeOf(source) });
+        }
     });
 
     events.on('graph.disconnect', (op: EditOp, port: string) => {
@@ -1285,6 +1390,9 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             op.datasetOp = undefined;
             op.inputs = [];
             events.fire('edit.changed');
+        }
+        if (op instanceof SelectOp && port === 'mesh' && op.mesh) {
+            setMesh(op, null);
         }
     });
 

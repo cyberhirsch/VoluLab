@@ -1,11 +1,11 @@
 import { Button, Container, Element, Label, VectorInput } from '@playcanvas/pcui';
 import { Vec3 } from 'playcanvas';
 
+import { PrimitiveToolShape } from './primitive-tool-shape';
 import { ShapeGizmoMode, ShapeTransformGizmo } from './shape-transform-gizmo';
-import { BoxShape } from '../box-shape';
-import { ShapeTransformOp } from '../edit-ops';
 import { Events } from '../events';
 import { Scene } from '../scene';
+import { ScenePrimitive } from '../scene-primitive';
 import { ShortcutManager } from '../shortcut-manager';
 import { Splat } from '../splat';
 import { i18n } from '../ui/localization';
@@ -21,6 +21,11 @@ const createSvg = (svgString: string) => {
     return new DOMParser().parseFromString(decodedStr, 'image/svg+xml').documentElement;
 };
 
+/**
+ * Select what is inside a box: a box primitive, wired into the select node
+ * as its mesh input, so moving the box later selects again. See
+ * PrimitiveToolShape.
+ */
 class BoxSelection {
     activate: () => void;
     deactivate: () => void;
@@ -29,7 +34,8 @@ class BoxSelection {
     active = false;
 
     constructor(events: Events, scene: Scene, canvasContainer: Container, tooltips: Tooltips) {
-        const box = new BoxShape();
+        const shape = new PrimitiveToolShape(events, scene, 'box');
+        const euler = new Vec3();
 
         // ui
         const selectToolbar = new Container({
@@ -85,7 +91,7 @@ class BoxSelection {
             precision: 2,
             dimensions: 3,
             placeholder: ['X', 'Y', 'Z'],
-            value: [box.lenX, box.lenY, box.lenZ],
+            value: [1, 1, 1],
             min: 0.01
         });
         fieldDefault(size, size.value);
@@ -121,16 +127,17 @@ class BoxSelection {
 
         canvasContainer.append(selectToolbar);
 
-        // write the volume's transform into the ui without retriggering the
-        // inputs' change handlers
+        // write the box into the ui without retriggering the inputs' change
+        // handlers
         let uiUpdating = false;
         const updateUI = () => {
+            const p = shape.primitive;
+            if (!p) return;
             uiUpdating = true;
-            const p = box.pivot.getPosition();
-            position.value = [p.x, p.y, p.z];
-            size.value = [box.lenX, box.lenY, box.lenZ];
-            const e = box.pivot.getLocalEulerAngles();
-            rotation.value = [e.x, e.y, e.z];
+            position.value = [p.position.x, p.position.y, p.position.z];
+            size.value = [p.size.x, p.size.y, p.size.z];
+            p.rotation.getEulerAngles(euler);
+            rotation.value = [euler.x, euler.y, euler.z];
             uiUpdating = false;
         };
 
@@ -147,60 +154,16 @@ class BoxSelection {
             rotation.hidden = !rotating;
         };
 
-        // undo/redo support for volume transforms
-        const captureState = () => ({
-            position: box.pivot.getPosition().clone(),
-            rotation: box.pivot.getRotation().clone(),
-            lens: new Vec3(box.lenX, box.lenY, box.lenZ)
-        });
-
-        type BoxState = ReturnType<typeof captureState>;
-
-        const statesEqual = (a: BoxState, b: BoxState) => {
-            return a.position.equals(b.position) && a.rotation.equals(b.rotation) && a.lens.equals(b.lens);
-        };
-
-        const addOp = (oldState: BoxState, newState: BoxState) => {
-            if (!statesEqual(oldState, newState)) {
-                // the change is already applied, so suppress the op's do()
-                events.fire('edit.add', new ShapeTransformOp({ shape: box, oldState, newState }), true);
-            }
-        };
-
-        // record an undo op for the state change performed by fn
-        const recordOp = (fn: () => void) => {
-            const oldState = captureState();
-            fn();
-            addOp(oldState, captureState());
-        };
-
-        let dragState: BoxState | null = null;
-
         const gizmo = new ShapeTransformGizmo(events, scene, {
             rotate: true,
             uniformScale: false,
             lowerBoundScale: new Vec3(0.01, 0.01, 0.01),
-            onTransformStart: () => {
-                dragState = captureState();
-            },
-            onTransform: (mode) => {
-                if (mode === 'scale') {
-                    // snapshot the live scale vector before the length setters mutate it
-                    const { x, y, z } = box.pivot.getLocalScale();
-                    box.lenX = x;
-                    box.lenY = y;
-                    box.lenZ = z;
-                } else {
-                    box.moved();
-                }
+            onTransformStart: () => shape.startDrag(),
+            onTransform: () => {
+                shape.drag();
                 updateUI();
             },
-            onTransformEnd: () => {
-                if (dragState) {
-                    addOp(dragState, captureState());
-                    dragState = null;
-                }
-            },
+            onTransformEnd: () => shape.endDrag(),
             onModeChanged: syncModeUI
         });
         syncModeUI(gizmo.mode);
@@ -210,8 +173,9 @@ class BoxSelection {
             return true;
         };
 
+        // the box into the select node, combined by this mode
         const apply = (op: 'set' | 'add' | 'remove' | 'intersect') => {
-            events.fire('select.byBox', op, box.pivot.getWorldTransform().clone());
+            if (shape.primitive) events.fire('select.byPrimitive', op, shape.primitive);
         };
 
         translateButton.dom.addEventListener('pointerdown', (e) => {
@@ -242,50 +206,35 @@ class BoxSelection {
             e.stopPropagation();
             apply('intersect');
         });
-        position.on('change', (v: number[]) => {
-            if (!uiUpdating) {
-                recordOp(() => {
-                    box.pivot.setPosition(v[0], v[1], v[2]);
-                    box.moved();
-                });
-                gizmo.attach(box.pivot);
-            }
-        });
-        size.on('change', (v: number[]) => {
-            if (!uiUpdating) {
-                recordOp(() => {
-                    box.lenX = v[0];
-                    box.lenY = v[1];
-                    box.lenZ = v[2];
-                });
-            }
-        });
-        rotation.on('change', (v: number[]) => {
-            if (!uiUpdating) {
-                recordOp(() => {
-                    box.pivot.setLocalEulerAngles(v[0], v[1], v[2]);
-                    box.moved();
-                });
-                gizmo.attach(box.pivot);
-            }
-        });
+        // each field change is one undo step on the box
+        const edit = (change: (pose: ReturnType<ScenePrimitive['getPose']>) => void) => {
+            if (uiUpdating || !shape.primitive) return;
+            const pose = shape.primitive.getPose();
+            change(pose);
+            shape.setPose(pose);
+        };
+        position.on('change', (v: number[]) => edit(pose => pose.position.set(v[0], v[1], v[2])));
+        size.on('change', (v: number[]) => edit(pose => pose.size.set(v[0], v[1], v[2])));
+        rotation.on('change', (v: number[]) => edit(pose => pose.rotation.setFromEulerAngles(v[0], v[1], v[2])));
 
         events.on('camera.focalPointPicked', (details: { splat: Splat, position: Vec3 }) => {
-            if (this.active) {
-                recordOp(() => {
-                    box.pivot.setPosition(details.position);
-                    box.moved();
-                });
-                gizmo.attach(box.pivot);
+            if (this.active) edit(pose => pose.position.copy(details.position));
+        });
+
+        // undo, redo and the primitive's own node move it too
+        events.on('primitive.moved', (primitive: ScenePrimitive) => {
+            if (this.active && primitive === shape.primitive && !shape.dragging) {
+                shape.syncPivot();
                 updateUI();
             }
         });
 
-        // refresh the ui when undo/redo changes the volume while the tool is active
-        events.on('shapeSelection.changed', (shape: unknown) => {
-            if (this.active && shape === box) {
-                updateUI();
-            }
+        // an undo can take the box out of the scene, and a redo bring it back
+        events.on('scene.elementRemoved', (element: unknown) => {
+            if (this.active && element === shape.primitive) gizmo.detach();
+        });
+        events.on('scene.elementAdded', (element: unknown) => {
+            if (this.active && element === shape.primitive) gizmo.attach(shape.pivot);
         });
 
         // compose localized tooltip text with the shortcut key
@@ -306,11 +255,11 @@ class BoxSelection {
 
         this.activate = () => {
             this.active = true;
-            scene.add(box);
+            shape.acquire();
             if (gizmo.mode === 'none') {
                 gizmo.setMode('translate');
             }
-            gizmo.attach(box.pivot);
+            gizmo.attach(shape.pivot);
             updateUI();
             selectToolbar.hidden = false;
         };
@@ -318,13 +267,9 @@ class BoxSelection {
         this.deactivate = () => {
             selectToolbar.hidden = true;
             gizmo.detach();
-            scene.remove(box);
             this.active = false;
-
-            // the volume is transient tool state: drop its ops from history so
-            // undo/redo never hits steps that visibly change nothing while the
-            // tool is hidden
-            events.fire('edit.removeForShape', box);
+            // a box that went into no select node is taken out again
+            shape.release();
         };
     }
 }

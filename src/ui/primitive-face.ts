@@ -103,6 +103,7 @@ class PrimitiveFace extends Container {
                 const pose = primitive.getPose();
                 pose.size[key] = value;
                 this.applying = true;
+                primitive.live = true;
                 primitive.setPose(pose);
                 this.applying = false;
             });
@@ -128,6 +129,7 @@ class PrimitiveFace extends Container {
     private settle() {
         const primitive = this.primitive;
         if (!primitive || !this.settled) return;
+        primitive.live = false;
         const now = primitive.getPose();
         if (!now.size.equals(this.settled.size)) {
             // already applied, so the op's do() is suppressed

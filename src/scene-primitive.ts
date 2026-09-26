@@ -48,6 +48,12 @@ class ScenePrimitive extends Element {
     /** the outliner's eye: a hidden primitive is not drawn */
     visible = true;
 
+    /**
+     * Being moved by hand right now - dragged, or a size typed into. What
+     * uses the shape waits for it to settle, which it does with an edit.
+     */
+    live = false;
+
     constructor(name: string, kind: PrimitiveKind) {
         super(ElementType.primitive);
         this.name = name;

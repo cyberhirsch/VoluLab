@@ -51,13 +51,6 @@ const registerPrimitiveViewEvents = (events: Events, scene: Scene) => {
         if (light) select(null);
     });
 
-    // a new primitive is the thing you are about to place
-    events.on('scene.elementAdded', (element: unknown) => {
-        if (element instanceof ScenePrimitive) {
-            events.fire('primitive.select', element);
-        }
-    });
-
     events.on('scene.elementRemoved', (element: unknown) => {
         if (element === selected) select(null);
     });

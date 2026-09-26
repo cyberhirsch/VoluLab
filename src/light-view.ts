@@ -50,14 +50,6 @@ const registerLightViewEvents = (events: Events, scene: Scene) => {
         if (primitive) select(null);
     });
 
-    // a new light is the thing you are about to aim, the way a new import
-    // takes the selection
-    events.on('scene.elementAdded', (element: unknown) => {
-        if (element instanceof SceneLight) {
-            events.fire('light.select', element);
-        }
-    });
-
     events.on('scene.elementRemoved', (element: unknown) => {
         if (element === selected) select(null);
     });

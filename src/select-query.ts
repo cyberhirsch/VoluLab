@@ -25,11 +25,14 @@ import { Splat } from './splat';
  * a state flag rather than a removal - nothing renumbers underneath it.
  */
 
-export type SelectQueryKind = 'sphere' | 'box' | 'rect' | 'poly' | 'color' | 'point' | 'frozen';
+export type SelectQueryKind = 'sphere' | 'box' | 'cylinder' | 'rect' | 'poly' | 'color' | 'point' | 'frozen';
 
-/** Maps the unit sphere (diameter 1) or unit cube (side 1) to world space. */
+/**
+ * Maps the unit sphere (diameter 1), the unit cube (side 1) or the unit
+ * cylinder (diameter and height 1, along y) to world space.
+ */
 export type ShapeQuery = {
-    kind: 'sphere' | 'box';
+    kind: 'sphere' | 'box' | 'cylinder';
     transform: Mat4;
 };
 
@@ -111,6 +114,7 @@ export const describeQuery = (query: SelectQuery): string => {
     switch (query.kind) {
         case 'sphere': return 'sphere';
         case 'box': return 'box';
+        case 'cylinder': return 'cylinder';
         case 'rect': return 'rectangle';
         case 'poly': return `lasso · ${query.points.length} points`;
         case 'color': return `colour · ±${query.threshold.toFixed(3)}`;
@@ -251,6 +255,9 @@ export const resolveHits = async (splat: Splat, query: SelectQuery): Promise<(i:
             break;
         case 'box':
             options.box = { transform: query.transform };
+            break;
+        case 'cylinder':
+            options.cylinder = { transform: query.transform };
             break;
         case 'rect':
             options.rect = query.rect;
