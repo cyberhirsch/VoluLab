@@ -9,6 +9,57 @@ months finds out why before they change it.
 
 ---
 
+## Relighting: grids up to 1024
+
+Grid resolution goes to 512, 768 and 1024 now, each the number of finest
+cells along the scene's longest side. At 256 and below every result is bit
+for bit what it was: every texture the relighter writes was hashed on the old
+build and the new, with every kind of light and de-light on, at 128 and 256.
+
+- **Fitted to the GPU.** A grid is two buffers of four bytes a cell, and each
+  has to fit the device's limit on one buffer. WebGPU only guarantees 128 MiB:
+  a grid of any shape fits that at 256, while a cube-shaped one at 1024 needs
+  over thirty times it. So the grid is made as fine as the device's own limit
+  allows before anything is allocated, and the spare room kept for a drag
+  never pushes a buffer past it.
+- **Out of memory is found out late.** A grid within the limit can still not
+  fit in the memory that is left, and WebGPU only reports that
+  asynchronously. The grid is used broken for a frame, then rebuilt with half
+  the cells that failed. SwiftShader allows 1 GiB buffers; asked for 1024, it
+  got 952 within that, failed to allocate it, and settled at 754.
+- **The panel says so.** When a grid came out coarser than asked, a note
+  under the setting says what it is using.
+- **Traces scale with the grid.** A trace's step budget, and the level it
+  skips empty space at, were counted in finest cells, so at 1024 a hard
+  shadow ray gave up a quarter as far out as at 256. Both now scale with how
+  much finer than 256 the grid is, and the pyramid gets a level per doubling,
+  so the coarsest level stays as coarse as it was.
+
+**The trap: a fine grid lets a floor shadow itself.** At 512 the test floor,
+open to a sun, came out with a third to two thirds of its light. A gaussian
+too wide for the deposit's footprint goes into a coarser level and fills
+whole cells of it, so its own density reaches a cell and a half of that
+level off its surface. A shadow ray starting two finest cells out starts
+inside it. At 256 the floor's 12 mm gaussians fit the finest level; at 512
+they go one up. On a grid finer than 256, a ray now starts two cells of the
+level its gaussian was deposited in, and a round gaussian's starts past its
+own three sigma. De-light's shadow shrinking counts in the same cells. The
+floor came back to exactly its unshadowed value at every size, and round
+gaussians with nothing above them to within 7% of theirs. De-light at 512
+lifts the matched sun's baked shadow to 0.67 against 0.71 open ground, where
+128 overshoots to 0.79.
+
+**The trap: a rounding error broke "unchanged at 256".** Scaling the offset
+by the deposit level's cell over the finest cell is not exact even when the
+two are equal, and every texture differed from the old build. The scale is
+a power of two now, and multiplying by one is exact.
+
+At 256 and below, a gaussian wide enough to go into a coarser level still
+shadows itself a little, as it always has: a 3 cm round gaussian at 256 gets
+0.3 of its light where 0.5 is right.
+
+---
+
 ## Relighting: area and volume lights
 
 The last relighting item. Two new families of light, both built on what

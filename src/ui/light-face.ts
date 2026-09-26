@@ -49,7 +49,7 @@ const ROLES: LightRole[] = ['add', 'match'];
 // de-light's occlusion stands for
 const ROLE_KINDS: LightKind[] = ['point', 'spot', 'sun', 'rect', 'disk', 'sphere', 'volume'];
 
-const RESOLUTIONS = [64, 96, 128, 192, 256];
+const RESOLUTIONS = [64, 96, 128, 192, 256, 512, 768, 1024];
 
 // the picker speaks hex; the settings keep 0..1 per channel
 const toHex = (c: number[]) => `#${c.map(v => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join('')}`;
@@ -68,6 +68,7 @@ class LightFace extends Container {
     private inputs = new Map<string, { input: HTMLInputElement, row: HTMLElement, field: NumberField }>();
     private capturedInput: HTMLInputElement;
     private resolutionSelect: HTMLSelectElement;
+    private resolutionNotice: HTMLDivElement;
     private rangeInput: HTMLInputElement;
     private strengthInput: HTMLInputElement;
     private delightInput: HTMLInputElement;
@@ -320,6 +321,13 @@ class LightFace extends Container {
         });
         row(sceneSection, 'light.resolution', this.resolutionSelect);
 
+        // a grid finer than the GPU can hold is made as fine as it can hold,
+        // and the face says so rather than leave the setting looking obeyed
+        this.resolutionNotice = document.createElement('div');
+        this.resolutionNotice.className = 'tf-notice';
+        this.resolutionNotice.style.display = 'none';
+        sceneSection.appendChild(this.resolutionNotice);
+
         // occlusion shapes ambient light only; it is shared because it is a
         // property of the scene, not of any one light
         const sceneNumber = (label: string, key: string, step: number, min: number, max: number) => {
@@ -356,6 +364,7 @@ class LightFace extends Container {
 
         // another light's face, or a loaded project, can change these
         events.on('relight.settingsChanged', () => this.readScene());
+        events.on('relight.resolutionUsed', () => this.readResolutionUsed());
     }
 
     /** settings -> controls */
@@ -364,6 +373,7 @@ class LightFace extends Container {
         (this.unsupported.parentElement as HTMLElement).style.display = supported ? 'none' : '';
         this.unsupported.hidden = supported;
         this.readScene();
+        this.readResolutionUsed();
         if (!this.op) return;
         const s = this.op.settings;
         this.kindSelect.value = s.kind;
@@ -391,6 +401,17 @@ class LightFace extends Container {
         this.delightInput.value = String(settings.delight);
         this.floorInput.value = String(settings.delightFloor);
         this.seesDeletedSelect.value = settings.delightSeesDeleted ? 'yes' : 'no';
+    }
+
+    /** whether the grid came out coarser than asked, because the GPU could not hold it */
+    private readResolutionUsed() {
+        const settings = this.events.invoke('relight.settings');
+        const used = this.events.invoke('relight.resolutionUsed');
+        const short = !!settings && typeof used === 'number' && used < settings.resolution;
+        this.resolutionNotice.style.display = short ? '' : 'none';
+        if (short) {
+            this.resolutionNotice.textContent = i18n.t('light.resolution-used', { used });
+        }
     }
 
     /** a spot's cone means nothing to a point light or a sun */

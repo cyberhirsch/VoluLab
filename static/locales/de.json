@@ -366,6 +366,7 @@
     "light.emitters-use": "Auswahl verwenden",
     "light.emitters-failed": "Nichts ausgewählt",
     "light.emitters-hint": "Wähle die leuchtenden Gaußschen aus - eine Lampe, ein Fenster - und versuche es erneut.",
+    "light.resolution-used": "Verwendet {{used}}: Die GPU kann für diese Szene kein feineres Raster halten.",
     "training.dataset": "Datensatz",
     "training.pick-folder": "Ordner wählen…",
     "training.pick-files": "Dateien wählen…",

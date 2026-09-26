@@ -428,7 +428,8 @@ proves slow on real captures.
 3. **Large scenes - partly answered.** The grid's box already trims half a
    percent of gaussians off each end of each axis, so a few floaters do not
    stretch it. For a big outdoor capture the cells still get coarse; a box
-   the user places is the cheap answer, nested grids the thorough one.
+   the user places is the cheap answer, nested grids the thorough one. The
+   grid goes to 1024 cells now, as fine as the GPU can hold (CHANGELOG.md).
 4. **Sequences.** Every frame means a new grid and a new relight, and the
    gaussians are repacked on the CPU at every frame swap. The cost wants
    measuring on a real sequence before anything promises smooth scrubbing.
@@ -496,6 +497,21 @@ proves slow on real captures.
 - No textured emitters - a screen showing a picture lights in one colour.
 - The emitters of every volume light share a pool of 256; a light past it
   is skipped.
+
+**Left from the finer grids**, none of it blocking:
+
+- At 256 and below, a gaussian over about a cell and a half wide still
+  shadows itself a little: a 3 cm round one at 256 gets 0.3 of its light
+  where 0.5 is right. Finer grids clear each gaussian's own density; doing
+  the same at 256 and below would change how every existing scene looks, so
+  the real-GPU session should judge it first.
+- What 512 and 1024 cost on a real GPU is unmeasured. Memory is up to eight
+  bytes a cell plus a quarter spare, per grid, and de-light adds a grid per
+  object: a cube-shaped scene at 512 is about 1.5 GB of grid.
+- Running out of memory is found out a frame late, and that frame's
+  relighting is broken before the grid is rebuilt coarser.
+- A grid that ran out of memory never tries that many cells again in the
+  session, even after memory frees up.
 
 ---
 

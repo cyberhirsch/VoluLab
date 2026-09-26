@@ -366,6 +366,7 @@
     "light.emitters-use": "Usar selección",
     "light.emitters-failed": "No hay nada seleccionado",
     "light.emitters-hint": "Selecciona las gaussianas que brillan - una lámpara, una ventana - y vuelve a intentarlo.",
+    "light.resolution-used": "Se usa {{used}}: la GPU no puede alojar una cuadrícula más fina para esta escena.",
     "training.dataset": "Conjunto de datos",
     "training.pick-folder": "Elegir carpeta…",
     "training.pick-files": "Elegir archivos…",

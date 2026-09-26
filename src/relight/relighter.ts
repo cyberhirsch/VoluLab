@@ -97,7 +97,21 @@ const defaultRelightSettings = (): RelightSettings => ({
     delightSeesDeleted: true
 });
 
-const MAX_LEVELS = 8;
+// A grid's pyramid: eight levels up to 256 cells, and one more for each
+// doubling past it - the kernels' gridScale - so the coarsest level is as
+// coarse at 1024 as at 256, and nothing at 256 or below changes.
+const BASE_LEVELS = 8;
+const MAX_LEVELS = 10;
+
+// the finest grid there is to ask for, and the coarsest a grid is cut down
+// to when the GPU cannot hold what was asked
+const MAX_RESOLUTION = 1024;
+const MIN_RESOLUTION = 32;
+
+// what WebGPU guarantees every device, for a device that does not say
+const DEFAULT_BINDING_BYTES = 128 * 1024 * 1024;
+const DEFAULT_BUFFER_BYTES = 256 * 1024 * 1024;
+
 const LIGHT_FLOATS = 16;
 
 // the settings the lighting pass depends on, compared ahead of the lights
@@ -308,10 +322,57 @@ const dispatchFor = (device: GraphicsDevice, compute: Compute, count: number) =>
 
 type Box = { min: number[], max: number[] };
 
+type GridPlan = { cell: number, dims: number[], levels: number[][], totalCells: number };
+
+/** Cubic cells over an extent, one cell of margin all round, and the levels above them. */
+const planGrid = (extent: number[], resolution: number): GridPlan => {
+    const longest = Math.max(extent[0], extent[1], extent[2], 1e-6);
+    const cell = longest / Math.max(8, resolution);
+    const dims = extent.map(e => Math.max(1, Math.ceil(e / cell)) + 2);
+
+    // levels halve until the coarsest is a couple of cells across
+    const scale = Math.max(1, Math.floor((Math.max(dims[0], dims[1], dims[2]) + 128) / 256));
+    const levelCap = Math.min(MAX_LEVELS, BASE_LEVELS + Math.floor(Math.log2(scale)));
+    const levels: number[][] = [];
+    let d = dims.slice();
+    let offset = 0;
+    for (let l = 0; l < levelCap; ++l) {
+        levels.push([d[0], d[1], d[2], offset]);
+        offset += d[0] * d[1] * d[2];
+        if (Math.max(d[0], d[1], d[2]) <= 2) break;
+        d = d.map(v => Math.max(1, Math.ceil(v / 2)));
+    }
+    return { cell, dims, levels, totalCells: offset };
+};
+
+/**
+ * The finest resolution up to the one asked for whose grid holds no more
+ * than maxCells. For a given box the cells go with the cube of the
+ * resolution, so a guess from that lands close and a step or two finishes.
+ */
+const fitResolution = (extent: number[], resolution: number, maxCells: number) => {
+    let used = resolution;
+    let plan = planGrid(extent, used);
+    while (plan.totalCells > maxCells && used > MIN_RESOLUTION) {
+        const guess = Math.floor(used * Math.cbrt(maxCells / plan.totalCells));
+        used = Math.max(MIN_RESOLUTION, Math.min(used - 1, guess));
+        plan = planGrid(extent, used);
+    }
+    return { used, plan };
+};
+
 /**
  * The density grid: a pyramid of levels in two flat buffers, the fixed-point
  * accumulator the deposits land in and the float densities everything reads.
  * Levels are laid end to end; `levels` holds each one's dims and offset.
+ *
+ * As fine as asked unless the GPU cannot hold it. Each buffer has to fit the
+ * device's limit on one buffer - 128 MiB is all WebGPU guarantees, which a
+ * grid of any shape fits at 256 cells but a cube-shaped one at 1024 needs
+ * over thirty times - and both have to fit in the memory that is left. The
+ * limit is known up front; running out of memory is only found out after
+ * the fact. Either way the grid is laid out coarser, and `resolution` says
+ * what it came to.
  */
 class DensityGrid {
     device: GraphicsDevice;
@@ -321,6 +382,16 @@ class DensityGrid {
     levels: number[][] = [];
     totalCells = 0;
     capacity = 0;
+
+    /** what the layout asked for, and what it got */
+    requested = 0;
+    resolution = 0;
+
+    /** the most cells an allocation has been found to survive, once one has not */
+    private memoryCap = Infinity;
+
+    /** set when an allocation ran out of memory; the relighter rebuilds the grid and clears it */
+    outOfMemory = false;
 
     accum: StorageBuffer = null;
     density: StorageBuffer = null;
@@ -337,36 +408,32 @@ class DensityGrid {
         this.push = new Compute(device, kernels.push, 'RelightPush');
     }
 
+    /** the most cells one of the grid's buffers may hold here */
+    get cellLimit() {
+        const limits = (this.device as any).wgpu?.limits;
+        const bytes = Math.min(limits?.maxStorageBufferBindingSize ?? DEFAULT_BINDING_BYTES, limits?.maxBufferSize ?? DEFAULT_BUFFER_BYTES);
+        return Math.min(Math.floor(bytes / 4), this.memoryCap);
+    }
+
     /** Lay the grid over a box: cubic cells, one cell of margin all round. */
     layout(box: Box, resolution: number) {
         const extent = [0, 1, 2].map(a => Math.max(0, box.max[a] - box.min[a]));
-        const longest = Math.max(extent[0], extent[1], extent[2], 1e-6);
-        const cell = longest / Math.max(8, resolution);
+        const limit = this.cellLimit;
+        const { used, plan } = fitResolution(extent, resolution, limit);
 
-        this.cell = cell;
-        this.dims = extent.map(e => Math.max(1, Math.ceil(e / cell)) + 2);
-        this.origin = box.min.map(v => v - cell);
-
-        // levels halve until the coarsest is a couple of cells across
-        this.levels = [];
-        let dims = this.dims.slice();
-        let offset = 0;
-        for (let l = 0; l < MAX_LEVELS; ++l) {
-            this.levels.push([dims[0], dims[1], dims[2], offset]);
-            offset += dims[0] * dims[1] * dims[2];
-            if (Math.max(dims[0], dims[1], dims[2]) <= 2) break;
-            dims = dims.map(d => Math.max(1, Math.ceil(d / 2)));
-        }
-        this.totalCells = offset;
+        this.requested = resolution;
+        this.resolution = used;
+        this.cell = plan.cell;
+        this.dims = plan.dims;
+        this.origin = box.min.map(v => v - plan.cell);
+        this.levels = plan.levels;
+        this.totalCells = plan.totalCells;
 
         // buffers grow but never shrink, so a drag that nudges the bounds
-        // every frame does not reallocate every frame
+        // every frame does not reallocate every frame - with room to spare,
+        // though never past what the device takes
         if (this.totalCells > this.capacity) {
-            this.accum?.destroy();
-            this.density?.destroy();
-            this.capacity = Math.ceil(this.totalCells * 1.25);
-            this.accum = new StorageBuffer(this.device, this.capacity * 4, BUFFERUSAGE_COPY_DST);
-            this.density = new StorageBuffer(this.device, this.capacity * 4, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
+            this.allocate(Math.max(this.totalCells, Math.min(Math.ceil(this.totalCells * 1.25), limit)));
         }
 
         const levelData = new Uint32Array(MAX_LEVELS * 4);
@@ -378,6 +445,31 @@ class DensityGrid {
         while (this.pulls.length < this.levels.length - 1) {
             this.pulls.push(new Compute(this.device, this.kernels.pull, 'RelightPull'));
         }
+    }
+
+    /**
+     * Both buffers, for this many cells. WebGPU reports running out of
+     * memory only asynchronously, so a grid that did is used broken for a
+     * frame or two, then marked; the relighter rebuilds it, and the next
+     * layout keeps to half the cells that failed.
+     */
+    private allocate(cells: number) {
+        const wgpu = (this.device as any).wgpu;
+        const { resolution } = this;
+        this.accum?.destroy();
+        this.density?.destroy();
+        this.capacity = cells;
+
+        wgpu?.pushErrorScope('out-of-memory');
+        this.accum = new StorageBuffer(this.device, cells * 4, BUFFERUSAGE_COPY_DST);
+        this.density = new StorageBuffer(this.device, cells * 4, BUFFERUSAGE_COPY_SRC | BUFFERUSAGE_COPY_DST);
+        wgpu?.popErrorScope().then((error: unknown) => {
+            if (!error) return;
+            console.warn(`Relighting: out of GPU memory for a grid at ${resolution} (${cells} cells); making it coarser`);
+            this.memoryCap = Math.min(this.memoryCap, Math.floor(cells / 2));
+            this.capacity = 0;
+            this.outOfMemory = true;
+        });
     }
 
     get levelCount() {
@@ -965,6 +1057,7 @@ class Relighter {
     private occlusionDirty = true;
     private lightingDirty = true;
     private lastGridBuild = -Infinity;
+    private reportedResolution = 0;
     private positionsVersion = new Map<Splat, number>();
     private failed = false;
 
@@ -1088,6 +1181,12 @@ class Relighter {
             this.lightingDirty = true;
         }
 
+        // a grid the GPU could not hold is laid out again, coarser
+        if (this.grid.outOfMemory) {
+            this.grid.outOfMemory = false;
+            this.gridDirty = true;
+        }
+
         // bring the per-object resources in line with what is drawn
         const splats = this.visibleSplats();
         for (const [splat] of this.entries) {
@@ -1126,6 +1225,10 @@ class Relighter {
                 entry.ensureDelight(device, this.kernels);
                 const deleted = this.settings.delightSeesDeleted ? -1 : splat.numDeleted;
                 if (!sameMatrix(matrix, entry.capturedMatrix) || entry.capturedDeleted !== deleted || entry.capturedResolution !== this.settings.resolution) {
+                    entry.capturedDirty = true;
+                }
+                if (entry.captured.outOfMemory) {
+                    entry.captured.outOfMemory = false;
                     entry.capturedDirty = true;
                 }
                 if (entry.capturedRange !== this.settings.occlusionRange) {
@@ -1261,6 +1364,27 @@ class Relighter {
         for (const splat of splats) {
             this.bindMaterial(splat, this.entries.get(splat));
         }
+
+        const used = this.usedResolution();
+        if (used !== this.reportedResolution) {
+            this.reportedResolution = used;
+            this.events.fire('relight.resolutionUsed', used);
+        }
+    }
+
+    /**
+     * The resolution the grids actually came to: the setting, unless the GPU
+     * could not hold a grid that fine - then the coarsest any grid in use
+     * had to settle for.
+     */
+    usedResolution() {
+        let used = this.grid?.resolution || this.settings.resolution;
+        this.entries.forEach((entry) => {
+            if (entry.captured?.resolution) {
+                used = Math.min(used, entry.captured.resolution);
+            }
+        });
+        return used;
     }
 
     private buildGrid(entries: SplatLighting[]) {
@@ -1471,7 +1595,7 @@ class Relighter {
     setSettings(partial: Partial<RelightSettings>) {
         const next = { ...this.settings, ...partial };
         next.capturedLight = Math.min(4, Math.max(0, Number(next.capturedLight) || 0));
-        next.resolution = Math.round(Math.min(256, Math.max(32, Number(next.resolution) || 128)));
+        next.resolution = Math.round(Math.min(MAX_RESOLUTION, Math.max(MIN_RESOLUTION, Number(next.resolution) || 128)));
         next.occlusionRange = Math.min(1, Math.max(0.01, Number(next.occlusionRange) || 0.1));
         next.occlusionStrength = Math.min(1, Math.max(0, Number.isFinite(Number(next.occlusionStrength)) ? Number(next.occlusionStrength) : 1));
         next.delight = Math.min(1, Math.max(0, Number.isFinite(Number(next.delight)) ? Number(next.delight) : 0.5));
@@ -1499,6 +1623,10 @@ class Relighter {
                 origin: grid.origin.slice(),
                 cell: grid.cell,
                 dims: grid.dims.slice(),
+                requested: grid.requested,
+                resolution: grid.resolution,
+                capacity: grid.capacity,
+                cellLimit: grid.cellLimit,
                 levels: grid.levels.map(l => l.slice()),
                 density: grid.density
             } : null,
@@ -1515,7 +1643,9 @@ class Relighter {
                 captured: e.captured ? {
                     origin: e.captured.origin.slice(),
                     cell: e.captured.cell,
-                    dims: e.captured.dims.slice()
+                    dims: e.captured.dims.slice(),
+                    resolution: e.captured.resolution,
+                    levels: e.captured.levels.length
                 } : null,
                 width: e.width,
                 height: e.height,
@@ -1532,6 +1662,7 @@ const registerRelighting = (events: Events, scene: Scene) => {
     events.function('relight.supported', () => relighter.supported);
     events.function('relight.settings', () => ({ ...relighter.settings }));
     events.function('relight.debug', () => relighter.debugState());
+    events.function('relight.resolutionUsed', () => relighter.usedResolution());
     events.on('relight.setSettings', (partial: Partial<RelightSettings>) => relighter.setSettings(partial));
 
     events.function('docSerialize.lighting', () => ({ ...relighter.settings }));

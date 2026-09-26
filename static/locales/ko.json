@@ -366,6 +366,7 @@
     "light.emitters-use": "선택 영역 사용",
     "light.emitters-failed": "선택된 항목이 없습니다",
     "light.emitters-hint": "빛나는 가우시안(램프, 창문 등)을 선택한 후 다시 시도하세요.",
+    "light.resolution-used": "{{used}} 사용 중: 이 장면에서는 GPU가 더 세밀한 그리드를 담을 수 없습니다.",
     "training.dataset": "데이터셋",
     "training.pick-folder": "폴더 선택…",
     "training.pick-files": "파일 선택…",

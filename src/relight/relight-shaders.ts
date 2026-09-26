@@ -470,6 +470,24 @@ fn heightLod(height: f32, h0: f32) -> f32 {
     return floor(log2(max(1.0, height / (2.0 * h0))));
 }
 
+// How many times finer than 256 cells this grid is, to the nearest whole
+// step: 1 up to 256, 3 at 768, 4 at 1024. A trace's step budget and the
+// level it skips empty space at are scaled by it, so a finer grid reaches
+// as far as 256 did rather than a third or a quarter as far.
+fn gridScale() -> u32 {
+    let d = uniforms.gridDims.xyz;
+    return max(1u, (max(d.x, max(d.y, d.z)) + 128u) / 256u);
+}
+
+// Whether the grid is finer than 256 cells along its longest side - dims
+// count a cell of margin either end. Past 256 many a gaussian is wider than
+// a cell, and a trace from it clears its own density in full; up to 256
+// everything stays as it has always been.
+fn fineGrid() -> bool {
+    let d = uniforms.gridDims.xyz;
+    return max(d.x, max(d.y, d.z)) > 260u;
+}
+
 // where a ray from origin along dir enters and leaves the grid
 fn clipToGrid(origin: vec3f, dir: vec3f) -> vec2f {
     let boxMin = uniforms.gridOrigin.xyz;
@@ -502,7 +520,11 @@ struct Surface {
     p: vec3f,
     n: vec3f,
     // 1 for a flat gaussian with a meaningful axis, 0 for a round one
-    flatness: f32
+    flatness: f32,
+    // the gaussian's own axes in world space, unit length, and its sigma
+    // along each
+    axes: mat3x3f,
+    sigma: vec3f
 };
 
 // world: where the gaussian is taken to be - see splatWorld and worldOf
@@ -527,11 +549,74 @@ fn surfaceOf(i: u32, world: mat4x4f) -> Surface {
     let sMin = min(s.x, min(s.y, s.z));
     let sMid = s.x + s.y + s.z - sMax - sMin;
 
+    let w0 = m3 * rot[0];
+    let w1 = m3 * rot[1];
+    let w2 = m3 * rot[2];
+
     var surface: Surface;
     surface.p = (world * vec4f(g0.xyz, 1.0)).xyz;
     surface.n = normalize(cof * axis) * select(-1.0, 1.0, det >= 0.0);
     surface.flatness = 1.0 - smoothstep(0.2, 0.6, sMin / max(sMid, 1e-12));
+    surface.axes = mat3x3f(safeNormalize(w0, rot[0]), safeNormalize(w1, rot[1]), safeNormalize(w2, rot[2]));
+    surface.sigma = vec3f(length(w0) * s.x, length(w1) * s.y, length(w2) * s.z);
     return surface;
+}
+
+// How far the gaussian's own body reaches from its centre along d, to three
+// sigma. A ray that starts nearer than that starts inside it, and the
+// gaussian shadows itself with its own density. A flat gaussian leaving
+// through its face reaches next to nothing; a round one, three radii.
+fn ownReach(surface: Surface, d: vec3f) -> f32 {
+    let q = vec3f(dot(d, surface.axes[0]), dot(d, surface.axes[1]), dot(d, surface.axes[2])) / max(surface.sigma, vec3f(1e-12));
+    return 3.0 / sqrt(max(dot(q, q), 1e-24));
+}
+
+// How far off the gaussian a trace toward d starts: base, or on a fine grid
+// further while the gaussian's own body reaches further - a round one's
+// reaches three sigma out. On a fine grid a cell is smaller than many a
+// gaussian, and a ray a couple of cells out would start inside it.
+fn leaveBy(surface: Surface, d: vec3f, base: f32) -> f32 {
+    if (!fineGrid()) {
+        return base;
+    }
+    return max(base, ownReach(surface, d));
+}
+
+// How many finest cells across a cell is of the level the deposit put this
+// gaussian in: the finest it covers no more than MAX_FOOTPRINT cells of, by
+// the deposit's own rule. Its density fills whole cells of that level, so it
+// reaches a cell and a half of that level off its surface - not of the
+// finest. On a fine grid most gaussians go in a coarser level than the
+// finest. A power of two, so scaling by it is exact.
+fn depositScale(surface: Surface) -> f32 {
+    let s = surface.sigma;
+    let lMax = max(s.x, max(s.y, s.z));
+    let lMin = min(s.x, min(s.y, s.z));
+    let lMid = s.x + s.y + s.z - lMax - lMin;
+    let levelCount = uniforms.gridDims.w;
+    var level = 0u;
+    var hl = uniforms.gridOrigin.w;
+    loop {
+        let footprint = max(1.0, 3.0 * lMid / hl) * max(1.0, 3.0 * lMax / hl);
+        if (footprint <= ${MAX_FOOTPRINT}.0 || level + 1u >= levelCount) {
+            break;
+        }
+        level += 1u;
+        hl *= 2.0;
+    }
+    return f32(1u << level);
+}
+
+// How many finest cells a distance counted in cells stands for, for a trace
+// from this gaussian: on a fine grid those of the level it was deposited in,
+// so the trace clears the gaussian's own density however wide it is. Up to
+// 256 cells, always one - the grid as it has always been, where a gaussian
+// wide enough to go in a coarser level shadows itself a little.
+fn cellScale(surface: Surface) -> f32 {
+    if (!fineGrid()) {
+        return 1.0;
+    }
+    return depositScale(surface);
 }
 
 fn safeNormalize(v: vec3f, fallback: vec3f) -> vec3f {
@@ -609,7 +694,8 @@ fn coneOcclusion(origin: vec3f, dir: vec3f, tanHalf: f32, range: f32, start: f32
     let levelCount = uniforms.gridDims.w;
 
     var tau = 0.0;
-    for (var it = 0u; it < 96u; it++) {
+    let budget = 96u * gridScale();
+    for (var it = 0u; it < budget; it++) {
         if (t >= tEnd) {
             break;
         }
@@ -650,6 +736,7 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, 
     let h0 = uniforms.gridOrigin.w;
     let range = max(uniforms.params.x, h0);
     let offset = uniforms.params.y * h0;
+    let clear = offset * cellScale(surface);
     let tanHalf = uniforms.params.z;
 
     var aoSide = array<f32, 2>(0.0, 0.0);
@@ -675,7 +762,8 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, 
             // away from a flat surface at sin(30 degrees).
             let away = normalize(mix(d, ns, surface.flatness));
             let rise = mix(1.0, select(0.5, 1.0, k == 0u), surface.flatness);
-            let v = coneOcclusion(surface.p + away * offset, d, tanHalf, range, offset, rise);
+            let leave = leaveBy(surface, away, clear);
+            let v = coneOcclusion(surface.p + away * leave, d, tanHalf, range, leave, rise);
             ao += w * v;
             bent += w * v * d;
             aoAll += v;
@@ -708,12 +796,14 @@ fn coneTrace(origin: vec3f, dir: vec3f, tanHalf: f32, maxDist: f32, start: f32, 
     let tEnd = min(maxDist, span.y);
 
     let levelCount = uniforms.gridDims.w;
-    let skipLevel = min(3u, levelCount - 1u);
+    let scale = gridScale();
+    let skipLevel = min(3u + firstLeadingBit(scale), levelCount - 1u);
     let skipStep = (0.5 * f32(1u << skipLevel) - 0.5) * h0;
 
     var tau = 0.0;
     var empty = true;
-    for (var it = 0u; it < 384u; it++) {
+    let budget = 384u * scale;
+    for (var it = 0u; it < budget; it++) {
         if (t >= tEnd) {
             break;
         }
@@ -1005,11 +1095,13 @@ fn lightFrom(li: u32, surface: Surface, erode: f32) -> TwoSides {
     // toward the light by the height over the slope - which is what dividing
     // by a shadow shows up, as a bright crescent on one side of it and a
     // dark one on the other. Capped for grazing light, where the climb would
-    // take a long way; a round gaussian has no surface to climb from.
+    // take a long way; a round gaussian has no surface to climb from. On a
+    // fine grid the cells are those of the level the gaussian was deposited
+    // in, and further while its own body reaches further.
     let offset = uniforms.params.z * uniforms.gridOrigin.w;
     let facing = abs(dot(n, toLight));
     let rise = mix(1.0, facing, flatness);
-    let along = offset / max(rise, 0.25);
+    let along = leaveBy(surface, toLight, offset * cellScale(surface) / max(rise, 0.25));
     let visibility = erodedTrace(p + toLight * along, toLight, tanHalf, max(maxDist - along, 0.0), along * rise, rise, erode);
 
     sides.plus = lit.plus * visibility + own;
@@ -1226,7 +1318,10 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, 
 
     // then the matched lights, from where the capture put the gaussian
     let surface = surfaceOf(i, worldOf(uv, true));
-    let erode = uniforms.scale.w * uniforms.gridOrigin.w;
+    // the blur being taken back out is a cell and a half of the level the
+    // shadow's caster was deposited in; this gaussian's own level stands in
+    // for its neighbours'
+    let erode = uniforms.scale.w * uniforms.gridOrigin.w * cellScale(surface);
     for (var k = 0u; k < uniforms.counts.w; k++) {
         let lit = lightFrom(uniforms.counts.z + k, surface, erode);
         bakedPlus += lit.plus;

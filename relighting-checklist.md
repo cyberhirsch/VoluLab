@@ -126,6 +126,10 @@ await relightTime(() => scene.events.fire('relight.setSettings', { delight: 0.55
 - [ ] Softness 0, 0.3 and 1: the penumbras widen, and nothing turns blotchy.
 - [ ] Grid resolution 64, 128 and 256: grid builds of ____ / ____ / ____ ms.
   Is the sharper shadow at 256 worth the time?
+- [ ] Grid resolution 512, 768 and 1024: grid builds of ____ / ____ / ____ ms.
+  Does the panel say "Using …" under the setting at any of them? That is the
+  GPU not holding the grid: note the number. Open, flat surfaces and fuzzy
+  areas should look as they do at 256, not darker; shadow edges sharper.
 - [ ] Delete something that casts a shadow: the shadow goes. Undo: it comes
   back.
 
@@ -207,6 +211,7 @@ await relightTime(() => scene.events.fire('relight.setSettings', { delight: 0.55
   - one sun: ____
   - plus an ambient light: ____
   - plus de-light: ____
+  - plus grid resolution 1024: ____
 - [ ] Save a project holding one light of every kind, including an ambient
   light with an HDRI and a volume light. Reload it: every light comes back
   the same.

@@ -366,6 +366,7 @@
     "light.emitters-use": "Использовать выделение",
     "light.emitters-failed": "Ничего не выделено",
     "light.emitters-hint": "Выделите светящиеся гауссианы - лампу, окно - и попробуйте снова.",
+    "light.resolution-used": "Используется {{used}}: GPU не вмещает более мелкую сетку для этой сцены.",
     "training.dataset": "Датасет",
     "training.pick-folder": "Выбрать папку…",
     "training.pick-files": "Выбрать файлы…",
