@@ -2,6 +2,7 @@ import { Container, NumericInput } from '@playcanvas/pcui';
 
 import { Events } from '../events';
 import { opFromModifiers } from '../select-op';
+import { fieldDefault } from '../ui/value-fields';
 
 type Pt = {x : number, y: number };
 
@@ -42,6 +43,7 @@ class FloodSelection {
             min: 0.001,
             max: 0.999
         });
+        fieldDefault(thresholdInput, thresholdInput.value);
         selectToolbar.append(thresholdInput);
 
         canvasContainer.append(selectToolbar);

@@ -9,6 +9,60 @@ months finds out why before they change it.
 
 ---
 
+## Number fields: drag, wheel, right and middle click
+
+Every number field in the app now behaves the same way: the light, camera
+and training panels, the node panel, the transform panel, settings, tool
+options, the export dialogs and the timeline.
+
+- **Right click** sets it to 0, or to its minimum where 0 is not allowed:
+  de-light floor goes to 0.02, scale to 0.001.
+- **Middle click** puts its default back:
+  - a light's or a camera's from the node's defaults;
+  - scene lighting's from the relighter's;
+  - a settings slider's from the preference behind it, through a new
+    `preferences.default` lookup, so it matches what a preferences reset
+    gives;
+  - a training field's by blanking it, which means the trainer's own
+    default;
+  - a dialog's or a tool's is the value it opens with.
+- **The wheel** steps it, one step a notch. A trackpad's small deltas add up
+  to a notch.
+- **Dragging** across it scrubs it, as in Adobe's apps, one step every four
+  pixels. A press that does not drag selects the number to type over, so
+  the field is not focused under a drag and no text gets selected.
+- **Modifiers:** Shift makes a step ten times as big, Ctrl or Cmd a tenth.
+  Alt stays PCUI's: dragging one axis of an x/y/z field with it held moves
+  all three.
+- The browser's spin arrows and PCUI's little drag handle are gone. The
+  whole field is the handle now, with a left-right cursor until it is typed
+  in.
+
+It all lives in one place, `src/ui/value-fields.ts`, on document-level
+listeners, so a field built later (a node's panel, a dialog) is covered
+without registering. Only a default has to be given, since nothing in a
+field says what that is. The measure tool's length opts out of resets: the
+scene is scaled to it, and a stray right click would shrink the whole
+scene.
+
+A drag, a burst of wheel notches and a reset are each one undo step. Each is
+bracketed by PCUI's `slider:mousedown` and `slider:mouseup`, which the
+transform panel already treats as one edit. Plain fields get `input` while
+the number moves and one `change` when it settles, so the node panel's
+fields replay once per gesture, not per pixel.
+
+Steps were chosen for dragging. The node panel's rotation moves a degree
+where it moved a hundredth. The position and size vectors move a
+centimetre, where PCUI's default for a vector is 1: a metre a step.
+
+**The trap: PCUI's vector input reads Alt off the event.** Its own
+`slider:mousedown` handler reads `evt.altKey`, and emitting the event with
+no event object threw inside it. PCUI catches handler errors and only logs
+them, so nothing failed outright. The real mouse event goes through now,
+which is also what keeps Alt-drag working.
+
+---
+
 ## Relighting: grids up to 1024
 
 Grid resolution goes to 512, 768 and 1024 now, each the number of finest

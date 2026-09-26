@@ -1,9 +1,11 @@
 import { Container } from '@playcanvas/pcui';
 
 import { i18n } from './localization';
-import { LightKind, LightOp, LightRole, LightSettings } from '../edit-ops';
+import { fieldDefault } from './value-fields';
+import { defaultLightSettings, LightKind, LightOp, LightRole, LightSettings } from '../edit-ops';
 import { Events } from '../events';
 import { loadEnvironment } from '../relight/environment';
+import { defaultRelightSettings } from '../relight/relighter';
 
 /**
  * The light node's face, mounted in the node pane like the camera's.
@@ -192,6 +194,7 @@ class LightFace extends Container {
             if (field.min !== undefined) input.min = String(field.min);
             if (field.max !== undefined) input.max = String(field.max);
             input.addEventListener('input', () => this.write(field, input));
+            fieldDefault(input, () => defaultLightSettings()[field.key] as number);
             const el = row(lightSection, field.label, input);
             // keyed by label too: one setting may show under two names
             this.inputs.set(`${field.key}:${field.label}`, { input, row: el, field });
@@ -307,6 +310,7 @@ class LightFace extends Container {
             events.fire('edit.changed');
         });
         row(sceneSection, 'light.captured-light', this.capturedInput);
+        fieldDefault(this.capturedInput, defaultRelightSettings().capturedLight);
 
         this.resolutionSelect = quiet(document.createElement('select')) as HTMLSelectElement;
         RESOLUTIONS.forEach((resolution) => {
@@ -343,6 +347,7 @@ class LightFace extends Container {
                 events.fire('edit.changed');
             });
             row(sceneSection, label, input);
+            fieldDefault(input, (defaultRelightSettings() as Record<string, any>)[key]);
             return input;
         };
         this.rangeInput = sceneNumber('light.occlusion-range', 'occlusionRange', 0.01, 0.01, 1);

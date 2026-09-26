@@ -99,6 +99,11 @@ side, split stacked, or closed. The layout persists across reloads.
 Pane kinds: **viewport**, **outliner**, **transform**, **timeline**, **splat
 data**, **settings** and **color**.
 
+Every number field works the same way. Drag across it to change it, as in
+Adobe's apps, or scroll over it to step it: Shift for ten steps, Ctrl for a
+tenth. A click without dragging selects the number to type over. Right click
+sets it to 0, and middle click puts back its default.
+
 Because there is a single WebGL canvas, `viewport` is a singleton: assigning it
 to another pane swaps kinds with whichever pane currently holds it, and closing
 the viewport pane hands the viewport to the surviving sibling rather than

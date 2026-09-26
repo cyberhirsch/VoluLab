@@ -4,6 +4,7 @@ import { Quat, Vec3 } from 'playcanvas';
 import { Events } from '../events';
 import { i18n } from './localization';
 import { Pivot } from '../pivot';
+import { fieldDefault } from './value-fields';
 
 const v = new Vec3();
 
@@ -27,6 +28,7 @@ class Transform extends Container {
         i18n.bindText(positionLabel, 'panel.scene.transform.position');
 
         const positionVector = new VectorInput({
+            step: 0.01,
             class: 'transform-expand',
             precision: 3,
             dimensions: 3,
@@ -34,6 +36,7 @@ class Transform extends Container {
             value: [0, 0, 0],
             enabled: false
         });
+        fieldDefault(positionVector, [0, 0, 0]);
 
         position.append(positionLabel);
         position.append(positionVector);
@@ -49,6 +52,7 @@ class Transform extends Container {
         i18n.bindText(rotationLabel, 'panel.scene.transform.rotation');
 
         const rotationVector = new VectorInput({
+            step: 1,
             class: 'transform-expand',
             precision: 2,
             dimensions: 3,
@@ -56,6 +60,7 @@ class Transform extends Container {
             value: [0, 0, 0],
             enabled: false
         });
+        fieldDefault(rotationVector, [0, 0, 0]);
 
         rotation.append(rotationLabel);
         rotation.append(rotationVector);
@@ -78,6 +83,7 @@ class Transform extends Container {
             max: 10000,
             enabled: false
         });
+        fieldDefault(scaleInput, 1);
 
         scale.append(scaleLabel);
         scale.append(scaleInput);

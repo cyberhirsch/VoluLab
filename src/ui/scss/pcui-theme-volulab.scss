@@ -365,12 +365,6 @@ $playicons-regular: url('data:application/font-woff;charset=utf-7;base64,d09GRgA
     display: none !important;
 }
 
-.pcui-numeric-input:hover {
-    .pcui-numeric-input-slider-control {
-        display: block;
-    }
-}
-
 .pcui-numeric-input.pcui-disabled:hover {
     .pcui-numeric-input-slider-control {
         display: none;

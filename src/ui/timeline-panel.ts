@@ -4,6 +4,7 @@ import { Events } from '../events';
 import { ShortcutManager } from '../shortcut-manager';
 import { i18n } from './localization';
 import { Tooltips } from './tooltips';
+import { fieldDefault } from './value-fields';
 
 class Ticks extends Container {
     constructor(events: Events, tooltips: Tooltips, args = {}) {
@@ -386,6 +387,7 @@ class TimelinePanel extends Container {
             max: 10000,
             precision: 0
         });
+        fieldDefault(frames, frames.value);
 
         frames.on('change', (value: number) => {
             events.fire('timeline.setFrames', value);
@@ -404,6 +406,7 @@ class TimelinePanel extends Container {
             step: 0.05,
             value: 1
         });
+        fieldDefault(smoothness, smoothness.value);
 
         smoothness.on('change', (value: number) => {
             events.fire('timeline.setSmoothness', value);

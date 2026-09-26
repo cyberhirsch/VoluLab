@@ -195,6 +195,12 @@ const registerPreferences = (events: Events, config: SceneConfig, urlArgs: any) 
         });
     });
 
+    // what a setting is when nothing is stored: what a middle click on its
+    // field puts back
+    events.function('preferences.default', (key: string) => {
+        return descriptors.find(d => d.key === key)?.getDefault();
+    });
+
     // re-apply stored preferences (used by File > New)
     events.on('preferences.apply', () => {
         apply();

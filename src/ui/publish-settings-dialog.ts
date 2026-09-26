@@ -6,6 +6,7 @@ import { i18n } from './localization';
 import { PublishSettings, UserStatus } from '../publish';
 import { AnimTrack, ExperienceSettings, defaultPostEffectSettings } from '../splat-serialize';
 import sceneExport from './svg/export.svg';
+import { fieldDefault } from './value-fields';
 
 const createSvg = (svgString: string, args = {}) => {
     const decodedStr = decodeURIComponent(svgString.substring('data:image/svg+xml,'.length));
@@ -150,6 +151,7 @@ class PublishSettingsDialog extends Container {
             precision: 0,
             value: 60
         });
+        fieldDefault(fovSlider, fovSlider.value);
         const fovRow = new Container({ class: 'row' });
         fovRow.append(fovLabel);
         fovRow.append(fovSlider);

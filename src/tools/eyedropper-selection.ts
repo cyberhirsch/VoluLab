@@ -1,6 +1,7 @@
 import { Container, NumericInput } from '@playcanvas/pcui';
 
 import { Events } from '../events';
+import { fieldDefault } from '../ui/value-fields';
 
 type PointerOp = 'set' | 'add' | 'remove';
 
@@ -33,6 +34,7 @@ class EyedropperSelection {
             min: 0,
             max: 1
         });
+        fieldDefault(thresholdInput, thresholdInput.value);
 
         selectToolbar.append(thresholdInput);
         canvasContainer.append(selectToolbar);

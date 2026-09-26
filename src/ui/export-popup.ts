@@ -6,6 +6,7 @@ import { Events } from '../events';
 import { ExportType, SceneExportOptions } from '../file-handler';
 import { AnimTrack, ExperienceSettings, defaultPostEffectSettings } from '../splat-serialize';
 import sceneExport from './svg/export.svg';
+import { fieldDefault } from './value-fields';
 
 const createSvg = (svgString: string, args = {}) => {
     const decodedStr = decodeURIComponent(svgString.substring('data:image/svg+xml,'.length));
@@ -169,6 +170,7 @@ class ExportPopup extends Container {
             precision: 0,
             value: 60
         });
+        fieldDefault(fovSlider, fovSlider.value);
 
         fovRow.append(fovLabel);
         fovRow.append(fovSlider);
@@ -210,6 +212,7 @@ class ExportPopup extends Container {
             precision: 0,
             value: 3
         });
+        fieldDefault(bandsSlider, bandsSlider.value);
 
         bandsRow.append(bandsLabel);
         bandsRow.append(bandsSlider);
@@ -232,6 +235,7 @@ class ExportPopup extends Container {
             precision: 0,
             value: 10
         });
+        fieldDefault(iterationsSlider, iterationsSlider.value);
 
         iterationsRow.append(iterationsLabel);
         iterationsRow.append(iterationsSlider);

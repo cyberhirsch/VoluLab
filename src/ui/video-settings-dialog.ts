@@ -4,6 +4,7 @@ import { Events } from '../events';
 import { buildVideoEncoderConfig, VideoCodecChoice, VideoSettings } from '../video-config';
 import { i18n } from './localization';
 import sceneExport from './svg/export.svg';
+import { fieldDefault } from './value-fields';
 
 type ResolutionOption = {
     v: string;
@@ -296,6 +297,7 @@ class VideoSettingsDialog extends Container {
             precision: 0,
             value: [0, totalFrames - 1]
         });
+        fieldDefault(frameRangeInput, frameRangeInput.value);
         i18n.onChange(() => {
             frameRangeInput.placeholder = [i18n.t('popup.render-video.frame-range-first'), i18n.t('popup.render-video.frame-range-last')];
         }, frameRangeInput);

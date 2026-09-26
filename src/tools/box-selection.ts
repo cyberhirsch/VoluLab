@@ -14,6 +14,7 @@ import intersectSvg from '../ui/svg/select-intersect.svg';
 import removeSvg from '../ui/svg/select-remove.svg';
 import setSvg from '../ui/svg/select-set.svg';
 import { Tooltips } from '../ui/tooltips';
+import { fieldDefault } from '../ui/value-fields';
 
 const createSvg = (svgString: string) => {
     const decodedStr = decodeURIComponent(svgString.substring('data:image/svg+xml,'.length));
@@ -66,17 +67,20 @@ class BoxSelection {
         i18n.bindText(positionLabel, 'select-toolbar.position');
 
         const position = new VectorInput({
+            step: 0.01,
             class: 'select-toolbar-vector',
             precision: 2,
             dimensions: 3,
             placeholder: ['X', 'Y', 'Z'],
             value: [0, 0, 0]
         });
+        fieldDefault(position, position.value);
 
         const sizeLabel = new Label({ class: 'select-toolbar-label' });
         i18n.bindText(sizeLabel, 'select-toolbar.size');
 
         const size = new VectorInput({
+            step: 0.01,
             class: 'select-toolbar-vector',
             precision: 2,
             dimensions: 3,
@@ -84,11 +88,13 @@ class BoxSelection {
             value: [box.lenX, box.lenY, box.lenZ],
             min: 0.01
         });
+        fieldDefault(size, size.value);
 
         const rotationLabel = new Label({ class: 'select-toolbar-label', hidden: true });
         i18n.bindText(rotationLabel, 'select-toolbar.rotation');
 
         const rotation = new VectorInput({
+            step: 1,
             class: 'select-toolbar-vector',
             precision: 2,
             dimensions: 3,
@@ -96,6 +102,7 @@ class BoxSelection {
             value: [0, 0, 0],
             hidden: true
         });
+        fieldDefault(rotation, [0, 0, 0]);
 
         selectToolbar.append(translateButton);
         selectToolbar.append(rotateButton);

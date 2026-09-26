@@ -1,6 +1,7 @@
 import { Container } from '@playcanvas/pcui';
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
+import { fieldDefault } from './value-fields';
 import { AddVoxelsOp, CameraOp, LightOp, CleanupOp, CropOp, DatasetOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
@@ -470,7 +471,9 @@ class NodePanel extends Container {
             op.setVolume(op.shape, m, op.keepInside);
         };
 
-        const triple = (label: string, v: Vec3) => {
+        // neutral: what a middle click puts back - a volume at the origin,
+        // a unit across
+        const triple = (label: string, v: Vec3, neutral: number) => {
             const row = this.row(label);
             const fields = (['x', 'y', 'z'] as const).map((axis) => {
                 const input = document.createElement('input');
@@ -478,6 +481,7 @@ class NodePanel extends Container {
                 input.className = 'nd-num';
                 input.step = '0.05';
                 input.value = `${+v[axis].toFixed(4)}`;
+                fieldDefault(input, neutral);
                 input.addEventListener('keydown', e => e.stopPropagation());
                 input.addEventListener('change', () => {
                     this.events.invoke('edit.refresh', index, () => {
@@ -500,8 +504,8 @@ class NodePanel extends Container {
             op.setVolume(op.shape, op.transform, !op.keepInside);
         });
 
-        triple('centre', t);
-        triple('size', s);
+        triple('centre', t, 0);
+        triple('size', s, 1);
 
         this.stat('removed', op.affected < 0 ? 'not applied' : op.affected.toLocaleString());
     }
@@ -575,9 +579,13 @@ class NodePanel extends Container {
     private buildTransform(op: EntityTransformOp, index: number) {
         const euler = op.newt.rotation.getEulerAngles();
 
+        // neutral: what a middle click puts back; step: what a wheel notch
+        // or a few pixels of drag move it by
         const triple = (
             label: string,
             values: number[],
+            neutral: number,
+            step: number,
             apply: (v: number[]) => void
         ) => {
             const row = this.row(label);
@@ -585,8 +593,9 @@ class NodePanel extends Container {
                 const input = document.createElement('input');
                 input.type = 'number';
                 input.className = 'nd-num';
-                input.step = '0.01';
+                input.step = String(step);
                 input.value = `${+value.toFixed(4)}`;
+                fieldDefault(input, neutral);
                 input.addEventListener('keydown', e => e.stopPropagation());
                 input.addEventListener('change', () => {
                     const next = fields.map(f => parseFloat(f.value) || 0);
@@ -598,15 +607,15 @@ class NodePanel extends Container {
             this.body.appendChild(row);
         };
 
-        triple('position', [op.newt.position.x, op.newt.position.y, op.newt.position.z], (v) => {
+        triple('position', [op.newt.position.x, op.newt.position.y, op.newt.position.z], 0, 0.01, (v) => {
             op.newt.position.set(v[0], v[1], v[2]);
         });
 
-        triple('rotation', [euler.x, euler.y, euler.z], (v) => {
+        triple('rotation', [euler.x, euler.y, euler.z], 0, 1, (v) => {
             op.newt.rotation.setFromEulerAngles(v[0], v[1], v[2]);
         });
 
-        triple('scale', [op.newt.scale.x, op.newt.scale.y, op.newt.scale.z], (v) => {
+        triple('scale', [op.newt.scale.x, op.newt.scale.y, op.newt.scale.z], 1, 0.01, (v) => {
             // a zero scale collapses the object and cannot be undone by typing,
             // because every later value multiplies through it
             op.newt.scale.set(v[0] || 1e-4, v[1] || 1e-4, v[2] || 1e-4);

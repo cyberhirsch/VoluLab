@@ -1,0 +1,38 @@
+// Number fields are dragged, wheeled and clicked (see value-fields.ts), so
+// the browser's spin arrows go, and so does PCUI's drag handle - the whole
+// field is the handle now. The cursor says so until the field is being
+// typed in.
+
+input[type='number'] {
+    appearance: textfield;
+    -moz-appearance: textfield;
+    cursor: ew-resize;
+
+    &::-webkit-inner-spin-button,
+    &::-webkit-outer-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+    }
+
+    &:focus,
+    &:disabled {
+        cursor: auto;
+    }
+}
+
+.pcui-numeric-input > input {
+    cursor: ew-resize;
+}
+
+.pcui-numeric-input.pcui-focus > input,
+.pcui-numeric-input.pcui-disabled > input,
+.pcui-numeric-input.pcui-readonly > input {
+    cursor: auto;
+}
+
+// while a field is scrubbed the cursor stays the scrub cursor, wherever
+// the pointer wanders
+body.value-scrubbing,
+body.value-scrubbing * {
+    cursor: ew-resize !important;
+}

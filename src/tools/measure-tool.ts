@@ -9,6 +9,7 @@ import { ToolOverlay, OverlayWriter } from '../tool-overlay';
 import { Transform } from '../transform';
 import { DimensionLabels } from '../ui/dimension-labels';
 import { i18n } from '../ui/localization';
+import { fieldFixed } from '../ui/value-fields';
 
 // pointer movement below this many pixels still counts as a click
 const CLICK_TOLERANCE = 4;
@@ -55,6 +56,8 @@ class MeasureTool {
             min: 0.0001,
             value: 0
         });
+        // a length the scene is scaled to: no click resets it
+        fieldFixed(lengthInput);
         let suppressUI = 0;
 
         const clearButton = new Button({ class: 'select-toolbar-button', enabled: false });

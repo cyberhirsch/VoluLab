@@ -4,6 +4,7 @@ import { Events } from '../events';
 import { ImageSettings } from '../render';
 import { i18n } from './localization';
 import sceneExport from './svg/export.svg';
+import { fieldDefault } from './value-fields';
 
 const createSvg = (svgString: string, args = {}) => {
     const decodedStr = decodeURIComponent(svgString.substring('data:image/svg+xml,'.length));
@@ -102,6 +103,7 @@ class ImageSettingsDialog extends Container {
             precision: 0,
             value: [1024, 768]
         });
+        fieldDefault(resolutionValue, resolutionValue.value);
         const resolutionRow = new Container({ class: 'row', enabled: false });
         resolutionRow.append(resolutionLabel);
         resolutionRow.append(resolutionValue);
@@ -134,6 +136,7 @@ class ImageSettingsDialog extends Container {
             precision: 0,
             value: 90
         });
+        fieldDefault(qualitySlider, qualitySlider.value);
         const qualityRow = new Container({ class: 'row' });
         qualityRow.append(qualityLabel);
         qualityRow.append(qualitySlider);

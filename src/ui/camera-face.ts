@@ -1,7 +1,8 @@
 import { Container } from '@playcanvas/pcui';
 
 import { i18n } from './localization';
-import { CameraOp } from '../edit-ops';
+import { fieldDefault } from './value-fields';
+import { CameraOp, defaultCameraSettings } from '../edit-ops';
 import { Events } from '../events';
 
 /**
@@ -103,6 +104,7 @@ class CameraFace extends Container {
                 // also trigger a shortcut
                 input.addEventListener('keydown', e => e.stopPropagation());
                 input.addEventListener('input', () => this.write(field, input));
+                fieldDefault(input, defaultCameraSettings()[field.key]);
 
                 row.appendChild(text);
                 row.appendChild(input);

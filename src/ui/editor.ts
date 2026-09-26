@@ -27,6 +27,7 @@ import { TimelinePanel } from './timeline-panel';
 import { Tooltips } from './tooltips';
 import { TrainingFace } from './training-face';
 import { TransformPanel } from './transform-panel';
+import { installValueFields } from './value-fields';
 import { VideoSettingsDialog } from './video-settings-dialog';
 import { ViewCube } from './view-cube';
 import { ViewModeOverlay } from './view-mode-overlay';
@@ -47,6 +48,10 @@ class EditorUI {
     tooltips: Tooltips;
 
     constructor(events: Events) {
+        // every number field: right click zeroes, middle click resets, the
+        // wheel steps, a drag scrubs
+        installValueFields();
+
         // favicon
         const link = document.createElement('link');
         link.rel = 'icon';

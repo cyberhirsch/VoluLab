@@ -6,6 +6,7 @@ import type { GridPlane } from '../infinite-grid';
 import { ShortcutManager } from '../shortcut-manager';
 import { i18n } from './localization';
 import { Tooltips } from './tooltips';
+import { fieldDefault } from './value-fields';
 
 class SettingsPanel extends Container {
     constructor(events: Events, tooltips: Tooltips, args = {}) {
@@ -489,6 +490,13 @@ class SettingsPanel extends Container {
         shBandsSlider.on('change', (value: number) => {
             events.fire('view.setBands', value);
         });
+
+        // a middle click on a slider's number puts back the setting's default
+        const preferred = (key: string) => () => events.invoke('preferences.default', key) as number;
+        fieldDefault(shBandsSlider, preferred('view.bands'));
+        fieldDefault(centersSizeSlider, preferred('camera.splatSize'));
+        fieldDefault(cameraFlySpeedSlider, preferred('camera.flySpeed'));
+        fieldDefault(fovSlider, preferred('camera.fov'));
 
         // splat size
 

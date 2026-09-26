@@ -1,6 +1,7 @@
 import { Container } from '@playcanvas/pcui';
 
 import { i18n } from './localization';
+import { fieldDefault } from './value-fields';
 import { TrainOp } from '../edit-ops';
 import { Events } from '../events';
 import { TrainLoad, TrainLogLine } from '../training/brush-engine';
@@ -131,6 +132,9 @@ class TrainingFace extends Container {
             input.type = 'number';
             input.step = String(field.step);
             input.placeholder = '—';
+            // blank is the trainer's own default, so that is what a middle
+            // click puts back
+            fieldDefault(input, '');
             input.addEventListener('keydown', e => e.stopPropagation());
             input.addEventListener('change', () => {
                 if (!this.op) return;

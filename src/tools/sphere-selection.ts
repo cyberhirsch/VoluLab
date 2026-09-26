@@ -14,6 +14,7 @@ import intersectSvg from '../ui/svg/select-intersect.svg';
 import removeSvg from '../ui/svg/select-remove.svg';
 import setSvg from '../ui/svg/select-set.svg';
 import { Tooltips } from '../ui/tooltips';
+import { fieldDefault } from '../ui/value-fields';
 
 const createSvg = (svgString: string) => {
     const decodedStr = decodeURIComponent(svgString.substring('data:image/svg+xml,'.length));
@@ -65,12 +66,14 @@ class SphereSelection {
         i18n.bindText(positionLabel, 'select-toolbar.position');
 
         const position = new VectorInput({
+            step: 0.01,
             class: 'select-toolbar-vector',
             precision: 2,
             dimensions: 3,
             placeholder: ['X', 'Y', 'Z'],
             value: [0, 0, 0]
         });
+        fieldDefault(position, position.value);
 
         const radiusLabel = new Label({ class: 'select-toolbar-label' });
         i18n.bindText(radiusLabel, 'select-toolbar.radius');
@@ -80,6 +83,7 @@ class SphereSelection {
             value: sphere.radius,
             min: 0.01
         });
+        fieldDefault(radius, radius.value);
 
         selectToolbar.append(translateButton);
         selectToolbar.append(scaleButton);
