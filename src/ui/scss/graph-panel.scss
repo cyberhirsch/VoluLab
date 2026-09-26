@@ -145,6 +145,34 @@
     right: -3px;
 }
 
+// a named input, on the top edge: a wire comes down into it
+.gn-port-top {
+    top: -3px;
+    margin-top: 0;
+
+    &.gn-port-wired {
+        border-color: $ink-5;
+    }
+
+    // held while a wire it would take is being dragged
+    &.gn-port-ready {
+        border-color: $ink-7;
+        background-color: $ink-7;
+    }
+}
+
+// the input's name, just over it
+.gn-port-label {
+    position: absolute;
+    bottom: 100%;
+    margin-bottom: 1px;
+    color: $ink-4;
+    font-size: $font-size-xs;
+    line-height: 1;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
 .gn-empty {
     position: absolute;
     top: 50%;

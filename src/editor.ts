@@ -1233,20 +1233,26 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         return op;
     });
 
-    /** The hand-drawn wire: an import node's output into a train node. */
-    events.on('graph.connectDataset', (from: DatasetOp, to: TrainOp) => {
-        if (!(from instanceof DatasetOp) || !(to instanceof TrainOp)) return;
-        to.datasetOp = from;
-        to.inputs = [from.output];
-        to.settings.datasetName = from.sourceName;
-        events.fire('edit.changed');
+    /**
+     * A hand-drawn wire into one of a node's named inputs, and one taken
+     * out again. What a wire means is the node's own business, so each kind
+     * of node is routed to what its input takes: a train node's dataset.
+     */
+    events.on('graph.connect', (op: EditOp, port: string, source: object) => {
+        if (op instanceof TrainOp && port === 'dataset' && source instanceof DatasetOp) {
+            op.datasetOp = source;
+            op.inputs = [source.output];
+            op.settings.datasetName = source.sourceName;
+            events.fire('edit.changed');
+        }
     });
 
-    events.on('graph.disconnectDataset', (op: TrainOp) => {
-        if (!(op instanceof TrainOp) || !op.datasetOp) return;
-        op.datasetOp = undefined;
-        op.inputs = [];
-        events.fire('edit.changed');
+    events.on('graph.disconnect', (op: EditOp, port: string) => {
+        if (op instanceof TrainOp && port === 'dataset' && op.datasetOp) {
+            op.datasetOp = undefined;
+            op.inputs = [];
+            events.fire('edit.changed');
+        }
     });
 
     registerTraining(events, scene);

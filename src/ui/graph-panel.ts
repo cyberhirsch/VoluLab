@@ -1,6 +1,6 @@
 import { Container } from '@playcanvas/pcui';
 
-import { AnimTrackEditOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, SelectOp, SelectStep, ShapeTransformOp, principalOp } from '../edit-ops';
+import { AnimTrackEditOp, DatasetOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, PortSpec, SelectOp, SelectStep, ShapeTransformOp, SourceKind, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SceneLight } from '../scene-light';
 import { describeQuery, isParametric } from '../select-query';
@@ -38,6 +38,11 @@ import { MenuEntry, contributeMenuItems, showContextMenu } from './context-menu'
  * Free placement is a real position, kept per op, but the layout is only ever
  * a picture of a linear history: there is no rewiring, because the order of
  * the chain is the order the edits happened in.
+ *
+ * What a node takes besides its chain comes in through named inputs on its
+ * top edge - the dataset a train node trains on, say. Those are wired by
+ * hand: drag out of a node's output and let go over the node, and the wire
+ * goes into the first input that takes what it carries.
  */
 
 const NODE_W = 148;
@@ -45,6 +50,10 @@ const NODE_H = 38;
 const COL_GAP = 44;
 const LANE_GAP = 34;
 const PAD = 28;
+
+// how far above a node its inputs' labels reach, which a dropped wire still
+// counts as landing on the node
+const PORT_REACH = 14;
 
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 2.5;
@@ -156,6 +165,13 @@ const opSplat = (op: EditOp): Splat | null => {
     return ((op as any).splat as Splat) ?? null;
 };
 
+// What a wire dragged out of a node carries. A select node's wire carries its
+// selection and the object under it, so an input that takes either can have it.
+interface Offer {
+    kind: SourceKind;
+    source: object;
+}
+
 interface NodeModel {
     /** history index this node moves the cursor past, or -1 for an import */
     index: number;
@@ -174,9 +190,10 @@ interface NodeModel {
     isSource?: boolean;
     /** last in its chain by nature - an output writes, it does not pass on */
     terminal?: boolean;
-    // draws an input port even while nothing arrives - a train node's
-    // dataset input exists before it is wired
-    wantsInput?: boolean;
+    /** named inputs besides the chain's, as the op declares them */
+    ports?: PortSpec[];
+    /** what a wire dragged out of this node carries, most specific first */
+    offers?: Offer[];
     /** what to key a stored position and a selection against */
     key: object;
 }
@@ -184,7 +201,23 @@ interface NodeModel {
 interface EdgeModel {
     from: NodeModel;
     to: NodeModel;
+    /** the named input it arrives at, rather than the chain's */
+    port?: string;
 }
+
+// where a named input sits along the node's top edge: spread evenly, so one
+// input is centred and two split the edge in thirds
+const portX = (node: NodeModel, name: string) => {
+    const ports = node.ports ?? [];
+    const k = Math.max(0, ports.findIndex(p => p.name === name));
+    return NODE_W * (k + 1) / (ports.length + 1);
+};
+
+// an op declares its named inputs itself; the graph only draws them
+const portsOf = (op: EditOp): PortSpec[] | undefined => {
+    const ports = (op as any).ports as PortSpec[] | undefined;
+    return ports?.length ? ports : undefined;
+};
 
 class GraphPanel extends Container {
     private events: Events;
@@ -606,10 +639,15 @@ class GraphPanel extends Container {
                     applied: i < cursor,
                     splat: sceneOutput,
                     bypassed: !!op.bypassed,
+                    ports: portsOf(op),
                     key: op
                 });
-                const lane = laneOf(produces);
-                crossLinks.push({ op, node: lane[lane.length - 1] });
+                // a node with named inputs is wired through those alone, and
+                // one that takes nothing in (a light, a dataset) is a source
+                if (!portsOf(op) && ((op as any).inputs ?? []).length > 0) {
+                    const lane = laneOf(produces);
+                    crossLinks.push({ op, node: lane[lane.length - 1] });
+                }
                 return;
             }
 
@@ -657,16 +695,16 @@ class GraphPanel extends Container {
                 splat,
                 select: !!select,
                 terminal: op.name === 'output',
-                wantsInput: pendingProducer,
                 bypassed: !!op.bypassed,
                 // frozen only when nothing in it can be re-run
                 frozen: steps.length ? steps.every(s => !isParametric(s.query)) : undefined,
+                ports: portsOf(op),
                 key: op
             });
 
-            // a pending producer that consumes something (a train node
-            // waiting on its import node) still owes the graph that edge
-            if (((op as any).inputs ?? []).length > 0) {
+            // a pending producer that consumes something still owes the
+            // graph that edge - unless it is wired through named inputs
+            if (!portsOf(op) && ((op as any).inputs ?? []).length > 0) {
                 const lane = laneOf(key);
                 crossLinks.push({ op, node: lane[lane.length - 1] });
             }
@@ -705,6 +743,27 @@ class GraphPanel extends Container {
                 if (!lane?.length) return;
                 edges.push({ from: lane[lane.length - 1], to: node });
             });
+        });
+
+        // A named input's edge comes from whatever feeds it: an object's
+        // wire from the end of its lane, which is the object as its edits
+        // leave it, and anything else's from its own node.
+        nodes.forEach((node) => {
+            node.ports?.forEach((port) => {
+                if (!port.source) return;
+                const lane = lanes.get(port.source);
+                const from = lane?.length ? lane[lane.length - 1] : nodes.find(n => n.key === port.source);
+                if (from) edges.push({ from, to: node, port: port.name });
+            });
+        });
+
+        // what each node's wire carries, for the inputs it can be dropped on
+        nodes.forEach((node) => {
+            const offers: Offer[] = [];
+            if (node.key instanceof DatasetOp) offers.push({ kind: 'dataset', source: node.key });
+            if (node.select) offers.push({ kind: 'selection', source: node.key });
+            if (node.splat instanceof Splat) offers.push({ kind: 'object', source: node.splat });
+            node.offers = offers;
         });
 
         return { nodes, edges };
@@ -774,14 +833,31 @@ class GraphPanel extends Container {
             el.appendChild(name);
         }
 
-        // An input port only where an edge actually arrives - or where one is
-        // owed: a train node's dataset input exists before it is wired, so
-        // there is something to aim a dragged wire at.
-        if (!node.isSource || node.wantsInput) {
+        // an input port only where an edge actually arrives
+        if (!node.isSource) {
             const inPort = document.createElement('div');
             inPort.className = 'gn-port gn-port-in';
             el.appendChild(inPort);
         }
+
+        // Named inputs along the top, each with its name over it. They are
+        // drawn whether wired or not: an unwired one is somewhere to aim.
+        node.ports?.forEach((port) => {
+            const x = portX(node, port.name);
+            const stud = document.createElement('div');
+            stud.className = 'gn-port gn-port-top';
+            if (port.source) stud.classList.add('gn-port-wired');
+            stud.style.left = `${x - 3}px`;
+            stud.dataset.accepts = port.accepts.join(' ');
+            stud.title = port.source ? port.label : `${port.label}: drag a wire here`;
+            el.appendChild(stud);
+
+            const label = document.createElement('div');
+            label.className = 'gn-port-label';
+            label.textContent = port.label;
+            label.style.left = `${x + 5}px`;
+            el.appendChild(label);
+        });
 
         // an output writes a file; nothing hangs off the far side of it
         if (!node.terminal) {
@@ -835,24 +911,46 @@ class GraphPanel extends Container {
                     disabled: node.index === -1 || many,
                     action: () => this.events.fire('edit.goto', node.index + 1)
                 },
-                // a wired train node can be cut loose again
-                ...(((node.key as any)?.name === 'train' && (node.key as any)?.datasetOp) ? [{
-                    label: 'disconnect dataset',
-                    action: () => this.events.fire('graph.disconnectDataset', node.key)
-                }] : [])
+                // a wired input can be cut loose again
+                ...(node.ports ?? []).filter(port => port.source).map(port => ({
+                    label: `disconnect ${port.label}`,
+                    action: () => this.events.fire('graph.disconnect', node.key, port.name)
+                }))
             ]);
         });
 
         return el;
     }
 
+    /** The node a dropped wire landed on, counting its inputs' labels above it. */
+    private nodeAt(at: { x: number, y: number }, except: NodeModel) {
+        return this.nodes.find(n => n !== except &&
+            at.x >= n.x && at.x <= n.x + NODE_W &&
+            at.y >= n.y - (n.ports ? PORT_REACH : 0) && at.y <= n.y + NODE_H);
+    }
+
+    /**
+     * The input a wire dropped on a node goes into: of those that take what
+     * it carries, the one nearest the pointer. The wire gives each input the
+     * most specific thing it carries that the input takes.
+     */
+    private portFor(target: NodeModel, offers: Offer[], at: { x: number, y: number }) {
+        const fits = (target.ports ?? [])
+        .map(port => ({ port, offer: offers.find(o => port.accepts.includes(o.kind)) }))
+        .filter(fit => fit.offer);
+        const distance = (port: PortSpec) => Math.abs(target.x + portX(target, port.name) - at.x);
+        fits.sort((a, b) => distance(a.port) - distance(b.port));
+        return fits[0] ?? null;
+    }
+
     /**
      * Drag out of an output port to attach something.
      *
-     * A link is drawn to the pointer while dragging, and letting go offers the
-     * nodes that can act on this object. The chain is linear, so "connecting"
-     * means appending to that object's chain - there is nowhere else a new node
-     * could go, and no second input to choose between.
+     * A link is drawn to the pointer while dragging. Let go over a node with
+     * an input that takes what this one carries, and the wire goes into it.
+     * Let go anywhere else, and the nodes that can act on this object are
+     * offered: the chain is linear, so attaching one means appending to that
+     * object's chain - there is nowhere else a new node could go.
      */
     private bindPortDrag(port: HTMLElement, node: NodeModel) {
         port.addEventListener('pointerdown', (e: PointerEvent) => {
@@ -865,6 +963,14 @@ class GraphPanel extends Container {
             const link = document.createElementNS(SVG_NS, 'path');
             link.setAttribute('class', 'gn-link');
             this.edges.appendChild(link);
+
+            // the inputs this wire could go into light up while it is held
+            const kinds = (node.offers ?? []).map(o => o.kind);
+            const ready = [...this.stage.querySelectorAll<HTMLElement>('.gn-port-top')].filter((stud) => {
+                if (stud.parentElement === port.parentElement) return false;
+                return (stud.dataset.accepts ?? '').split(' ').some(k => kinds.includes(k as SourceKind));
+            });
+            ready.forEach(stud => stud.classList.add('gn-port-ready'));
 
             const draw = (to: { x: number, y: number }) => {
                 const bend = Math.max(24, Math.abs(to.x - from.x) * 0.5);
@@ -879,30 +985,31 @@ class GraphPanel extends Container {
                 port.removeEventListener('pointerup', up);
                 releasePointer(port, ev.pointerId);
                 link.remove();
+                ready.forEach(stud => stud.classList.remove('gn-port-ready'));
 
-                // released over a node that can take this wire? then it
-                // connects - an import node's dataset into a train node
+                // released over a node with an input that takes this wire?
+                // then it goes in - an import node's dataset into a train node
                 const at = this.toStage(ev.clientX, ev.clientY);
-                const target = this.nodes.find(n => n !== node &&
-                    at.x >= n.x && at.x <= n.x + NODE_W &&
-                    at.y >= n.y && at.y <= n.y + NODE_H);
-                if ((node.key as any)?.name === 'dataset') {
-                    if (target && (target.key as any)?.name === 'train') {
-                        this.events.fire('graph.connectDataset', node.key, target.key);
-                    } else {
-                        // released over nothing: offer what a dataset can
-                        // feed, created at the drop point and wired up
-                        showContextMenu(document, ev.clientX, ev.clientY, [
-                            {
-                                label: 'train',
-                                action: () => {
-                                    const op = this.events.invoke('training.addNode');
-                                    this.positions.set(op, { x: at.x, y: at.y - NODE_H / 2 });
-                                    this.events.fire('graph.connectDataset', node.key, op);
-                                }
+                const target = this.nodeAt(at, node);
+                const fit = target ? this.portFor(target, node.offers ?? [], at) : null;
+                if (fit) {
+                    this.events.fire('graph.connect', target.key, fit.port.name, fit.offer.source);
+                    return;
+                }
+
+                if (node.key instanceof DatasetOp) {
+                    // released over nothing: offer what a dataset can feed,
+                    // created at the drop point and wired up
+                    showContextMenu(document, ev.clientX, ev.clientY, [
+                        {
+                            label: 'train',
+                            action: () => {
+                                const op = this.events.invoke('training.addNode');
+                                this.positions.set(op, { x: at.x, y: at.y - NODE_H / 2 });
+                                this.events.fire('graph.connect', op, 'dataset', node.key);
                             }
-                        ]);
-                    }
+                        }
+                    ]);
                     return;
                 }
 
@@ -1055,17 +1162,20 @@ class GraphPanel extends Container {
         this.edges.setAttribute('height', `${height}`);
         this.edges.setAttribute('viewBox', `0 0 ${width} ${height}`);
 
-        edges.forEach(({ from, to }) => {
+        edges.forEach(({ from, to, port }) => {
             const x1 = from.x + NODE_W;
             const y1 = from.y + NODE_H / 2;
-            const x2 = to.x;
-            const y2 = to.y + NODE_H / 2;
+            // a named input is on the top edge, so its wire comes down into it
+            const x2 = port ? to.x + portX(to, port) : to.x;
+            const y2 = port ? to.y : to.y + NODE_H / 2;
             // the bend keeps a backwards edge from cutting straight through the
             // node it comes out of, once things have been dragged around
             const bend = Math.max(24, Math.abs(x2 - x1) * 0.5);
+            const drop = Math.max(24, Math.abs(y2 - y1) * 0.5);
+            const end = port ? `${x2} ${y2 - drop}` : `${x2 - bend} ${y2}`;
 
             const path = document.createElementNS(SVG_NS, 'path');
-            path.setAttribute('d', `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`);
+            path.setAttribute('d', `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${end}, ${x2} ${y2}`);
             const classes = ['gn-edge'];
             if (!to.applied) classes.push('gn-pending');
             if (to.bypassed || from.bypassed) classes.push('gn-edge-bypassed');

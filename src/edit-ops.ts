@@ -35,6 +35,25 @@ interface EditOp {
     bypassed?: boolean;
 }
 
+/**
+ * What can be wired into a node's named input: an object's gaussians, the
+ * gaussians a select node picked, a primitive, or a training dataset.
+ */
+type SourceKind = 'object' | 'selection' | 'primitive' | 'dataset';
+
+/**
+ * A named input on a node, besides the object's own chain: what it is
+ * called, what it takes, and what is wired into it now - the op or object
+ * that feeds it, or null. The graph draws one port per entry and wires a
+ * dropped connection to the first that takes what was dragged.
+ */
+interface PortSpec {
+    name: string;
+    label: string;
+    accepts: SourceKind[];
+    source: object | null;
+}
+
 const enum BitOp {
     SET,
     CLEAR,
@@ -1688,6 +1707,11 @@ class TrainOp {
     }
 
     /** what the graph labels this node with */
+    /** the dataset it trains on is wired in, not chained */
+    get ports(): PortSpec[] {
+        return [{ name: 'dataset', label: 'dataset', accepts: ['dataset'], source: this.datasetOp ?? null }];
+    }
+
     get sourceLabel() {
         return this.datasetOp?.sourceName ?? this.settings.datasetName;
     }
@@ -1745,6 +1769,8 @@ const principalOp = (op: EditOp): EditOp => {
 
 export {
     EditOp,
+    PortSpec,
+    SourceKind,
     SelectMode,
     SelectStep,
     StateOp,

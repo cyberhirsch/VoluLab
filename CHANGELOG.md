@@ -9,6 +9,37 @@ months finds out why before they change it.
 
 ---
 
+## Graph: named inputs
+
+A node can take things in besides its chain, through named inputs on its
+top edge, each with its name over it. The first is the train node's dataset,
+which used to arrive on its left edge as though it were the chain.
+
+- **An op declares its inputs** with a `ports` getter: a name, a label, the
+  kinds it takes - an object, a selection, a primitive or a dataset - and
+  what is wired in now. The graph only draws them; `graph.connect` and
+  `graph.disconnect` in the editor say what a wire means for each kind of
+  node.
+- **Wiring by hand.** Drag out of a node's output and the inputs that take
+  what it carries light up. Let go over one of those nodes and the wire goes
+  into the input nearest the pointer, among those that take it. A select
+  node's wire carries its selection and the object under it; any other
+  object node's, the object. A wire let go anywhere else still offers the
+  nodes to add, as before.
+- **Cutting a wire** is in the node's context menu, "disconnect" plus the
+  input's name.
+- **An object wire comes from the end of its lane**, the object as its edits
+  leave it, like a merge's inputs.
+- Nodes that take nothing in - a light, a dataset, a camera - lost the input
+  stud on their left edge that nothing could ever arrive at.
+
+Checked headless with real pointer drags: the dataset input lights up for a
+dataset's wire and not for an object's, a drop on the input or on the node's
+body wires it, the menu cuts it, and a dataset wire let go over nothing still
+makes a train node wired to it.
+
+---
+
 ## Relighting: a relight node per object
 
 The scene lighting settings - captured light, grid resolution, occlusion
