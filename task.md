@@ -288,6 +288,11 @@ gaussians, a lamp in the capture, into light. Verified the same way, against
 exact form factors, and owing the same session - plus a lamp in a real
 capture, to see how its emitters and its glow look.
 
+That session is written up as a checklist in
+[relighting-checklist.md](relighting-checklist.md): what to load, what to
+look for at each step, and a console helper that times each pass on the
+GPU with the engine's own profiler.
+
 **For the record, how Octane does it.** Octane 2026 path traces gaussians
 alongside meshes, so they cast and receive shadows and show up in
 reflections. Its relighting is a lighting mode on the splat node that
