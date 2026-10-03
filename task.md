@@ -271,9 +271,8 @@ a look at two-sided lighting on real surfaces.
 
 Item 17 is built too: an ambient light kind - a flat colour, or an HDRI
 or photo reduced to spherical harmonics and turned with a rotation - shaped
-by occlusion traced through the same grid, with a range and a strength
-shared by the scene. Verified the same way, and owing the same real-GPU
-session.
+by occlusion traced through the same grid, with a range and a strength set
+per object. Verified the same way, and owing the same real-GPU session.
 
 Item 18 is built as well: de-light, which divides an estimate of the
 capture's own light out before new light goes on - the capture's sky
@@ -287,6 +286,17 @@ or near-exact irradiance - and volume lights, which turn selected glowing
 gaussians, a lamp in the capture, into light. Verified the same way, against
 exact form factors, and owing the same session - plus a lamp in a real
 capture, to see how its emitters and its glow look.
+
+Since then, two changes to how it is driven, both verified the same way and
+owing the same session. The lighting settings - captured light, grid
+resolution, occlusion and de-light - moved onto a relight node per object,
+which the first light adds; an object without one is still lit, but lights
+only add to its captured light, with no shadows, occlusion or de-light. And
+a light node takes in what it shines from through a source input: an
+object's gaussians, or those a select node picks, make it a gauss light -
+the volume light under its new name - that follows them as they change; a
+box, sphere or cylinder makes it a mesh light, shining from the primitive's
+surface and following it as it moves.
 
 That session is written up as a checklist in
 [relighting-checklist.md](relighting-checklist.md): what to load, what to
@@ -338,10 +348,14 @@ on the baked lighting.
 - **Volume lights** — a selection-scoped node: select gaussians, such as a
   lamp in the capture, and they become the emitter, clustered into a few
   dozen point lights. *Select, then operate*, applied to light. Built as a
-  light kind rather than a node of its own: add a light from the selection,
-  or turn a light into a volume light with gaussians selected. Sixteen
-  emitters, one shared shadow cone, and the glowing gaussians glow with the
-  light rather than being lit as surfaces.
+  light kind, now called gauss, rather than a node of its own: wire a select
+  node or an object into a light node's source input, and the light glows
+  with those gaussians and follows them. Unwired, a light can still take
+  whatever is selected by hand. Sixteen emitters, one shared shadow cone,
+  and the glowing gaussians glow with the light rather than being lit as
+  surfaces. A box, sphere or cylinder wired in instead makes a mesh light:
+  24 emitters spread over its surface, weighted by area, lighting what is
+  round it without making anything glow.
 - **Ambient light** — a flat colour or an HDRI reduced to spherical
   harmonics, dimmed by occlusion. Built: every ambient light is summed into
   one set of nine coefficients, evaluated along each side's bent normal.
@@ -444,10 +458,12 @@ proves slow on real captures.
   during a drag are throttled to ten a second; on a large capture both
   want moving to the GPU once they show up in a profile.
 - Lights are selected from the outliner or the graph. A click on a light's
-  gizmo in the viewport does not pick it, which cameras cannot do either.
+  gizmo in the viewport does not pick it, which cameras and primitives
+  cannot do either.
 - Lights do not animate: no timeline track yet.
 - Changing a light's settings is not an undo step, the same as a camera
-  node's settings. Moving or aiming one with the gizmo is.
+  node's or a relight node's settings. Moving or aiming one with the gizmo
+  is.
 
 **Left from item 17**, none of it blocking:
 
@@ -482,11 +498,24 @@ proves slow on real captures.
 
 **Left from item 19**, none of it blocking:
 
-- A volume light does not follow its object. Its emitters sit where the
-  glowing gaussians were, round the light's own position; moving the lamp's
-  object leaves its light behind until the light is moved too.
-- The emitters are a snapshot. Editing the lamp's gaussians afterwards
-  changes nothing until "Use Selection" makes them over.
+- Only a wired gauss light follows its gaussians. One that took the
+  selection by hand, or whose source was unwired, keeps its emitters where
+  the glowing gaussians were, round the light's own position, until "Use
+  Selection" makes them over.
+- A wired gauss light clusters again whenever history settles and its
+  source has changed: up to 20,000 sampled gaussians, on the CPU. Quick at
+  the sizes tested; a large capture wants it timed, and moved to a worker if
+  it shows.
+- A select node is not saved in a project, so a gauss light fed by one comes
+  back unwired, with the emitters it last took. A primitive or an object
+  feeding a light is saved and wired again.
+- A mesh light's emitters each shine every way, and the primitive is not in
+  the grid, so light from its far side passes through it: it lights like a
+  glowing volume of its shape rather than a lit shell. A lobe per emitter,
+  facing out along the surface, would make it one-sided.
+- Wiring a light by hand aims it below its source, four of its spreads
+  away, so its intensity means what it did for a light made from a
+  selection. An aim set before wiring is replaced.
 - One shadow cone per light. A large area light close to what it lights, or
   a long strip, gets the visibility of its middle; sampling across the
   emitter would fix it at a few traces a light.
@@ -535,9 +564,10 @@ holds, but nothing writes them out. That wants a target format chosen first,
 since the format decides what the writer looks like.
 
 **Merging is offered by name**, in the context menu, rather than by dragging
-one node's output onto another's input. The dataset wire proved the drop
-gesture out - an import node's output drags onto a train node - but merge
-still goes through the menu; it wants the same treatment.
+one node's output onto another's input. Nodes can declare named inputs now -
+a `ports` getter on the op, wired through `graph.connect` in the editor -
+and the train node's dataset, the select node's mesh and the light's source
+use them. Merge wants a second input of its own, the same way.
 
 **Cleanup runs on the CPU inside the op's resolver.** Fine at the counts
 tested; a million-point capture wants it in a worker. That is a change of
@@ -550,7 +580,15 @@ steady means ranking against something that does not move frame to frame.
 **Replay after a change is conservative.** It invalidates everything after a
 node rather than everything reachable from it, so it may re-resolve a node no
 path touches. Correct, and cheaper than a second ordering to keep consistent.
-If it becomes slow, walk `inputs` backwards from the changed node.
+If it becomes slow, walk `inputs` backwards from the changed node. A
+primitive wired into a select node makes it more frequent: every time the
+primitive settles - a drag ending, a size typed in, an undo - the select node
+and everything after it replay.
+
+**A select node's shape selects again when the primitive settles**, not live
+while it is dragged: each re-selection is that replay, too slow to run per
+pointer move on a large capture. The node keeps a copy of the shape for the
+same reason - see SelectMesh in `src/edit-ops.ts`.
 
 **The bound pass needs 64 bytes of colour targets per sample.**
 `src/data-processor/calc-bound.ts` renders into four RGBA32F targets.

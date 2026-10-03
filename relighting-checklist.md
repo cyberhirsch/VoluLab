@@ -1,9 +1,9 @@
 # Relighting on a real GPU
 
 Items 16 to 19 are built: the grid and its shadows, ambient light and
-occlusion, de-light, area and volume lights. They have only ever run on
-SwiftShader, a software GPU, where correctness was measured and speed and
-looks were not. This is the session that measures those: one sitting on
+occlusion, de-light, area lights, and gauss and mesh lights. They have only
+ever run on SwiftShader, a software GPU, where correctness was measured and
+speed and looks were not. This is the session that measures those: one sitting on
 real hardware with real captures, filling in the blanks below. The results
 go back into [task.md](task.md) and [CHANGELOG.md](CHANGELOG.md).
 
@@ -40,7 +40,8 @@ the bottom, with what was seen and a screenshot.
   5. optional, a sequence of a few frames: ____
 - [ ] **Where the settings are.** Captured light, grid resolution,
   occlusion and de-light are on each object's relight node, which the first
-  light adds. Select it in the graph to change them.
+  light adds. Select it in the graph to change them. A light's own colour,
+  intensity and softness stay on the light.
 - [ ] **The timing helper.** Paste this into the console once per page load:
 
 ```js
@@ -133,8 +134,8 @@ await relightTime(() => { relight.delight = 0.55; });
 - [ ] Grid resolution 64, 128 and 256: grid builds of ____ / ____ / ____ ms.
   Is the sharper shadow at 256 worth the time?
 - [ ] Grid resolution 512, 768 and 1024: grid builds of ____ / ____ / ____ ms.
-  Does the panel say "Using …" under the setting at any of them? That is the
-  GPU not holding the grid: note the number. Open, flat surfaces and fuzzy
+  Does the relight node say "Using …" under the setting at any of them? That
+  is the GPU not holding the grid: note where. Open, flat surfaces and fuzzy
   areas should look as they do at 256, not darker; shadow edges sharper.
 - [ ] Delete something that casts a shadow: the shadow goes. Undo: it comes
   back.
@@ -187,25 +188,28 @@ await relightTime(() => { relight.delight = 0.55; });
 - [ ] Lighting with one rectangle: ____ ms, against one point light: ____ ms.
   They should be close, since each is one trace.
 
-## 6. Volume lights (item 19) - capture 4
+## 6. Gauss and mesh lights (item 19) - capture 4
 
-- [ ] Select the glowing gaussians with a select node, add a light node, and
-  drag the select node's output onto the light's source input. Time the
-  clustering with
+- [ ] Pick the glowing gaussians with a select node, add a light node, and
+  drag the select node's output onto the light's source input. The light's
+  type then reads "gauss". Time the clustering with
   `console.time('v'); scene.events.invoke('light.addFromSelection'); console.timeEnd('v')`
   while they are selected: ____ ms.
-- [ ] Wire a box, sphere or cylinder into a light's source input instead: a
-  mesh light. Its surface lights what is round it, and dragging the
-  primitive drags the light. Smooth?
 - [ ] Check three things:
   - the surroundings light up from where the lamp is;
   - the lamp itself still looks as captured;
   - intensity 0 turns the lamp dark, as if switched off.
+- [ ] It follows the pick: refine the select node, or move the box or sphere
+  wired into it. Once the edit lands, the light moves to the new pick.
 - [ ] Does glow spill onto what touches the lamp, like a table or a shade? How
   far?
 - [ ] Set its role to "baked in" with de-light on. Does the light the lamp
   baked into its surroundings fade, as if it had been switched off?
-- [ ] Lighting with the volume light: ____ ms.
+- [ ] A mesh light: add a box, sphere or cylinder from the graph's menu and
+  wire it into a light's source input instead. Its surface lights what is
+  round it, and the gaussians near it are lit rather than glowing. Drag the
+  primitive: does the light keep up smoothly?
+- [ ] Lighting with the gauss light: ____ ms, with a mesh light: ____ ms.
 
 ## 7. Sequences (optional) - capture 5
 
@@ -223,8 +227,9 @@ await relightTime(() => { relight.delight = 0.55; });
   - plus de-light: ____
   - plus grid resolution 1024: ____
 - [ ] Save a project holding one light of every kind, including an ambient
-  light with an HDRI and a volume light. Reload it: every light comes back
-  the same.
+  light with an HDRI, a gauss light and a mesh light wired to a primitive.
+  Reload it: every light comes back the same, the mesh light wired to its
+  primitive again, and each object's relight node with its settings.
 - [ ] Load with `?device=webgl2`: the lights are drawn and the light node
   says why they light nothing.
 
