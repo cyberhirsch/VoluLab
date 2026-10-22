@@ -577,6 +577,28 @@ where it runs, not of what it does.
 may shimmer. It ranks by importance within one frame; keeping a sequence
 steady means ranking against something that does not move frame to frame.
 
+The cause is in `DecimateOp`: it sorts by `sigmoid(opacity) × volume`, and on
+a TGH sequence both are re-evaluated per frame, so the order - and with it
+the dropped set - changes as time moves. The fix is to rank the 4D
+primitives once, on attributes that do not depend on time, so the dropped
+set is the same in every frame by construction. That an attribute-only score
+holds up without rendering anything is what Camera-Agnostic Pruning (arXiv
+2603.21933) and RAP (CVPR 2026, arXiv 2602.19753) show.
+
+Two further improvements, independent of the shimmer:
+
+- **Spread the budget.** A global top-K piles the kept budget wherever scores
+  run high, and `opacity × volume` runs high on large blobs. SplatQ (arXiv
+  2610.13503) partitions into spatial blocks and gives each a smoothed quota.
+  The quota step alone is cheap; its quadratic selection solved by annealing
+  is not needed for this.
+- **Merge instead of drop.** NanoGS (ECCV 2026, arXiv 2603.16103) builds a kNN
+  graph, scores neighbouring pairs by the I-divergence between the pair and
+  one moment-matched Gaussian, and greedily collapses the cheapest disjoint
+  pairs, preserving mass, until the target count is reached. CPU-only, so it
+  fits a worker, and it keeps quality better than dropping at aggressive
+  ratios - a "merge" mode for the node.
+
 **Replay after a change is conservative.** It invalidates everything after a
 node rather than everything reachable from it, so it may re-resolve a node no
 path touches. Correct, and cheaper than a second ordering to keep consistent.
