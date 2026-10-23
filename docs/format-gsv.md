@@ -1,10 +1,10 @@
-# V4D: a file format for 4D Gaussian splats
+# GSV: Gaussian Splat Video
 
-Draft 0.1. The name `V4D` / `.v4d` is a working title.
+Draft 0.1. A file format for 4D Gaussian splats; extension `.gsv`.
 
 ## 1. Purpose
 
-V4D stores a dynamic Gaussian splat scene as **4D gaussians**: primitives
+GSV stores a dynamic Gaussian splat scene as **4D gaussians**: primitives
 with extent in space and time, from which the 3D gaussians of any moment are
 derived by conditioning. This is the representation of real-time 4DGS
 (Yang et al.) and of the Temporal Gaussian Hierarchy (TGH, Xu et al.,
@@ -18,7 +18,7 @@ per-frame sequences (large, and they flicker) or vendor containers.
 
 Goals, in priority order:
 
-1. **Exact.** A frame decoded from V4D is, up to quantisation, the frame
+1. **Exact.** A frame decoded from GSV is, up to quantisation, the frame
    the trained model renders. The conditioning maths is normative (section
    6), not left to the player.
 2. **No flicker.** A primitive has one identity across its whole lifetime;
@@ -48,13 +48,13 @@ harmonics, audio. Section 10 notes where extensions would go.
 
 ## 3. Container
 
-A V4D file is a ZIP archive with every entry **stored** (no deflate), no
+A GSV file is a ZIP archive with every entry **stored** (no deflate), no
 data descriptors and no zip64. Stored entries can be read by HTTP Range
 straight out of the archive once the central directory is known, and WebP
 is compressed already.
 
 ```
-scene.v4d
+scene.gsv
 ├── meta.json            manifest, required, first entry
 ├── static/…             page files of the static set (optional)
 ├── p0000/…              page files
@@ -63,7 +63,7 @@ scene.v4d
 ```
 
 The same layout unzipped into a directory, with `meta.json` at its root, is
-an equally valid V4D ("unpacked V4D"); a web server can serve it directly.
+an equally valid GSV ("unpacked GSV"); a web server can serve it directly.
 
 `meta.json` SHOULD be the first entry in the archive, so a streaming reader
 can start before the central directory arrives.
@@ -89,7 +89,7 @@ before use.
 ### 4.2 Static primitives
 
 Many scenes are mostly still: a stage, a room, a background. A 4D primitive
-can only approximate stillness with a very long temporal scale. V4D allows
+can only approximate stillness with a very long temporal scale. GSV allows
 plain **3D gaussians** in a separate static set instead: no `t`, no temporal
 scale, a single rotation. They are present at every `t` and are rendered
 as they are. A static gaussian costs about a third less than a 4D one, and
@@ -298,7 +298,7 @@ the coarse levels cheaply and keeps the per-page overhead small.
 
 ```jsonc
 {
-  "asset": { "format": "v4d", "version": "1.0", "generator": "VoluLab 0.2" },
+  "asset": { "format": "gsv", "version": "1.0", "generator": "VoluLab 0.2" },
 
   "time": {
     "frames": 300,               // N, optional
@@ -404,12 +404,12 @@ frame.
 
 Reserved names for later versions:
 
-- `V4D_temporal_sh`: spherindrical harmonics, colour that varies with time
+- `GSV_temporal_sh`: spherindrical harmonics, colour that varies with time
   (as in Yang et al.'s 4DGS).
-- `V4D_motion_poly`: polynomial motion and rotation per primitive (Spacetime
+- `GSV_motion_poly`: polynomial motion and rotation per primitive (Spacetime
   Gaussians), to bring `.splatv` content in.
-- `V4D_audio`: a synchronised audio track.
-- `V4D_spz`: SPZ in place of WebP for the dynamic attributes.
+- `GSV_audio`: a synchronised audio track.
+- `GSV_spz`: SPZ in place of WebP for the dynamic attributes.
 
 ## 11. Conformance
 
@@ -428,20 +428,21 @@ Reserved names for later versions:
 
 ## 12. Mappings
 
-| Source | To V4D |
+| Source | To GSV |
 |---|---|
 | TGH checkpoint (VoluLab `.npz`) | Direct. `_xyz`, `_t`, `_scaling`, `_scaling_t`, `_rotation_l`, `_rotation_r`, `_opacity`, `_features_dc`, `_features_rest` map to section 4.1; `hierarchy.level`, `.segment`, `.seg_len` map to blocks and `levels`. |
-| Real-time 4DGS (Yang et al.) | Same primitive, global block only. Its 4D SH needs `V4D_temporal_sh`; without it the time terms are dropped. |
+| Real-time 4DGS (Yang et al.) | Same primitive, global block only. Its 4D SH needs `GSV_temporal_sh`; without it the time terms are dropped. |
 | 3DGS PLY / SOG | A static page. |
 | Frame sequences | Not directly. Fitting 4D primitives to a sequence is a training problem, not a conversion. |
-| `.splatv` | Only through `V4D_motion_poly`. |
+| `.splatv` | Only through `GSV_motion_poly`. |
 
-From V4D to the rest is always possible: condition at each frame and write
+From GSV to the rest is always possible: condition at each frame and write
 any static format, PLY, SOG, SPZ or glTF.
 
 ## 13. Open questions
 
-- **Name.** `V4D` may collide; check before publishing.
+- **Name.** `.gsv` showed no prior use in October 2026; the GSVC paper
+  (2D gaussians for ordinary video) is the nearest name, and unrelated.
 - **Hierarchy semantics** at `t = 1`: the `closed` flag is a proposal; the
   TGH training code's behaviour at the very last instant should be checked
   first.
@@ -458,4 +459,4 @@ any static format, PLY, SOG, SPZ or glTF.
   block is already a temporal subset - is untested; so is how much
   `opacityVolume` loses against it at low detail.
 - **Relation to MPEG GSC.** If MPEG's dynamic call ends up favouring a
-  primitive like this one, V4D should map onto it rather than compete.
+  primitive like this one, GSV should map onto it rather than compete.
