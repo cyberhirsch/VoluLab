@@ -4,7 +4,8 @@ import { Pose } from '../camera-poses';
 import { i18n } from './localization';
 import { Events } from '../events';
 import { ExportType, SceneExportOptions } from '../file-handler';
-import { AnimTrack, ExperienceSettings, defaultPostEffectSettings } from '../splat-serialize';
+import { Splat } from '../splat';
+import { AnimTrack, ExperienceSettings, defaultPostEffectSettings, sceneSHBands } from '../splat-serialize';
 import sceneExport from './svg/export.svg';
 import { fieldDefault } from './value-fields';
 
@@ -372,7 +373,9 @@ class ExportPopup extends Container {
                 r.hidden = activeRows.indexOf(r) === -1;
             });
 
-            bandsSlider.value = events.invoke('view.bands');
+            // default to the scene's band count, capped by the viewport
+            // setting. Higher values pad the missing coefficients with zeros
+            bandsSlider.value = Math.min(events.invoke('view.bands'), sceneSHBands(events.invoke('scene.splats') as Splat[]));
 
             // ply
             compressBoolean.value = false;
@@ -439,7 +442,7 @@ class ExportPopup extends Container {
                     filename: filenameEntry.value,
                     splatIdx: 'all',
                     serializeSettings: {
-                        maxSHBands: bandsSlider.value
+                        shBands: bandsSlider.value
                     },
                     compressedPly: compressBoolean.value
                 };
@@ -458,7 +461,7 @@ class ExportPopup extends Container {
                     filename: filenameEntry.value,
                     splatIdx: 'all',
                     serializeSettings: {
-                        maxSHBands: bandsSlider.value
+                        shBands: bandsSlider.value
                     },
                     sogIterations: iterationsSlider.value
                 };
@@ -469,7 +472,7 @@ class ExportPopup extends Container {
                     filename: filenameEntry.value,
                     splatIdx: 'all',
                     serializeSettings: {
-                        maxSHBands: bandsSlider.value
+                        shBands: bandsSlider.value
                     },
                     spzVersion: spzVersionSelect.value === '3' ? 3 : 4
                 };
@@ -538,7 +541,7 @@ class ExportPopup extends Container {
                     filename: filenameEntry.value,
                     splatIdx: 'all',
                     serializeSettings: {
-                        maxSHBands: bandsSlider.value
+                        shBands: bandsSlider.value
                     },
                     viewerExportSettings: {
                         type: viewerTypeSelect.value,

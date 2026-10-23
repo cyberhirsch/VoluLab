@@ -41,6 +41,7 @@ import { State } from './splat-state';
 
 type SerializeSettings = {
     maxSHBands?: number;            // specifies the maximum number of bands to be exported
+    shBands?: number;               // exactly this many bands, zero-padding missing ones; overrides maxSHBands
     selected?: boolean;             // only export selected gaussians. used for copy/paste
     minOpacity?: number;            // filter out gaussians with alpha less than or equal to minAlpha
     removeInvalid?: boolean;        // filter out gaussians with invalid data (NaN/Infinity)
@@ -248,6 +249,11 @@ const shBandCoeffs = [0, 3, 8, 15];
 // determine the number of sh bands present given an object with 'f_rest_*' properties
 const calcSHBands = (data: Set<string>) => {
     return { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !data.has(v))] ?? 0;
+};
+
+/** The highest SH band count present in any of `splats`. */
+const sceneSHBands = (splats: Splat[]) => {
+    return Math.max(0, ...splats.map(s => calcSHBands(getVertexProperties(s.splatData))));
 };
 
 const v = new Vec3();
@@ -568,10 +574,10 @@ class VoluLabChunkSource implements ChunkSource {
     constructor(splats: Splat[], settings: SerializeSettings) {
         this.splats = splats;
 
-        // Determine the SH band count to export: the highest band present in any
-        // splat, capped by maxSHBands. SingleSplat zero-fills missing bands.
-        const splatBands = splats.map(s => calcSHBands(getVertexProperties(s.splatData)));
-        const outputBands = Math.min(settings.maxSHBands ?? 3, splatBands.length ? Math.max(...splatBands) : 0);
+        // Determine the SH band count to export: the count asked for, or else
+        // the highest band present in any splat, capped by maxSHBands.
+        // SingleSplat zero-fills missing bands.
+        const outputBands = settings.shBands ?? Math.min(settings.maxSHBands ?? 3, sceneSHBands(splats));
         const numRest = SH_REST_COUNTS[outputBands];
         this.numRest = numRest;
 
@@ -923,6 +929,7 @@ export {
     serializeSog,
     serializeSpz,
     serializeViewer,
+    sceneSHBands,
     AnimTrack,
     CameraPose,
     Camera,
