@@ -18,7 +18,6 @@ const cacheUrls = [
     './static/icons/logo.png',
     './static/images/screenshot-narrow.jpg',
     './static/images/screenshot-wide.jpg',
-    './static/lib/webp/webp.mjs',
     './static/lib/webp/webp.wasm',
     './static/locales/de.json',
     './static/locales/en.json',

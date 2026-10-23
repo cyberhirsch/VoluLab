@@ -9,6 +9,35 @@ months finds out why before they change it.
 
 ---
 
+## SuperSplat fixes taken over
+
+Five upstream changes were looked at; three came over, adapted where
+VoluLab has diverged.
+
+- playcanvas/supersplat#1027 - picks that land after another click, a data
+  panel querying a removed splat, tooltips on destroyed targets.
+- playcanvas/supersplat#1032 - selection left on a deleted splat, pointer
+  capture errors and cancelled touches in the drag tools, rect picks past
+  the canvas edge, a gzip write that stalled instead of failing. The
+  queued paint select and the eyedropper got the same guards.
+- playcanvas/supersplat#1063 - the export dialog's band count is now the
+  count written, missing bands padded with zeros, defaulting to the
+  scene's own. A new `shBands` setting does it; `maxSHBands` stays, since
+  export nodes and saved projects store it.
+
+Left out: #1038 and #1053. Both fix SuperSplat's lazy, streamed loading,
+which VoluLab does not have - it reads a file whole, so nothing is left
+reading from it.
+
+splat-transform went from 3.1.7 to 3.10.1 (3.10.2 was two days old). Its
+chunk metadata now needs a `model`, and the WebP decoder's wasm must
+match the JS bundled from it: the copy in static/lib was stale and
+differed, so the build now takes the wasm from the installed package.
+Verified headless: a PLY and a SOG written by the new CLI load, and
+merging them gives 6000 gaussians.
+
+---
+
 ## Training snapshots read the trainer's buffers
 
 An interim snapshot of a run used to ask the trainer for a PLY and parse

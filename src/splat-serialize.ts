@@ -618,6 +618,8 @@ class VoluLabChunkSource implements ChunkSource {
             chunkSize: EXPORT_CHUNK_SIZE,
             numChunks: [numChunks],
             shBands: outputBands as SHBands,
+            // VoluLab does not track how a scene was trained
+            model: 'default',
             extraColumns: [],
             transform: Transform.PLY,
             availableLayers: new Set<ChunkLayer>(['position', 'geometric', 'color']),
