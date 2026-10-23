@@ -74,10 +74,21 @@ const fragmentShader = /* glsl */ `
             }
         }
 
+        // an adapter at WebGPU's minimum takes 32 bytes of colour targets
+        // per sample, half of the four below: there the pass runs twice,
+        // writing one pair each time (see CalcBound)
+        #if defined(BOUND_SELECTED)
+        pcFragColor0 = vec4(selectedMin, 0.0);
+        pcFragColor1 = vec4(selectedMax, 0.0);
+        #elif defined(BOUND_VISIBLE)
+        pcFragColor0 = vec4(visibleMin, 0.0);
+        pcFragColor1 = vec4(visibleMax, 0.0);
+        #else
         pcFragColor0 = vec4(selectedMin, 0.0);
         pcFragColor1 = vec4(selectedMax, 0.0);
         pcFragColor2 = vec4(visibleMin, 0.0);
         pcFragColor3 = vec4(visibleMax, 0.0);
+        #endif
     }
 `;
 

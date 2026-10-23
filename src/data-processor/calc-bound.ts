@@ -28,15 +28,29 @@ const resolve = (scope: ScopeSpace, values: any) => {
     }
 };
 
+/**
+ * Bytes of colour targets per sample the single pass needs: four RGBA32F.
+ * WebGPU only guarantees 32, and an adapter at that minimum - SwiftShader
+ * is one - rejects the pass outright, which leaves every splat with an
+ * empty bound, culled out of sight. There the pass runs twice, one pair of
+ * targets each time, rather than giving up precision to RGBA16F.
+ */
+const SINGLE_PASS_BYTES = 64;
+
 class CalcBound {
     private device: GraphicsDevice;
     private splatParams = new Int32Array(3);
     private shader: Shader = null;
+    private selectedShader: Shader = null;
+    private visibleShader: Shader = null;
+    private split: boolean;
     private selectedMinTexture: Texture = null;
     private selectedMaxTexture: Texture = null;
     private visibleMinTexture: Texture = null;
     private visibleMaxTexture: Texture = null;
     private renderTarget: RenderTarget = null;
+    private selectedRenderTarget: RenderTarget = null;
+    private visibleRenderTarget: RenderTarget = null;
     private selectedMinRenderTarget: RenderTarget = null;
     private selectedMaxRenderTarget: RenderTarget = null;
     private visibleMinRenderTarget: RenderTarget = null;
@@ -48,20 +62,34 @@ class CalcBound {
 
     constructor(device: GraphicsDevice) {
         this.device = device;
+        const limit = (device as any).wgpu?.limits?.maxColorAttachmentBytesPerSample;
+        this.split = device.isWebGPU && (limit ?? 32) < SINGLE_PASS_BYTES;
     }
 
     private getResources(width: number) {
         const { device } = this;
 
-        if (!this.shader) {
-            this.shader = ShaderUtils.createShader(device, {
-                uniqueName: 'calcBoundShader',
+        const createShader = (uniqueName: string, define?: string) => {
+            const fragmentDefines = new Map<string, string>();
+            if (define) fragmentDefines.set(define, '');
+            return ShaderUtils.createShader(device, {
+                uniqueName,
                 attributes: {
                     vertex_position: SEMANTIC_POSITION
                 },
                 vertexGLSL: vertexShader,
-                fragmentGLSL: fragmentShader
+                fragmentGLSL: fragmentShader,
+                fragmentDefines
             });
+        };
+
+        if (this.split) {
+            if (!this.selectedShader) {
+                this.selectedShader = createShader('calcBoundSelectedShader', 'BOUND_SELECTED');
+                this.visibleShader = createShader('calcBoundVisibleShader', 'BOUND_VISIBLE');
+            }
+        } else if (!this.shader) {
+            this.shader = createShader('calcBoundShader');
         }
 
         if (!this.selectedMinTexture || this.selectedMinTexture.width !== width) {
@@ -70,7 +98,9 @@ class CalcBound {
                 this.selectedMaxTexture.destroy();
                 this.visibleMinTexture.destroy();
                 this.visibleMaxTexture.destroy();
-                this.renderTarget.destroy();
+                this.renderTarget?.destroy();
+                this.selectedRenderTarget?.destroy();
+                this.visibleRenderTarget?.destroy();
                 this.selectedMinRenderTarget.destroy();
                 this.selectedMaxRenderTarget.destroy();
                 this.visibleMinRenderTarget.destroy();
@@ -94,10 +124,22 @@ class CalcBound {
             this.visibleMinTexture = createTexture('calcBoundVisibleMin');
             this.visibleMaxTexture = createTexture('calcBoundVisibleMax');
 
-            this.renderTarget = new RenderTarget({
-                colorBuffers: [this.selectedMinTexture, this.selectedMaxTexture, this.visibleMinTexture, this.visibleMaxTexture],
-                depth: false
-            });
+            if (this.split) {
+                this.renderTarget = null;
+                this.selectedRenderTarget = new RenderTarget({
+                    colorBuffers: [this.selectedMinTexture, this.selectedMaxTexture],
+                    depth: false
+                });
+                this.visibleRenderTarget = new RenderTarget({
+                    colorBuffers: [this.visibleMinTexture, this.visibleMaxTexture],
+                    depth: false
+                });
+            } else {
+                this.renderTarget = new RenderTarget({
+                    colorBuffers: [this.selectedMinTexture, this.selectedMaxTexture, this.visibleMinTexture, this.visibleMaxTexture],
+                    depth: false
+                });
+            }
 
             this.selectedMinRenderTarget = new RenderTarget({
                 colorBuffer: this.selectedMinTexture,
@@ -127,6 +169,10 @@ class CalcBound {
 
         return {
             shader: this.shader,
+            selectedShader: this.selectedShader,
+            visibleShader: this.visibleShader,
+            selectedRenderTarget: this.selectedRenderTarget,
+            visibleRenderTarget: this.visibleRenderTarget,
             selectedMinTexture: this.selectedMinTexture,
             selectedMaxTexture: this.selectedMaxTexture,
             visibleMinTexture: this.visibleMinTexture,
@@ -169,7 +215,12 @@ class CalcBound {
         });
 
         device.setBlendState(BlendState.NOBLEND);
-        drawQuadWithShader(device, resources.renderTarget, resources.shader);
+        if (this.split) {
+            drawQuadWithShader(device, resources.selectedRenderTarget, resources.selectedShader);
+            drawQuadWithShader(device, resources.visibleRenderTarget, resources.visibleShader);
+        } else {
+            drawQuadWithShader(device, resources.renderTarget, resources.shader);
+        }
 
         // read all 4 textures asynchronously using the public texture.read() API
         const [selectedMinData, selectedMaxData, visibleMinData, visibleMaxData] = await Promise.all([

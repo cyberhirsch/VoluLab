@@ -202,4 +202,106 @@ const packDataset = async (files: DatasetFile[]): Promise<{ bytes: Uint8Array, n
     return { bytes, name: name === poseFile?.filename ? 'dataset' : name };
 };
 
-export { isImageSet, listDirectory, looksLikeDataset, packDataset, type DatasetFile, type DirEntry };
+/**
+ * Add one stored file to an existing zip, without unpacking it.
+ *
+ * The new entry goes between the last entry and the central directory,
+ * so every existing entry keeps its offset and its central record is
+ * copied through as it is - whatever compression it used. Only the end
+ * record changes. Used to put a seed `init.ply` into a dataset that is
+ * already packed.
+ */
+const addToZip = (zip: Uint8Array, filename: string, data: Uint8Array): Uint8Array => {
+    const src = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+
+    // the end record sits at the very end, unless a comment follows it
+    let eocd = -1;
+    for (let i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 0xffff); i--) {
+        if (src.getUint32(i, true) === 0x06054b50) {
+            eocd = i;
+            break;
+        }
+    }
+    if (eocd < 0) {
+        throw new Error('the dataset is not a zip');
+    }
+
+    const count = src.getUint16(eocd + 10, true);
+    const centralSize = src.getUint32(eocd + 12, true);
+    const centralOffset = src.getUint32(eocd + 16, true);
+    if (count === 0xffff || centralOffset === 0xffffffff) {
+        throw new Error('the dataset is a zip64 archive, which a seed cannot be added to');
+    }
+
+    const name = new TextEncoder().encode(filename);
+    const crc = crc32(data);
+    const localSize = 30 + name.length + data.length;
+    const size = centralOffset + localSize + centralSize + 46 + name.length + 22;
+
+    const bytes = new Uint8Array(size);
+    const view = new DataView(bytes.buffer);
+    let at = 0;
+
+    const u32 = (value: number) => {
+        view.setUint32(at, value, true);
+        at += 4;
+    };
+    const u16 = (value: number) => {
+        view.setUint16(at, value, true);
+        at += 2;
+    };
+    const raw = (value: Uint8Array) => {
+        bytes.set(value, at);
+        at += value.length;
+    };
+
+    raw(zip.subarray(0, centralOffset));
+
+    u32(0x04034b50);                // local file header, as packDataset writes it
+    u16(20);
+    u16(0);
+    u16(0);
+    u16(0);
+    u16(0x21);
+    u32(crc);
+    u32(data.length);
+    u32(data.length);
+    u16(name.length);
+    u16(0);
+    raw(name);
+    raw(data);
+
+    raw(zip.subarray(centralOffset, centralOffset + centralSize));
+
+    u32(0x02014b50);                // its central record
+    u16(20);
+    u16(20);
+    u16(0);
+    u16(0);
+    u16(0);
+    u16(0x21);
+    u32(crc);
+    u32(data.length);
+    u32(data.length);
+    u16(name.length);
+    u16(0);
+    u16(0);
+    u16(0);
+    u16(0);
+    u32(0);
+    u32(centralOffset);
+    raw(name);
+
+    u32(0x06054b50);                // end of central directory, one entry more
+    u16(0);
+    u16(0);
+    u16(count + 1);
+    u16(count + 1);
+    u32(centralSize + 46 + name.length);
+    u32(centralOffset + localSize);
+    u16(0);
+
+    return bytes;
+};
+
+export { addToZip, isImageSet, listDirectory, looksLikeDataset, packDataset, type DatasetFile, type DirEntry };

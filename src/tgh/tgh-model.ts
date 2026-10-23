@@ -230,11 +230,17 @@ class TghModel {
         for (let c = 0; c < 3 * K; c++) names.push(`f_rest_${c}`);
         names.push('opacity', 'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3');
 
+        // a score per 4D primitive that does not move with t, for ranking:
+        // the conditioned opacity and scales change every frame, so anything
+        // ranked on them drops a different set each frame (see DecimateOp)
+        names.push('importance');
+
         const props = new Map<string, Float32Array>();
         names.forEach(n => props.set(n, new Float32Array(M)));
 
         const x = props.get('x'), y = props.get('y'), z = props.get('z');
         const op = props.get('opacity');
+        const importance = props.get('importance');
         const scales = [props.get('scale_0'), props.get('scale_1'), props.get('scale_2')];
         const dc = [props.get('f_dc_0'), props.get('f_dc_1'), props.get('f_dc_2')];
         const rest: Float32Array[] = [];
@@ -327,6 +333,12 @@ class TghModel {
             const alphaRaw = (1 / (1 + Math.exp(-this.opacity[n]))) * Math.exp(-0.5 * dt * dt * invTT);
             const alpha = Math.min(1 - 1e-6, Math.max(1e-6, alphaRaw));
             op[i] = Math.log(alpha / (1 - alpha));
+
+            // peak opacity times spatial volume, before conditioning: the
+            // same measure DecimateOp uses on a still, taken at the
+            // primitive's temporal centre
+            importance[i] = (1 / (1 + Math.exp(-this.opacity[n]))) *
+                Math.exp(this.scaling[n * 3] + this.scaling[n * 3 + 1] + this.scaling[n * 3 + 2]);
 
             // SH: dc straight through, rest transposed to channel-major
             dc[0][i] = this.featuresDc[n * 3];

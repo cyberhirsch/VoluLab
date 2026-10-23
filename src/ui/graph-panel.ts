@@ -926,6 +926,7 @@ class GraphPanel extends Container {
                     disabled: node.index === -1 || many,
                     action: () => this.events.fire('edit.goto', node.index + 1)
                 },
+                ...this.reorderItems(node, many),
                 // a wired input can be cut loose again
                 ...(node.ports ?? []).filter(port => port.source).map(port => ({
                     label: `disconnect ${port.label}`,
@@ -935,6 +936,35 @@ class GraphPanel extends Container {
         });
 
         return el;
+    }
+
+    /**
+     * Move a node up or down its object's chain: past the neighbour before
+     * or after it in the same lane, which is where it lands in the history
+     * too. Offered only where the history allows it - not past a node it
+     * consumes or that consumes it.
+     */
+    private reorderItems(node: NodeModel, many: boolean): MenuEntry[] {
+        if (node.index === -1 || many || !node.splat) return [];
+        const lane = this.nodes
+        .filter(n => n.splat === node.splat && n.index !== -1)
+        .sort((a, b) => a.index - b.index);
+        const at = lane.indexOf(node);
+        const before = lane[at - 1];
+        const after = lane[at + 1];
+        const can = (to?: NodeModel) => !!to && this.events.invoke('edit.canMove', node.index, to.index);
+        return [
+            {
+                label: 'move up the chain',
+                disabled: !can(before),
+                action: () => this.events.invoke('edit.move', node.index, before.index)
+            },
+            {
+                label: 'move down the chain',
+                disabled: !can(after),
+                action: () => this.events.invoke('edit.move', node.index, after.index)
+            }
+        ];
     }
 
     /** The node a dropped wire landed on, counting its inputs' labels above it. */
@@ -987,6 +1017,19 @@ class GraphPanel extends Container {
             });
             ready.forEach(stud => stud.classList.add('gn-port-ready'));
 
+            // and an object's wire merges into any other object it is
+            // dropped on, unless that node has an input of its own for it
+            const own = node.splat instanceof Splat ? node.splat : null;
+            const mergesInto = (target: NodeModel) => {
+                return own && target.splat instanceof Splat && target.splat !== own &&
+                    !(target.ports ?? []).some(p => p.accepts.includes('object'));
+            };
+            const merging = own ? [...this.stage.querySelectorAll<HTMLElement>('.gn-node')].filter((el) => {
+                const target = this.nodes[Number(el.dataset.nodeKey)];
+                return target && mergesInto(target);
+            }) : [];
+            merging.forEach(el => el.classList.add('gn-merge-ready'));
+
             const draw = (to: { x: number, y: number }) => {
                 const bend = Math.max(24, Math.abs(to.x - from.x) * 0.5);
                 link.setAttribute('d', `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`);
@@ -1001,6 +1044,7 @@ class GraphPanel extends Container {
                 releasePointer(port, ev.pointerId);
                 link.remove();
                 ready.forEach(stud => stud.classList.remove('gn-port-ready'));
+                merging.forEach(el => el.classList.remove('gn-merge-ready'));
 
                 // released over a node with an input that takes this wire?
                 // then it goes in - an import node's dataset into a train node
@@ -1009,6 +1053,10 @@ class GraphPanel extends Container {
                 const fit = target ? this.portFor(target, node.offers ?? [], at) : null;
                 if (fit) {
                     this.events.fire('graph.connect', target.key, fit.port.name, fit.offer.source);
+                    return;
+                }
+                if (target && mergesInto(target)) {
+                    this.events.invoke('graph.merge', own, target.splat);
                     return;
                 }
 
@@ -1202,10 +1250,9 @@ class GraphPanel extends Container {
     }
 
     /**
-     * Merging needs a second object, and there is no wire to drop on yet - so
-     * the other objects are offered by name. One entry each rather than a
-     * submenu, because a scene with enough objects to need one is not the case
-     * this is for.
+     * Merging by name, beside dropping one object's wire on another. One
+     * entry each rather than a submenu, because a scene with enough objects
+     * to need one is not the case this is for.
      */
     private mergeItems(splat: Splat | null): MenuEntry[] {
         if (!splat) return [];

@@ -1,9 +1,15 @@
+import { MemoryFileSystem } from '@playcanvas/splat-transform';
+import { GSplatData } from 'playcanvas';
+
 import { BrushConfig, BrushEngine, TrainLoad, TrainLogLine, TrainPhase, TrainProgress, TrainSource } from './brush-engine';
+import { addToZip, listDirectory, packDataset } from './dataset';
 import { TrainOp } from '../edit-ops';
+import { ElementType } from '../element';
 import { Events } from '../events';
-import { loadGSplatData, MappedReadFileSystem } from '../io';
+import { loadGSplatData, MappedReadFileSystem, validateGSplatData } from '../io';
 import { Scene } from '../scene';
 import { Splat } from '../splat';
+import { writeSplatFile } from '../splat-serialize';
 
 /**
  * Drives a train node's run, and feeds its output into the scene.
@@ -21,11 +27,11 @@ import { Splat } from '../splat';
  */
 
 /**
- * How often the trainer's state is pulled into the scene. A snapshot is a
- * GPU readback plus a full PLY parse - O(seconds) at a million gaussians -
- * so it is throttled, skipped while one is in flight, and interim
- * snapshots skip morton reordering. The final snapshot always lands, and
- * takes the reorder for render performance.
+ * How often the trainer's state is pulled into the scene. An interim
+ * snapshot is a GPU readback straight into splat data; the first and the
+ * final one go through a PLY - O(seconds) at a million gaussians. All are
+ * throttled and skipped while one is in flight, and only the final one
+ * takes the morton reorder. The final snapshot always lands.
  */
 const SNAPSHOT_INTERVAL_MS = 5000;
 
@@ -42,15 +48,55 @@ type RunState = {
     active: boolean;
 };
 
+/**
+ * The dataset with a seed in it: the object's live gaussians written as
+ * `init.ply`, which the trainer takes as its starting points in place of
+ * the dataset's own. Written in the object's data frame, ignoring where
+ * the object has been moved to - the frame the dataset's cameras are in,
+ * for an object trained from them. A packed dataset gets the file added;
+ * a picked folder is packed first, so the folder itself is not written
+ * to.
+ */
+const seedSource = async (source: TrainSource, seed: Splat): Promise<{ source: TrainSource, bytes: number }> => {
+    const memFs = new MemoryFileSystem();
+    await writeSplatFile([seed], { maxSHBands: 3, keepWorldTransform: true }, 'ply', 'init.ply', {}, memFs);
+    const ply = memFs.results.get('init.ply');
+    if (!ply) {
+        throw new Error('the seed object has no gaussians left to start from');
+    }
+
+    switch (source.kind) {
+        case 'bytes':
+            return { source: { ...source, bytes: addToZip(source.bytes, 'init.ply', ply) }, bytes: ply.length };
+        case 'directory': {
+            const entries = await listDirectory(source.handle);
+            const files = await Promise.all(entries.map(async e => ({ filename: e.path, contents: await e.handle.getFile() })));
+            const { bytes } = await packDataset(files);
+            return { source: { kind: 'bytes', bytes: addToZip(bytes, 'init.ply', ply), name: `${source.handle.name}.zip` }, bytes: ply.length };
+        }
+        case 'url': {
+            const bytes = new Uint8Array(await (await fetch(source.url)).arrayBuffer());
+            const name = source.url.split('/').pop() || 'dataset.zip';
+            return { source: { kind: 'bytes', bytes: addToZip(bytes, 'init.ply', ply), name }, bytes: ply.length };
+        }
+    }
+};
+
 const registerTraining = (events: Events, scene: Scene) => {
     const engine = new BrushEngine();
+    engine.sharedDevice = () => {
+        const device = scene.graphicsDevice as any;
+        return device.isWebGPU && device.wgpu && device.gpuAdapter ?
+            { adapter: device.gpuAdapter, device: device.wgpu } :
+            null;
+    };
 
     let runOp: TrainOp | null = null;
     let phase: TrainPhase = 'idle';
     let progress: TrainProgress | null = null;
     let load: TrainLoad | null = null;
     let lastConfig: BrushConfig | null = null;
-    let snapshotBusy = false;
+    let snapshotBusy: Promise<void> | null = null;
     let snapshotDirty = false;
     let lastSnapshotAt = 0;
 
@@ -78,13 +124,49 @@ const registerTraining = (events: Events, scene: Scene) => {
     };
 
     const snapshot = async (op: TrainOp, final: boolean) => {
-        if (snapshotBusy) return;
-        snapshotBusy = true;
+        // the final snapshot must land: it waits out an interim one still
+        // in flight rather than being dropped behind it
+        if (snapshotBusy) {
+            if (!final) return;
+            await snapshotBusy;
+        }
+        let done: () => void;
+        snapshotBusy = new Promise<void>((resolve) => {
+            done = resolve;
+        });
         try {
+            const name = `${op.settings.datasetName.replace(/\.(zip|ply|mp4|mov|webm|mkv)$/i, '') || 'trained'}.ply`;
+
+            // an interim refresh of an output already in the scene reads the
+            // trainer's buffers straight into splat data: no PLY written, no
+            // PLY parsed. The first snapshot (which fixes the object's
+            // transform) and the final one (which takes the morton reorder)
+            // go the PLY way
+            if (!final && op.output) {
+                const direct = await engine.readSplats();
+                if (runOp !== op || !opStillApplied(op)) return;
+                if (direct && direct.count > 0) {
+                    const gsplatData = new GSplatData([{
+                        name: 'vertex',
+                        count: direct.count,
+                        properties: [...direct.props.entries()].map(([prop, storage]) => ({
+                            type: 'float',
+                            name: prop,
+                            storage,
+                            byteSize: 4
+                        }))
+                    }]);
+                    validateGSplatData(gsplatData);
+                    await op.output.replaceData(scene.assetLoader.createGSplatAsset(gsplatData, name));
+                    lastSnapshotAt = performance.now();
+                    snapshotDirty = false;
+                    return;
+                }
+            }
+
             const bytes = await engine.exportPly();
             if (runOp !== op || !opStillApplied(op)) return;
 
-            const name = `${op.settings.datasetName.replace(/\.(zip|ply|mp4|mov|webm|mkv)$/i, '') || 'trained'}.ply`;
             const fileSystem = new MappedReadFileSystem();
             fileSystem.addFile(name, new Blob([bytes as BlobPart], { type: 'application/octet-stream' }));
             // interim snapshots skip the morton reorder for speed; the final
@@ -108,7 +190,8 @@ const registerTraining = (events: Events, scene: Scene) => {
             note(op, { at: performance.now(), level: 'warn', text: `snapshot: ${text}` });
             events.fire('training.warning', text);
         } finally {
-            snapshotBusy = false;
+            snapshotBusy = null;
+            done();
         }
     };
 
@@ -179,7 +262,19 @@ const registerTraining = (events: Events, scene: Scene) => {
         const hadOutput = !!op.output;
 
         try {
-            await engine.start(op.dataset as TrainSource, (defaults) => {
+            let source = op.dataset as TrainSource;
+
+            // a seed that has since left the scene is not one
+            const seed = op.seed && (scene.getElementsByType(ElementType.splat) as Splat[]).includes(op.seed) ? op.seed : null;
+            if (seed) {
+                const seeded = await seedSource(source, seed);
+                if (runOp !== op) return;
+                source = seeded.source;
+                note(op, { at: performance.now(), level: 'info', text: `seeded from ${seed.name} (${Math.round(seeded.bytes / 1e6)} MB init.ply)` });
+                changed();
+            }
+
+            await engine.start(source, (defaults) => {
                 const config = { ...defaults, ...op.settings.config };
                 lastConfig = config;
                 // show the effective values back on the node

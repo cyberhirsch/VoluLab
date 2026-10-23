@@ -587,12 +587,15 @@ class NodePanel extends Container {
         this.replaySlider('keep', op.fraction, 0.01, 1, 0.01, index, (v) => {
             op.setFraction(v);
         }, v => `${Math.round(v * 100)}%`);
+        this.replayToggle('rank', op.spread, op.spread ? 'per region' : 'overall', index, () => {
+            op.setSpread(!op.spread);
+        });
 
         this.stat('removed', op.affected < 0 ? 'not applied' : op.affected.toLocaleString());
 
         const note = document.createElement('div');
         note.className = 'nd-note';
-        note.textContent = 'drops the least important first - faint and small before bright and large';
+        note.textContent = 'drops the least important first - faint and small before bright and large. per region keeps the same share everywhere, so no region is emptied for another';
         this.body.appendChild(note);
     }
 

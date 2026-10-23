@@ -2,6 +2,7 @@ import { Color, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { AnimTrack } from './anim-track';
 import { BoxShape } from './box-shape';
+import { findOutliersAsync } from './cleanup-worker';
 import { GradeParams, gradeMatrix } from './color-grade';
 import { composeGrades, toGrade } from './grade-palette';
 import { IndexRanges } from './index-ranges';
@@ -957,12 +958,57 @@ class SetShBandsOp {
 }
 
 /**
+ * Group gaussians into blocks of space: a grid of BLOCKS_ALONG cells on the
+ * longest side of the box they fill, trimmed half a percent off each end of
+ * each axis so a few floaters do not decide the blocks for everyone else.
+ * Only blocks something falls in are returned. SplatQ (arXiv 2610.13503)
+ * gives each block a quota for the same reason this does.
+ */
+const BLOCKS_ALONG = 16;
+
+const spatialBlocks = (data: any, live: number[]): number[][] | null => {
+    const px = data.getProp('x') as Float32Array;
+    const py = data.getProp('y') as Float32Array;
+    const pz = data.getProp('z') as Float32Array;
+    if (!px || !py || !pz || live.length === 0) return null;
+
+    const trimmed = (v: Float32Array) => {
+        const step = Math.max(1, Math.floor(live.length / 65536));
+        const vals: number[] = [];
+        for (let m = 0; m < live.length; m += step) vals.push(v[live[m]]);
+        vals.sort((a, b) => a - b);
+        const cut = Math.floor(vals.length * 0.005);
+        return [vals[cut], vals[vals.length - 1 - cut]];
+    };
+    const [x0, x1] = trimmed(px);
+    const [y0, y1] = trimmed(py);
+    const [z0, z1] = trimmed(pz);
+    const size = Math.max(x1 - x0, y1 - y0, z1 - z0) / BLOCKS_ALONG || 1;
+    const along = (lo: number, hi: number) => Math.max(1, Math.ceil((hi - lo) / size));
+    const nx = along(x0, x1), ny = along(y0, y1), nz = along(z0, z1);
+    const cell = (v: number, lo: number, count: number) => Math.max(0, Math.min(count - 1, Math.floor((v - lo) / size)));
+
+    const blocks = new Map<number, number[]>();
+    for (const i of live) {
+        const key = (cell(pz[i], z0, nz) * ny + cell(py[i], y0, ny)) * nx + cell(px[i], x0, nx);
+        const b = blocks.get(key);
+        if (b) b.push(i); else blocks.set(key, [i]);
+    }
+    return [...blocks.values()];
+};
+
+/**
  * Drop the least important gaussians until only a fraction remain.
  *
  * Importance is opacity times footprint: a large transparent blob and a tiny
  * opaque speck both contribute little, and the product says so. Ranking rather
  * than thresholding, because a threshold that suits one capture suits no other
  * - "keep 40%" transfers between scenes in a way "alpha above 0.03" does not.
+ *
+ * On a TGH sequence the ranking uses the frame's `importance` column instead,
+ * the same measure taken once per 4D primitive, because the conditioned
+ * opacity and scales change from frame to frame and would drop a different
+ * set each time.
  *
  * Like a crop, this only ever adds to what is deleted.
  */
@@ -972,9 +1018,13 @@ class DecimateOp extends StateOp {
     /** how much to keep, 0..1 */
     fraction: number;
 
-    constructor(splat: Splat, fraction: number) {
+    /** keep the fraction in every region of space, rather than overall */
+    spread: boolean;
+
+    constructor(splat: Splat, fraction: number, spread = false) {
         super(splat, null, State.deleted, BitOp.SET, State.deleted);
         this.fraction = fraction;
+        this.spread = spread;
 
         this.resolver = (s: Splat) => {
             const data = s.splatData;
@@ -996,20 +1046,51 @@ class DecimateOp extends StateOp {
             const drop = live.length - keep;
             if (drop <= 0) return IndexRanges.fromPredicate(0, () => false);
 
+            // A sequence frame may carry a score that holds still over time.
+            // Ranked on it, the dropped set is the same in every frame that
+            // shares the same gaussians, so the sequence does not shimmer.
+            const stable = data.getProp('importance') as Float32Array;
+
             // scales are stored as logs, so the exponentials are the radii and
             // their product stands in for volume
-            const importance = (i: number) => {
+            const importance = stable ? (i: number) => stable[i] : (i: number) => {
                 const alpha = opacity ? 1 / (1 + Math.exp(-opacity[i])) : 1;
                 const vol = (sx && sy && sz) ?
                     Math.exp(sx[i]) * Math.exp(sy[i]) * Math.exp(sz[i]) : 1;
                 return alpha * vol;
             };
 
-            // partial ordering would do, but the counts here are small enough
-            // that a sort is simpler to be sure of
-            const ranked = live.slice().sort((a, b) => importance(a) - importance(b));
             const doomed = new Uint8Array(n);
-            for (let k = 0; k < drop; ++k) doomed[ranked[k]] = 1;
+            const dropLowest = (ids: number[], count: number) => {
+                // partial ordering would do, but the counts here are small
+                // enough that a sort is simpler to be sure of
+                const ranked = ids.slice().sort((a, b) => importance(a) - importance(b));
+                for (let k = 0; k < count; ++k) doomed[ranked[k]] = 1;
+            };
+
+            const blocks = this.spread ? spatialBlocks(data, live) : null;
+            if (!blocks) {
+                dropLowest(live, drop);
+                return IndexRanges.fromPredicate(n, i => doomed[i] === 1);
+            }
+
+            // Every block keeps its share of the budget, so a region of
+            // small, faint gaussians is thinned as much as one of large
+            // bright ones rather than emptied for them. Shares are rounded
+            // by largest remainder, so the total kept is exactly `keep`.
+            const shares = blocks.map(b => b.length * keep / live.length);
+            const quota = shares.map(Math.floor);
+            let left = keep - quota.reduce((a, q) => a + q, 0);
+            shares
+            .map((share, b) => ({ b, rest: share - quota[b] }))
+            .sort((x, y) => y.rest - x.rest)
+            .forEach(({ b }) => {
+                if (left > 0) {
+                    quota[b]++;
+                    left--;
+                }
+            });
+            blocks.forEach((ids, b) => dropLowest(ids, ids.length - quota[b]));
 
             return IndexRanges.fromPredicate(n, i => doomed[i] === 1);
         };
@@ -1017,6 +1098,11 @@ class DecimateOp extends StateOp {
 
     setFraction(fraction: number) {
         this.fraction = fraction;
+        this.invalidate();
+    }
+
+    setSpread(spread: boolean) {
+        this.spread = spread;
         this.invalidate();
     }
 }
@@ -1034,6 +1120,9 @@ class DecimateOp extends StateOp {
  * everything with everything, which at these counts is the difference between
  * a moment and never.
  *
+ * The search runs in a worker (see cleanup-worker.ts), so a million-point
+ * capture keeps the editor responsive while it is judged.
+ *
  * Like a crop, this only ever adds to what is deleted.
  */
 class CleanupOp extends StateOp {
@@ -1047,7 +1136,7 @@ class CleanupOp extends StateOp {
         this.neighbours = neighbours;
         this.deviations = deviations;
 
-        this.resolver = (s: Splat) => {
+        this.resolver = async (s: Splat) => {
             const data = s.splatData;
             const n = data.numSplats;
             const state = data.getProp('state') as Uint8Array;
@@ -1056,119 +1145,14 @@ class CleanupOp extends StateOp {
             const pz = data.getProp('z') as Float32Array;
             if (!px || !py || !pz) return IndexRanges.fromPredicate(0, () => false);
 
-            const live: number[] = [];
+            // what is still here; anything already deleted is not ours to
+            // judge or to resurrect
+            const live = new Uint8Array(n);
             for (let i = 0; i < n; ++i) {
-                if ((state[i] & State.deleted) === 0) live.push(i);
-            }
-            const k = Math.min(this.neighbours, live.length - 1);
-            if (k < 1) return IndexRanges.fromPredicate(0, () => false);
-
-            // bounds, to size the grid
-            let x0 = Infinity, y0 = Infinity, z0 = Infinity;
-            let x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
-            for (const i of live) {
-                if (px[i] < x0) x0 = px[i];
-                if (py[i] < y0) y0 = py[i];
-                if (pz[i] < z0) z0 = pz[i];
-                if (px[i] > x1) x1 = px[i];
-                if (py[i] > y1) y1 = py[i];
-                if (pz[i] > z1) z1 = pz[i];
+                live[i] = (state[i] & State.deleted) === 0 ? 1 : 0;
             }
 
-            // aim for a few points per cell, so a 3x3x3 block around a point
-            // holds comfortably more than k of them
-            const span = Math.max(x1 - x0, y1 - y0, z1 - z0) || 1;
-            const target = Math.max(1, Math.cbrt(live.length / 4));
-            const cell = span / target;
-            const dim = (lo: number, hi: number) => Math.max(1, Math.ceil((hi - lo) / cell) + 1);
-            const nx = dim(x0, x1), ny = dim(y0, y1), nz = dim(z0, z1);
-
-            const cellOf = (i: number) => {
-                const cx = Math.min(nx - 1, Math.floor((px[i] - x0) / cell));
-                const cy = Math.min(ny - 1, Math.floor((py[i] - y0) / cell));
-                const cz = Math.min(nz - 1, Math.floor((pz[i] - z0) / cell));
-                return (cz * ny + cy) * nx + cx;
-            };
-
-            const buckets = new Map<number, number[]>();
-            for (const i of live) {
-                const c = cellOf(i);
-                const b = buckets.get(c);
-                if (b) b.push(i); else buckets.set(c, [i]);
-            }
-
-            // mean distance to the k nearest, searching outward a ring at a
-            // time until the block seen holds enough candidates
-            const means = new Float64Array(live.length);
-            const dist2: number[] = [];
-
-            for (let idx = 0; idx < live.length; ++idx) {
-                const i = live[idx];
-                const cx = Math.min(nx - 1, Math.floor((px[i] - x0) / cell));
-                const cy = Math.min(ny - 1, Math.floor((py[i] - y0) / cell));
-                const cz = Math.min(nz - 1, Math.floor((pz[i] - z0) / cell));
-
-                dist2.length = 0;
-                for (let r = 1; r <= 4; ++r) {
-                    dist2.length = 0;
-                    for (let dz = -r; dz <= r; ++dz) {
-                        const z = cz + dz;
-                        if (z < 0 || z >= nz) continue;
-                        for (let dy = -r; dy <= r; ++dy) {
-                            const y = cy + dy;
-                            if (y < 0 || y >= ny) continue;
-                            for (let dx = -r; dx <= r; ++dx) {
-                                const x = cx + dx;
-                                if (x < 0 || x >= nx) continue;
-                                const b = buckets.get((z * ny + y) * nx + x);
-                                if (!b) continue;
-                                for (const j of b) {
-                                    if (j === i) continue;
-                                    const ex = px[j] - px[i];
-                                    const ey = py[j] - py[i];
-                                    const ez = pz[j] - pz[i];
-                                    dist2.push(ex * ex + ey * ey + ez * ez);
-                                }
-                            }
-                        }
-                    }
-                    if (dist2.length >= k) break;
-                }
-
-                if (!dist2.length) {
-                    // nothing anywhere near it; the emptiest possible neighbourhood
-                    means[idx] = Infinity;
-                    continue;
-                }
-
-                dist2.sort((a, b) => a - b);
-                const take = Math.min(k, dist2.length);
-                let sum = 0;
-                for (let m = 0; m < take; ++m) sum += Math.sqrt(dist2[m]);
-                means[idx] = sum / take;
-            }
-
-            // threshold at mean + deviations * sigma, over the finite values
-            let sum = 0, count = 0;
-            for (const m of means) {
-                if (isFinite(m)) {
-                    sum += m;
-                    count++;
-                }
-            }
-            const avg = count ? sum / count : 0;
-            let varSum = 0;
-            for (const m of means) {
-                if (isFinite(m)) varSum += (m - avg) * (m - avg);
-            }
-            const sigma = count ? Math.sqrt(varSum / count) : 0;
-            const limit = avg + this.deviations * sigma;
-
-            const doomed = new Uint8Array(n);
-            for (let idx = 0; idx < live.length; ++idx) {
-                if (!isFinite(means[idx]) || means[idx] > limit) doomed[live[idx]] = 1;
-            }
-
+            const doomed = await findOutliersAsync(px, py, pz, live, this.neighbours, this.deviations);
             return IndexRanges.fromPredicate(n, i => doomed[i] === 1);
         };
     }
@@ -1815,6 +1799,8 @@ class TrainOp {
     settings: TrainSettings;
     /** the import node feeding this one - the graph edge made concrete */
     datasetOp?: DatasetOp;
+    /** an object whose live gaussians start the run, in place of the dataset's points */
+    seed?: Splat;
     bypassed?: boolean;
 
     constructor(scene: Scene, output: Splat | null, settings: TrainSettings) {
@@ -1828,10 +1814,15 @@ class TrainOp {
         return this.datasetOp?.source ?? undefined;
     }
 
-    /** what the graph labels this node with */
-    /** the dataset it trains on is wired in, not chained */
+    /**
+     * The dataset it trains on is wired in, not chained; so is an object
+     * to start from - a cleaned-up earlier result, say.
+     */
     get ports(): PortSpec[] {
-        return [{ name: 'dataset', label: 'dataset', accepts: ['dataset'], source: this.datasetOp ?? null }];
+        return [
+            { name: 'dataset', label: 'dataset', accepts: ['dataset'], source: this.datasetOp ?? null },
+            { name: 'seed', label: 'seed', accepts: ['object'], source: this.seed ?? null }
+        ];
     }
 
     get sourceLabel() {
@@ -1850,6 +1841,7 @@ class TrainOp {
         this.output?.destroy();
         this.output = null;
         this.datasetOp = undefined;
+        this.seed = undefined;
     }
 }
 

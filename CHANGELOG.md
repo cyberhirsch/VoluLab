@@ -9,6 +9,265 @@ months finds out why before they change it.
 
 ---
 
+## Training snapshots read the trainer's buffers
+
+An interim snapshot of a run used to ask the trainer for a PLY and parse
+it back. It now copies the trainer's buffers - packed transforms, raw
+opacities, SH coefficients - to the CPU and builds splat data from them
+directly (`BrushEngine.readSplats`). The first snapshot still goes through
+a PLY, since it creates the object and fixes its transform; the final one
+too, since it takes the morton reorder.
+
+Two traps. The packed rotation is wxyz, whatever the package's typings
+say. And training leaves quaternions unnormalised while the PLY export
+normalises them, so the readback does too. Checked against the trainer's
+own export: every column within 0.05, where two reads a moment apart
+already drift by 0.018.
+
+Fixed alongside: the final snapshot was dropped when an interim one was
+still in flight, leaving the run's output stale and unsorted. It waits for
+it now. Verified headless: a 300-step run reaches done with 12 direct
+snapshots and both PLY ones.
+
+---
+
+## One GPU device for the viewport and the trainer
+
+The trainer asked the adapter for a device of its own, beside the
+viewport's. It takes the viewport's now, when the viewport runs on WebGPU
+and its device has subgroups - which it does wherever training could run,
+since the engine asks for subgroups and every adapter limit when it makes
+one. A browser where it does not falls back to a device of the trainer's
+own, as before; the run's log says which it got.
+
+One device is the prerequisite for drawing the trainer's buffers in the
+viewport without a copy, and it stops the two holding GPU memory apart.
+The trainer's host-side patches - the subgroups directive, a clean error
+scope read as absent - now see the engine's work too; both only touch what
+they were written for. Verified headless: a run and a seeded run on the
+shared device both train to "done", and the viewport draws throughout.
+
+## Decimate per region
+
+The decimate node ranks overall by default: keep the most important 20%,
+wherever they are. Opacity times volume runs high on large blobs, so the
+budget piles up where they are and thins everything else out - on
+flame_salmon at 20%, regions kept anywhere from 5% to 65% of what they had.
+
+"Rank per region" splits the object into blocks - sixteen along its
+longest side, over a box trimmed of its outer half percent - and each
+block keeps its own share, ranked within itself. Shares are rounded by
+largest remainder, so the total kept is still exactly the fraction asked
+for. The same capture then keeps between 14% and 24% everywhere. It is the
+quota half of SplatQ (arXiv 2610.13503); its annealed selection is not
+needed for this. Off by default, so existing nodes keep their results.
+
+On a TGH sequence, the blocks follow where the gaussians are on each
+frame, so a gaussian crossing a block border can change sides near it;
+overall ranking is the steadier choice for sequences.
+
+## Voxels as one surface, in their colours
+
+Voxels were drawn as a box entity per filled cell - and, it turned out, all
+of them black. The cells were unlit standard materials coloured through
+`diffuse`, and unlit, the standard material shows only its emissive. A
+reference box built the old way next to the new mesh came out black too.
+
+They are one mesh now: only the faces of filled cells that border an empty
+one, since a face between two filled cells can never be seen, each with its
+cell's colour as a vertex colour, through `emissive`. One draw call, the
+engine's own material, no shader of ours, the same on both backends. An
+8x8x8 block builds its 384 outer faces and none of the 2,688 inside it;
+cloud.ply voxelised at 32 keeps 1,990 of its cells' 2,760 faces. The
+colours land exactly: a cell of (0.5, 0.25, 0.75) reads back as
+(128, 64, 191).
+
+Instancing was the plan, and turned out to be the longer way: it needs a
+vertex format and a shader of ours, and still draws every hidden face.
+The surface is also what a mesh export of voxels would write.
+
+## Nodes reorder
+
+A node's context menu moves it up or down its object's chain - a cleanup
+before a decimate rather than after, say. The chain is history order, so
+this moves the op in the history: wound back to the earlier of the two
+places, the line reordered, and forward again, with everything the moved
+ops reach resolving again in the new order. History stops being
+append-only here, and goes through the same wind-back as every other
+structural change for that reason - each op is reversed while it still
+remembers what it did.
+
+A node cannot move above the node that makes its input, nor below one that
+takes its output: a decimate on a merge's result stays below the merge.
+That test is the footprints from the change below, which is why the two
+came in this order. Verified headless: cleanup moved above decimate gives
+byte for byte what the same two built in that order give, the move past a
+merge is refused, and winding the history to the start and back again
+lands on the same state.
+
+## Replay asks again only what a change reaches
+
+Changing a node - its parameters, bypassing it, removing it - winds the
+history back to it and forward again, and every resolving node after it
+used to forget its answer and resolve again. A grade tweaked on one object
+re-ran a cleanup on another: a minute, on a million gaussians.
+
+Now the history works out what the change reaches. Each node has a
+footprint: what it reads - its object, what is wired into it - and what it
+writes - its object, what it makes, the objects it consumes. Walking
+forward from the change, a node that touches anything reached is reached
+itself, and adds what it writes, so a select node feeding a light, or an
+object feeding a merge or a seed, carries the change on. Nodes it does not
+reach keep their answers: they would ask the same question of the same
+data.
+
+- **Doubt goes toward asking again.** A node whose footprint is unknown
+  is taken to reach everything after it, since a wrong answer here corrupts
+  state quietly instead of throwing.
+- **Still wound through.** Every later node is still undone and redone,
+  because history is one line; redoing a resolved node replays its stored
+  set, which is cheap.
+- **Verified** headless: two objects, decimate and cleanup on one,
+  decimate twice on the other; changing the other's first decimate
+  resolved only its own two nodes, and the result was identical, byte for
+  byte, to winding everything back, forgetting every answer and applying
+  it all again.
+- A frame swap still resolves everything (`reapplyAll`): the data under
+  every node has changed.
+
+## Cleanup off the main thread
+
+The cleanup node's outlier search ran inside its resolver, on the main
+thread: at a million gaussians, the editor stopped for as long as the
+search took. It runs in a worker now. While flame_salmon's million were
+judged, the longest gap between two frames was 29 ms.
+
+The worker is built from the search function's own source, turned into a
+blob URL, so it needs no second bundle and no change to the build - which
+is why `findOutliers` in `cleanup-worker.ts` must stay self-contained,
+reading nothing from its module. Positions and the live mask are copied
+across, so the splat's arrays stay free for drawing. If a worker cannot be
+made, or dies, the same function runs on the main thread as before.
+
+The search itself changed too, in two ways, and the second changes
+results.
+
+- **The grid fits the capture.** Its cell was sized from the bounding box,
+  which the floaters stretch - flame_salmon's runs from -775 to 1002 -
+  and a capture is surfaces in mostly empty space anyway, so the cells
+  holding anything held hundreds of points and the search went
+  quadratic. The box is now trimmed half a percent off each end of each
+  axis, and the cell refined against how full the cells really are as a
+  point sees them (the sum of each cell's count squared, over the
+  points), down to the finest the arrays can hold. Buckets are a counting
+  sort into typed arrays, and the k nearest are kept sorted as they
+  arrive instead of sorting every candidate.
+- **The k nearest are exact.** The old search took what lay in a block of
+  up to four cells round a point, so its answer moved with the cell size
+  - which is how it showed: four sizings of the same frame deleted
+  anywhere from 904 to 3,593. It now widens a shell at a time until
+  nothing outside could be nearer than the k-th found, and on 20,000
+  points of a real frame it matches a brute-force search exactly. On a
+  capture whose old blocks held enough candidates, results barely move;
+  where they did not, they now say what the node's description always
+  said.
+
+flame_salmon's frame of 1,059,844: over 396 seconds with the old search,
+63 with this one, 581 floaters removed. Most of those seconds are the
+floaters themselves, whose search crosses the whole grid.
+
+## Merge by dropping one object on another
+
+Drag an object's wire out and let go over another object's node, and the
+two merge - the same merge the context menu offers by name, which stays.
+While the wire is held, the nodes it would merge into are outlined.
+
+A node with an input that takes an object - a train node's seed, a light's
+source - takes the wire there instead, so dropping on one never merges.
+Merge did not get a port of its own after all: it makes a new object out
+of two, and every node in the other object's lane already stands for that
+object, so the whole node is the target.
+
+## Bounds on an adapter at WebGPU's minimum
+
+The bound pass wrote four RGBA32F targets at once - 64 bytes of colour per
+sample, where WebGPU guarantees 32. Real GPUs offer more (128 on the one
+tested), but an adapter at the minimum rejects the pass: SwiftShader does,
+which is how relighting's headless tests found it. Every splat was then
+left with an empty bound, culled out of sight, and camera framing broke.
+
+Where the adapter reports less than 64 bytes, the pass now runs twice,
+the selection's min and max one time and the visible min and max the
+other, two targets each. Everywhere else it stays one pass. RGBA16F would
+have fit in one, but positions want the precision. Forced to split on a
+real GPU, both ways give identical bounds on flame_salmon's million
+gaussians.
+
+## A run that finishes, finishes
+
+No training run had ever reached "done". The trainer's last batch comes
+back with "training complete" in it, and the pump asked for another, as
+it would after any batch: an empty answer was meant to say the stream
+had ended. It never came. The wasm stream is not fused, so polling it
+once more after its end panics - "`async fn` resumed after completion" -
+and every run that trained to the last iteration ended as an error, with
+its result never committed. The pump now stops at the trainer's own
+sign-off. Verified headless on a synthetic four-view dataset: sixty
+iterations, "done", the final snapshot in the scene and the numbers on
+the node. Fusing the stream in the fork would make the extra poll
+harmless too; it is not needed while the host stops first.
+
+## Training from an edited scene
+
+A train node has a second input, seed, beside its dataset. Wire an object
+into it - a cleaned-up earlier result, say - and the run starts from that
+object's gaussians instead of the dataset's points.
+
+- **How it gets there.** At Start the object's live gaussians are written
+  as a PLY and added to the dataset zip as `init.ply`, which Brush takes
+  as its starting point cloud in place of anything else. Deleted gaussians
+  stay out, so a cleanup or a crop carries into the run. A packed dataset
+  gets the file added to its zip without being unpacked: the new entry goes
+  in before the central directory, so the entries already there keep
+  their offsets and their compression. A picked folder is packed first,
+  and is not written to.
+- **The data frame, not the scene.** The seed is written where the
+  gaussians sit in the object's own data, ignoring where the object has
+  been moved to: for an object trained from this dataset, that is the
+  frame its cameras are in. An object from another capture would have to
+  be in that frame already.
+- **Verified** headless: a run seeded from an earlier result decimated to
+  5,000 gaussians starts at 5,000; unseeded, the same dataset starts at
+  Brush's random 10,000.
+- A dataset with its own `init.ply` inside a folder may have that one
+  chosen over the seed: Brush takes the first `init.ply` in path order.
+
+## Decimate holds still on a TGH sequence
+
+A decimated sequence no longer shimmers. The decimate node ranked by
+opacity times volume, and on a TGH sequence both are the gaussian as
+conditioned at that frame's time - so the ranking, and with it the set
+dropped, changed with every frame.
+
+- **Ranked once per 4D primitive.** Each TGH frame now carries an
+  `importance` column: the primitive's peak opacity times its spatial
+  volume, read straight from the checkpoint before conditioning. It is the
+  same measure as on a still, taken at the primitive's temporal centre,
+  and it does not depend on t. The decimate node ranks on it when it is
+  there and as before when it is not - a still, a PLY sequence.
+- **Measured** on flame_salmon at keep 40%: of the gaussians alive in two
+  frames, the share dropped in one and kept in the other fell from 0.4%
+  between neighbouring frames, and 11% across a second, to at most 0.1%.
+  What remains happens where a segment of the hierarchy begins or ends:
+  the frame's gaussians change, and with them where the cut falls.
+- **PLY sequences are not helped.** Their frames are separate files with no
+  identity running between them, so there is nothing that holds still to
+  rank on.
+- The column rides along in the frame data and the data panel lists it,
+  but export writes a fixed set of columns and leaves it out.
+
+---
+
 ## Lights: a source input, mesh and gauss lights
 
 A light node takes in what it shines from, through a source input on its

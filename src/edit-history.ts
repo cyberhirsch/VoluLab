@@ -13,6 +13,47 @@ const opReferencesSplat = (op: EditOp, splat: Splat): boolean => {
     return (op as any).splat === splat;
 };
 
+type Footprint = { reads: object[], writes: object[] };
+
+/**
+ * What an op reads and what it changes: the object it edits, a shape or
+ * primitive it is about, what is wired into it, and what it makes. Null
+ * for an op that names none of these - nothing can be said about what it
+ * reaches, so whoever asks has to assume it reaches everything.
+ */
+const footprint = (op: EditOp): Footprint | null => {
+    if (op instanceof MultiOp) {
+        const parts = op.ops.map(footprint);
+        if (parts.some(p => !p)) return null;
+        return {
+            reads: parts.flatMap(p => p.reads),
+            writes: parts.flatMap(p => p.writes)
+        };
+    }
+
+    const o = op as any;
+    const reads: object[] = [];
+    const writes: object[] = [];
+    for (const key of ['splat', 'shape', 'primitive', 'light', 'camera']) {
+        // objects only: a crop names its shape with a string
+        if (o[key] && typeof o[key] === 'object') {
+            reads.push(o[key]);
+            writes.push(o[key]);
+        }
+    }
+    // a node that consumes objects also hides them, so it changes them too
+    (o.inputs ?? []).forEach((input: object) => {
+        reads.push(input);
+        writes.push(input);
+    });
+    (o.ports ?? []).forEach((port: { source: object | null }) => {
+        if (port.source) reads.push(port.source);
+    });
+    if (o.output) writes.push(o.output);
+
+    return reads.length || writes.length ? { reads, writes } : null;
+};
+
 class EditHistory {
     history: EditOp[] = [];
     cursor = 0;
@@ -37,6 +78,8 @@ class EditHistory {
         events.function('edit.refresh', (index: number, mutate?: () => void) => this.refresh(index, mutate));
         events.function('edit.reapplyAll', () => this.reapplyAll());
         events.function('edit.setBypassed', (index: number, bypassed: boolean) => this.setBypassed(index, bypassed));
+        events.function('edit.canMove', (from: number, to: number) => this.canMove(from, to));
+        events.function('edit.move', (from: number, to: number) => this.move(from, to));
 
         // read access for views that draw the history rather than drive it -
         // the node panel builds its graph from this
@@ -116,7 +159,7 @@ class EditHistory {
      * edit an op that is currently applied without first reversing it, and
      * everything standing on it has to be asked again afterwards.
      */
-    private async replayAround(index: number, mutate: () => void, cursorAfter: (resume: number) => number) {
+    private async replayAround(index: number, mutate: () => void, cursorAfter: (resume: number) => number, changed: EditOp[]) {
         const resume = this.cursor;
 
         while (this.cursor > index) {
@@ -125,10 +168,7 @@ class EditHistory {
 
         mutate();
 
-        for (let i = index; i < this.history.length; ++i) {
-            const later = this.history[i];
-            if (later instanceof StateOp) later.invalidate();
-        }
+        this.invalidateReached(index, changed);
 
         const target = Math.max(0, Math.min(this.history.length, cursorAfter(resume)));
         while (this.cursor < target) {
@@ -137,10 +177,55 @@ class EditHistory {
         this.fireEvents();
     }
 
+    /**
+     * Drop what the ops from `index` on resolved - but only those the change
+     * can reach.
+     *
+     * Everything after `index` is wound back and forward again either way,
+     * since history is one line. What costs is resolving: a selection asked
+     * again, a cleanup run again. An op that edits another object, reading
+     * nothing the changed ops wrote, would ask its question of the same data
+     * and get the same answer, so it keeps the one it has. Reach is
+     * followed forward: an op that touches anything reached is reached
+     * itself, and so is everything it writes - so a select node feeding a
+     * light, or an object feeding a merge, carries the change on.
+     *
+     * An op whose footprint is unknown is assumed to reach everything from
+     * there on. Being wrong here would corrupt state silently rather than
+     * throw, so doubt resolves toward asking again.
+     */
+    private invalidateReached(index: number, changed: EditOp[]) {
+        const reached = new Set<object>();
+        let everything = false;
+        changed.forEach((op) => {
+            const fp = footprint(op);
+            if (!fp) everything = true;
+            else fp.writes.forEach(w => reached.add(w));
+            reached.add(op);
+        });
+
+        for (let i = index; i < this.history.length; ++i) {
+            const op = this.history[i];
+            const fp = footprint(op);
+            const hit = everything || !fp || changed.includes(op) ||
+                fp.reads.some(r => reached.has(r)) || fp.writes.some(w => reached.has(w));
+            if (!hit) continue;
+
+            if (op instanceof StateOp) op.invalidate();
+            if (op instanceof MultiOp) {
+                op.ops.forEach(inner => inner instanceof StateOp && inner.invalidate());
+            }
+            if (!fp) everything = true;
+            else fp.writes.forEach(w => reached.add(w));
+            reached.add(op);
+        }
+    }
+
     /** Drop ops from the history entirely, rebuilding what stood on them. */
     removeAt(indices: number[]) {
         const sorted = [...new Set(indices)].filter(i => i >= 0 && i < this.history.length).sort((a, b) => a - b);
         if (!sorted.length) return Promise.resolve();
+        const removed = sorted.map(i => this.history[i]);
 
         return this.queue(() => this.replayAround(
             sorted[0],
@@ -150,7 +235,8 @@ class EditHistory {
                     this.history.splice(i, 1)[0].destroy?.();
                 });
             },
-            resume => resume - sorted.filter(i => i < resume).length
+            resume => resume - sorted.filter(i => i < resume).length,
+            removed
         ));
     }
 
@@ -168,7 +254,8 @@ class EditHistory {
         return this.queue(() => this.replayAround(
             index,
             mutate,
-            resume => Math.max(resume, index + 1)
+            resume => Math.max(resume, index + 1),
+            [this.history[index]]
         ));
     }
 
@@ -204,6 +291,58 @@ class EditHistory {
         });
     }
 
+    /**
+     * Can the op at `from` be moved to `to`? Not past anything it consumes
+     * or that consumes it: a node cannot stand above the node that makes
+     * its input, nor below one that takes its output. Everything else is
+     * a matter of order, which is the point of moving it.
+     */
+    canMove(from: number, to: number) {
+        const op = this.history[from];
+        if (!op || to < 0 || to >= this.history.length || to === from) return false;
+        const fp = footprint(op);
+        if (!fp) return false;
+
+        const lo = Math.min(from, to), hi = Math.max(from, to);
+        for (let i = lo; i <= hi; ++i) {
+            if (i === from) continue;
+            const other = this.history[i];
+            const ofp = footprint(other);
+            if (!ofp) return false;
+            const [earlier, later] = to < from ? [other, op] : [op, other];
+            const made = [earlier, (earlier as any).output].filter(Boolean);
+            const laterReads = later === op ? fp.reads : ofp.reads;
+            if (laterReads.some(r => made.includes(r))) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Move an op to another place in the history, and rebuild from the
+     * earlier of the two. History stops being append-only here, which is
+     * why it goes through the same wind-back as every other structural
+     * change: each op is reversed while it still remembers what it did,
+     * the line is reordered, and everything the moved ops reach resolves
+     * again in its new order.
+     */
+    move(from: number, to: number) {
+        return this.queue(() => {
+            if (!this.canMove(from, to)) return;
+            const lo = Math.min(from, to), hi = Math.max(from, to);
+            const shifted = this.history.slice(lo, hi + 1);
+            return this.replayAround(
+                lo,
+                () => {
+                    const [op] = this.history.splice(from, 1);
+                    this.history.splice(to, 0, op);
+                },
+                // as many ops stay applied as were
+                resume => resume,
+                shifted
+            );
+        });
+    }
+
     /** Turn an op off or on in place, rebuilding what stood on it. */
     setBypassed(index: number, bypassed: boolean) {
         const op = this.history[index];
@@ -215,7 +354,8 @@ class EditHistory {
                 op.bypassed = bypassed;
             },
             // the op is still there, so the cursor lands exactly where it was
-            resume => resume
+            resume => resume,
+            [op]
         ));
     }
 
@@ -260,7 +400,8 @@ class EditHistory {
             () => op.setSteps(steps),
             // at minimum the edited op itself is applied, so its result is
             // visible even if the cursor sat before it
-            resume => Math.max(resume, index + 1)
+            resume => Math.max(resume, index + 1),
+            [op]
         ));
     }
 

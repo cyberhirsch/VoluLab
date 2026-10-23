@@ -110,9 +110,10 @@ const LOAD_REPORT_S = 30;
  * wasm panic instead of an error anyone could read.
  *
  * Prepending the directive here is the smallest place to put it: it is a
- * property of the module text, this device belongs to the trainer alone,
- * and the guard only fires for modules that use subgroups and are missing
- * the line.
+ * property of the module text, and the guard only fires for modules that
+ * use subgroups and are missing the line. When the device is the
+ * viewport's, the engine's modules pass through the same wrapper; its own
+ * subgroup shaders carry the directive, so the guard leaves them alone.
  */
 type ShaderModuleDesc = Parameters<GPUDevice['createShaderModule']>[0];
 
@@ -255,6 +256,9 @@ const sourceName = (source: TrainSource) => {
 
 
 class BrushEngine {
+    /** the viewport's device, when it has one the trainer can share */
+    sharedDevice: (() => { adapter: GPUAdapter, device: GPUDevice } | null) | null = null;
+
     private pkg: BrushPkg | null = null;
     private app: BrushApp | null = null;
     private _device: GPUDevice | null = null;
@@ -328,24 +332,41 @@ class BrushEngine {
         if (!('gpu' in navigator)) {
             throw new WebGPUTrainingUnavailableError('WebGPU is not available in this browser');
         }
-        const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-        if (!adapter) {
-            throw new WebGPUTrainingUnavailableError('No WebGPU adapter available');
-        }
-        if (!adapter.features.has('subgroups' as GPUFeatureName)) {
-            throw new WebGPUTrainingUnavailableError('This GPU/browser lacks WebGPU subgroups, which training requires');
-        }
 
-        // Brush wants the adapter's full capabilities - notably subgroups and
-        // maxed limits for large storage buffers. mappable-primary-buffers is
-        // a Chrome-experimental feature some adapters report but reject.
-        const features = [...adapter.features].filter(f => f !== 'mappable-primary-buffers') as GPUFeatureName[];
-        const requiredLimits: Record<string, number> = {};
-        for (const k in adapter.limits) {
-            const v = (adapter.limits as unknown as Record<string, number>)[k];
-            if (typeof v === 'number') requiredLimits[k] = v;
+        // The viewport's device, when it can carry the trainer: one device
+        // for both is what lets the viewport draw the trainer's buffers
+        // without a copy, and it halves what the two hold on the GPU. The
+        // engine asks for subgroups and every adapter limit when it makes
+        // its device - what Brush would ask for - so on a WebGPU viewport
+        // it usually can.
+        const shared = this.sharedDevice?.();
+        let adapter: GPUAdapter;
+        let device: GPUDevice;
+        if (shared && shared.device.features.has('subgroups' as GPUFeatureName)) {
+            adapter = shared.adapter;
+            device = shared.device;
+        } else {
+            adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+            if (!adapter) {
+                throw new WebGPUTrainingUnavailableError('No WebGPU adapter available');
+            }
+            if (!adapter.features.has('subgroups' as GPUFeatureName)) {
+                throw new WebGPUTrainingUnavailableError('This GPU/browser lacks WebGPU subgroups, which training requires');
+            }
+
+            // Brush wants the adapter's full capabilities - notably subgroups
+            // and maxed limits for large storage buffers. mappable-primary-
+            // buffers is a Chrome-experimental feature some adapters report
+            // but reject.
+            const features = [...adapter.features].filter(f => f !== 'mappable-primary-buffers') as GPUFeatureName[];
+            const requiredLimits: Record<string, number> = {};
+            for (const k in adapter.limits) {
+                const v = (adapter.limits as unknown as Record<string, number>)[k];
+                if (typeof v === 'number') requiredLimits[k] = v;
+            }
+            device = await adapter.requestDevice({ requiredFeatures: features, requiredLimits });
         }
-        const device = await adapter.requestDevice({ requiredFeatures: features, requiredLimits });
+        this.write('info', shared?.device === device ? 'gpu device shared with the viewport' : 'on a gpu device of its own');
         enableSubgroupsInWgsl(device, text => this.write('error', text));
         reportCleanErrorScopeAsAbsent();
 
@@ -509,6 +530,93 @@ class BrushEngine {
         };
     }
 
+    /**
+     * The latest splats as PLY columns, read straight from the trainer's GPU
+     * buffers: means, wxyz rotations and log-scales packed ten floats a
+     * splat, raw opacities, and SH coefficients splat-major with the three
+     * channels innermost. The copies are queued in one go, before the next
+     * batch can touch the buffers; only then is anything awaited. Null when
+     * the trainer has no buffers to give (not on WebGPU, or nothing yet) -
+     * the caller falls back to exportPly.
+     */
+    async readSplats(): Promise<{ count: number, props: Map<string, Float32Array> } | null> {
+        const training = this.training;
+        const device = this._device;
+        if (!training || !device) return null;
+
+        this.reads++;
+        try {
+            const buffers = this.currentBuffers();
+            if (!buffers) return null;
+            const n = buffers.count;
+            const coeffs = buffers.shStride / 3;
+
+            const sizes = [n * 40, n * 4, n * buffers.shStride * 4];
+            const sources = [buffers.transforms, buffers.rawOpacities, buffers.shCoeffs];
+            const staging = sizes.map(size => device.createBuffer({
+                size,
+                usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+            }));
+            const encoder = device.createCommandEncoder();
+            sources.forEach((src, i) => encoder.copyBufferToBuffer(src, 0, staging[i], 0, sizes[i]));
+            device.queue.submit([encoder.finish()]);
+
+            await Promise.all(staging.map(b => b.mapAsync(GPUMapMode.READ)));
+            const [packed, opacity, sh] = staging.map(b => new Float32Array(b.getMappedRange().slice(0)));
+            staging.forEach(b => b.destroy());
+
+            const props = new Map<string, Float32Array>();
+            const column = (name: string) => {
+                const c = new Float32Array(n);
+                props.set(name, c);
+                return c;
+            };
+            const [x, y, z] = ['x', 'y', 'z'].map(column);
+            const dc = [0, 1, 2].map(c => column(`f_dc_${c}`));
+            const rest: Float32Array[] = [];
+            for (let c = 0; c < 3 * (coeffs - 1); c++) rest.push(column(`f_rest_${c}`));
+            const op = column('opacity');
+            const scales = [0, 1, 2].map(c => column(`scale_${c}`));
+            const rot = [0, 1, 2, 3].map(c => column(`rot_${c}`));
+
+            const K = coeffs - 1;
+            for (let i = 0; i < n; i++) {
+                const t = i * 10;
+                x[i] = packed[t];
+                y[i] = packed[t + 1];
+                z[i] = packed[t + 2];
+                // wxyz, as a PLY has it - whatever the package's typings
+                // say, checked against the trainer's own PLY export - and
+                // normalised, as that export writes them; training leaves
+                // them unnormalised
+                const qn = 1 / (Math.hypot(packed[t + 3], packed[t + 4], packed[t + 5], packed[t + 6]) || 1);
+                rot[0][i] = packed[t + 3] * qn;
+                rot[1][i] = packed[t + 4] * qn;
+                rot[2][i] = packed[t + 5] * qn;
+                rot[3][i] = packed[t + 6] * qn;
+                scales[0][i] = packed[t + 7];
+                scales[1][i] = packed[t + 8];
+                scales[2][i] = packed[t + 9];
+                op[i] = opacity[i];
+
+                const base = i * coeffs * 3;
+                dc[0][i] = sh[base];
+                dc[1][i] = sh[base + 1];
+                dc[2][i] = sh[base + 2];
+                // a PLY's rest is channel-major: every red coefficient first
+                for (let k = 0; k < K; k++) {
+                    rest[k][i] = sh[base + (k + 1) * 3];
+                    rest[K + k][i] = sh[base + (k + 1) * 3 + 1];
+                    rest[2 * K + k][i] = sh[base + (k + 1) * 3 + 2];
+                }
+            }
+            return { count: n, props };
+        } finally {
+            this.reads--;
+            this.release(null);
+        }
+    }
+
     /** The latest splats as a standard 3DGS binary PLY. */
     async exportPly(): Promise<Uint8Array> {
         const training = this.training;
@@ -655,6 +763,14 @@ class BrushEngine {
                 for (const message of messages) {
                     this.apply(message);
                 }
+                // The batch that reaches the end of the stream comes back
+                // with the run's last messages in it, and asking again does
+                // not return an empty batch: the stream is not fused, so
+                // polling it once more panics with "`async fn` resumed after
+                // completion" and a finished run ends as an error. The
+                // trainer's own sign-off is the end, so stop at it.
+                const done = this.pkg.BrushMessageKind.DoneTraining;
+                if (messages.some(m => m.kind === done)) break;
             }
             // the stream is exhausted but the Training object stays alive:
             // its splat view still answers currentBuffers/exportPly until

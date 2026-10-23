@@ -161,6 +161,11 @@
     }
 }
 
+// an object a dragged object's wire would merge into
+.gn-node.gn-merge-ready {
+    border-color: $ink-7;
+}
+
 // the input's name, just over it
 .gn-port-label {
     position: absolute;

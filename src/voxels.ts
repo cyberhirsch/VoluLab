@@ -2,6 +2,8 @@ import {
     BoundingBox,
     Color,
     Entity,
+    Mesh,
+    MeshInstance,
     StandardMaterial,
     Vec3
 } from 'playcanvas';
@@ -20,12 +22,85 @@ import { Serializer } from './serializer';
  * and pretending otherwise would mean carrying them to no purpose and then
  * discarding them at export.
  *
- * The renderer is a box entity per filled cell. That is honest rather than
- * clever: it is certainly correct, it needs no custom shader, and it is slow
- * once the count runs into thousands. Making it fast means instancing with a
- * per-instance colour stream, which is a vertex format and a shader - worth
- * doing when the counts demand it and not before.
+ * The renderer is one mesh: the faces of filled cells that border an empty
+ * one, each carrying its cell's colour as a vertex colour. A face between
+ * two filled cells can never be seen, so it is never built - a capture fills
+ * a shell, and what is drawn is that shell's surface rather than every box
+ * in it. One draw call, the engine's own unlit material, no shader of ours,
+ * and the same on both backends. It replaced a box entity per cell, which
+ * was certainly correct and slow from the thousands on.
  */
+
+// the six faces of a unit cube about its centre: the neighbour each one
+// looks onto, and its corners wound counter-clockwise seen from outside
+const FACES: { dir: [number, number, number], corners: [number, number, number][] }[] = [
+    { dir: [1, 0, 0], corners: [[1, -1, -1], [1, 1, -1], [1, 1, 1], [1, -1, 1]] },
+    { dir: [-1, 0, 0], corners: [[-1, -1, 1], [-1, 1, 1], [-1, 1, -1], [-1, -1, -1]] },
+    { dir: [0, 1, 0], corners: [[-1, 1, 1], [1, 1, 1], [1, 1, -1], [-1, 1, -1]] },
+    { dir: [0, -1, 0], corners: [[-1, -1, -1], [1, -1, -1], [1, -1, 1], [-1, -1, 1]] },
+    { dir: [0, 0, 1], corners: [[-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]] },
+    { dir: [0, 0, -1], corners: [[1, -1, -1], [-1, -1, -1], [-1, 1, -1], [1, 1, -1]] }
+];
+
+/**
+ * The visible faces of a grid, as positions, sRGB colours and triangles.
+ */
+const buildSurface = (grid: VoxelGrid) => {
+    const { dims, origin, cellSize, cells, colors } = grid;
+    const filled = new Set<number>(cells);
+    const at = (x: number, y: number, z: number) => {
+        if (x < 0 || y < 0 || z < 0 || x >= dims[0] || y >= dims[1] || z >= dims[2]) return false;
+        return filled.has((z * dims[1] + y) * dims[0] + x);
+    };
+
+    // count first, so every array is allocated once at its size
+    let faces = 0;
+    const cellXYZ = (flat: number): [number, number, number] => [
+        flat % dims[0],
+        Math.floor(flat / dims[0]) % dims[1],
+        Math.floor(flat / (dims[0] * dims[1]))
+    ];
+    cells.forEach((flat) => {
+        const [x, y, z] = cellXYZ(flat);
+        FACES.forEach(({ dir }) => {
+            if (!at(x + dir[0], y + dir[1], z + dir[2])) faces++;
+        });
+    });
+
+    const positions = new Float32Array(faces * 4 * 3);
+    const colours = new Uint8Array(faces * 4 * 4);
+    const indices = new Uint32Array(faces * 6);
+    const half = cellSize * 0.5;
+    let face = 0;
+
+    cells.forEach((flat, i) => {
+        const [x, y, z] = cellXYZ(flat);
+        const cx = origin.x + x * cellSize;
+        const cy = origin.y + y * cellSize;
+        const cz = origin.z + z * cellSize;
+        const r = Math.round(Math.min(1, Math.max(0, colors[i * 4])) * 255);
+        const g = Math.round(Math.min(1, Math.max(0, colors[i * 4 + 1])) * 255);
+        const b = Math.round(Math.min(1, Math.max(0, colors[i * 4 + 2])) * 255);
+
+        FACES.forEach(({ dir, corners }) => {
+            if (at(x + dir[0], y + dir[1], z + dir[2])) return;
+            const v = face * 4;
+            corners.forEach((c, k) => {
+                positions[(v + k) * 3] = cx + c[0] * half;
+                positions[(v + k) * 3 + 1] = cy + c[1] * half;
+                positions[(v + k) * 3 + 2] = cz + c[2] * half;
+                colours[(v + k) * 4] = r;
+                colours[(v + k) * 4 + 1] = g;
+                colours[(v + k) * 4 + 2] = b;
+                colours[(v + k) * 4 + 3] = 255;
+            });
+            indices.set([v, v + 1, v + 2, v, v + 2, v + 3], face * 6);
+            face++;
+        });
+    });
+
+    return { positions, colours, indices, faces };
+};
 
 export type VoxelGrid = {
     /** cells along each axis */
@@ -59,29 +134,37 @@ class Voxels extends Element {
     }
 
     add() {
-        const { dims, origin, cellSize, cells, colors } = this.grid;
+        const { dims, origin, cellSize } = this.grid;
 
-        cells.forEach((flat, i) => {
-            const x = flat % dims[0];
-            const y = Math.floor(flat / dims[0]) % dims[1];
-            const z = Math.floor(flat / (dims[0] * dims[1]));
+        // built once, on the first add: the grid does not change after
+        if (!this.entity.render) {
+            const surface = buildSurface(this.grid);
+            if (surface.faces > 0) {
+                const mesh = new Mesh(this.scene.graphicsDevice);
+                mesh.setPositions(surface.positions);
+                mesh.setColors32(surface.colours);
+                mesh.setIndices(surface.indices);
+                mesh.update();
 
-            const material = new StandardMaterial();
-            material.diffuse = new Color(colors[i * 4], colors[i * 4 + 1], colors[i * 4 + 2]);
-            material.opacity = colors[i * 4 + 3];
-            material.useLighting = false;
-            material.update();
+                // unlit, coloured by the vertices. Unlit, the standard
+                // material shows only its emissive - a diffuse colour comes
+                // out black, which is what the box-per-cell renderer drew.
+                // The colours are sRGB, as a material colour is, so the
+                // engine is told to decode them.
+                const material = new StandardMaterial();
+                material.diffuse = new Color(0, 0, 0);
+                material.emissive = new Color(1, 1, 1);
+                material.emissiveVertexColor = true;
+                // a real engine flag the typings do not carry
+                (material as any).vertexColorGamma = true;
+                material.useLighting = false;
+                material.update();
 
-            const cell = new Entity(`cell${flat}`);
-            cell.addComponent('render', { type: 'box', material });
-            cell.setLocalScale(cellSize, cellSize, cellSize);
-            cell.setLocalPosition(
-                origin.x + x * cellSize,
-                origin.y + y * cellSize,
-                origin.z + z * cellSize
-            );
-            this.entity.addChild(cell);
-        });
+                this.entity.addComponent('render', {
+                    meshInstances: [new MeshInstance(mesh, material)]
+                });
+            }
+        }
 
         this.scene.contentRoot.addChild(this.entity);
 

@@ -1482,6 +1482,11 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             op.settings.datasetName = source.sourceName;
             events.fire('edit.changed');
         }
+        // a train node's seed: an object, read when the run starts
+        if (op instanceof TrainOp && port === 'seed' && source instanceof Splat) {
+            op.seed = source;
+            events.fire('edit.changed');
+        }
         // a select node's mesh: what is inside the primitive, set by default
         if (op instanceof SelectOp && port === 'mesh' && source instanceof ScenePrimitive) {
             setMesh(op, { source, mode: op.mesh?.mode ?? 'set', used: shapeOf(source) });
@@ -1499,6 +1504,10 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         if (op instanceof TrainOp && port === 'dataset' && op.datasetOp) {
             op.datasetOp = undefined;
             op.inputs = [];
+            events.fire('edit.changed');
+        }
+        if (op instanceof TrainOp && port === 'seed' && op.seed) {
+            op.seed = undefined;
             events.fire('edit.changed');
         }
         if (op instanceof SelectOp && port === 'mesh' && op.mesh) {

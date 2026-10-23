@@ -24,14 +24,10 @@ hard here is rarely the amount of code.
 
 | Phase | # | Work | Model |
 |---|---|---|---|
-| 0 | 11 | Verify a training run end to end | Sonnet 5 |
+| 0 | 11 | A whole training run on a real capture (synthetic runs reach "done") | Sonnet 5 |
 | 1 | 4 | COLMAP bridge | Opus 5 |
-| 1 | 14 | Seed training from an edited scene | Haiku 4.5 |
-| 2 | 1 | WebGPU viewport | Fable 5 |
-| 2 | 9 | Voxel renderer by instancing | Sonnet 5 |
+| 2 | 1 | WebGPU: draw the trainer's buffers directly (device shared, interim snapshots read the buffers; zero-copy draw open) | Fable 5 |
 | 2 | 8 | TGH frames off the main thread | Sonnet 5 |
-| 3 | 5 | Precise replay invalidation | Opus 5 |
-| 3 | 2 | Node reordering | Fable 5 |
 | 4 | 3 | Colour beyond affine (gamma, contrast, curves) | Fable 5 |
 | 4 | 7 | A real temperature model | Opus 5 |
 | 4 | 15 | Rec.709 luma coefficients | Haiku 4.5 |
@@ -39,37 +35,29 @@ hard here is rarely the amount of code.
 | 5 | 17 | Relighting: occlusion and ambient light (built, needs a real-GPU run) | |
 | 5 | 18 | Relighting: de-light by occlusion and a matched sun (built, needs a real-GPU run) | |
 | 5 | 19 | Relighting: area and volume lights (built, needs a real-GPU run) | |
-| — | 10 | Cleanup in a worker | Sonnet 5 |
-| — | 12 | Merge by dragging output onto input | Sonnet 5 |
 | — | 13 | A voxel export path | Sonnet 5 |
-| — | 6 | Frame-stable decimate ranking | Opus 5 |
+| — | 6 | Decimate: a merge mode (ranking frame-stable and per region, done) | Opus 5 |
 
-**Phase 0 gates everything else about training.** A training run has never
-been watched from dataset to committed node. Building the COLMAP bridge on
+**Phase 0 gates everything else about training.** A training run gets well
+past its first refine now, but has never been watched from dataset to
+committed node. Building the COLMAP bridge on
 top of a pipeline nobody has seen finish would mean debugging two unproven
 things through each other.
 
 **Phase 1 finishes the training story** - video in, poses found, gaussians
-out, and a cleaned-up result usable as the seed for the next run. Seeding
-comes after verification because it is the same pipeline pointed at its own
-output; there is no sense building the loop before the line works.
+out. A cleaned-up result can already seed the next run (CHANGELOG.md); what
+is left of the phase is COLMAP on a real capture.
 
-**Phase 2 is the device move, and it must come before any new shader.** Voxel
-instancing needs a shader written, and writing it against WebGL2 weeks before
-the viewport moves to WebGPU means writing it twice. The TGH item is in this
-phase for a different reason: WebGPU changes what the right answer *is*.
-Today the fix is a worker and a frame cache; on one device the better fix is
-conditioning the 4D gaussians in the shader, and the CPU stops being involved
-at all. Doing the worker first is not wrong, but it is work that a later
-decision may throw away - so decide the device first and then pick.
+**Phase 2 is what is left of the device move.** The viewport runs on WebGPU
+by default, and voxels needed no shader after all (CHANGELOG.md). What
+remains is sharing the device with the trainer, and the TGH item, where
+WebGPU changes what the right answer *is*: a worker and a frame cache move
+the cost off the main thread, while conditioning the 4D gaussians in the
+shader takes the CPU out of it altogether. The device is decided, so the
+shader is the one to build; the worker would be thrown away after it.
 
-**Phase 3 is two changes to the same subsystem, in this order.** Precise
-invalidation means walking a node's `inputs` backwards to find what actually
-depends on it. Node reordering needs exactly that answer to know whether a
-proposed reorder is even legal - you cannot move a node above something it
-consumes. Building the dependency walk first as a small, testable change, and
-only then letting the graph be rearranged, is much safer than discovering the
-traversal was wrong while also having made history mutable.
+**Phase 3 is done**: precise invalidation first, then node reordering on top
+of the dependency walk it built (CHANGELOG.md).
 
 **Phase 4 is the colour pipeline, and the point is doing it at once.** All
 three change how every existing grade looks. Landing them separately means
@@ -90,10 +78,10 @@ is done - the lighting runs in compute - and it is independent of phase 4:
 lighting is off by default and multiplies after the grade, so no existing
 grade changes how it looks.
 
-**The last four have no dependencies at all** and can be picked up whenever
-someone wants a clean, self-contained piece of work. Frame-stable decimate
-sits there rather than in a phase because it only starts to matter once
-someone is actually decimating sequences.
+**The last two have no dependencies at all** and can be picked up whenever
+someone wants a clean, self-contained piece of work. Decimate's remaining
+two sit there rather than in a phase because they only start to matter at
+aggressive ratios.
 
 On the tiers themselves: the Fable items are grouped not by size - all three
 are small diffs - but because each overturns an assumption other code relies
@@ -110,51 +98,36 @@ diff in `EditHistory` that earns its tier because being wrong there corrupts
 state silently rather than throwing.
 
 And worth naming honestly: there is not much genuinely trivial work left.
-Rec.709 is one constant plus a decision someone else has to make; seeding
-from an edited scene is a zip writer and some wiring. Padding that tier from
-the one above would only move the surprise later.
+Rec.709 is one constant plus a decision someone else has to make. Padding
+that tier from the one above would only move the surprise later.
 
 ---
 
-## Training stops in Burn's autotuner, which cannot run on wasm
+## Training runs; a whole run is still owed
 
-Training has been driven end to end for the first time, headless, with a
-synthetic four-view nerfstudio dataset. Two blockers on our side were
-found and fixed on the way - the zip the dataset was packed into, and the
-missing `enable subgroups;` on the sort kernels, both in
-[CHANGELOG.md](CHANGELOG.md). What remains is upstream, and the stack
-names it exactly:
+Training gets past loading, its first refine and on, on a real 127-view
+dataset, driven through an import node into a train node with the output
+splat in the scene. Four blockers fell on the way, each in
+[CHANGELOG.md](CHANGELOG.md): the dataset zip, the sort kernels'
+`enable subgroups;`, wgpu reading a clean error scope as an error, and
+cubecl's throughput probe blocking on wasm - that last one in the forks
+(cyberhirsch/cubecl@wasm-throughput, cyberhirsch/brush@volulab), together
+with brush's `refine` asking for the default device instead of its own.
+A panic now ends the run with its own message on the node, rather than
+leaving it on "loading".
 
-```
-cubecl_environment::future::base::block_on
-  cubecl_std::throughput::runners::compute_direct::build_kernel
-  cubecl_runtime::throughput::benchmarker::ThroughputBenchmarker::measure
-  cubecl_std::throughput::base::measure_peak_throughput
-  burn_cubecl::kernel::autotune_bounds::with_bounds<ReduceDimAutotuneKey>
-```
+A run now also finishes: the pump used to poll the stream once past its
+end and turn every completed run into an error (CHANGELOG.md, "A run that
+finishes, finishes"). Watched to "done" headless on a synthetic four-view
+dataset, the result committed to the node.
 
-Burn picks a reduce kernel by benchmarking candidates, and the benchmark
-measures peak throughput by *blocking* on the device. A browser cannot
-block, so `read_sync` panics with "Failed to read tensor data
-synchronously", the future driving `trainSteps` never settles, and the
-run sits at "loading" forever with no error anyone can see.
+What is still owed: the same on a real capture at default settings, with
+its time and its PSNR written down. Two costs to check
+while there: autotune on the web picks kernels without a measured rate,
+and per-image loading progress stays invisible until the trainer's API
+changes (both in the changelog).
 
-This is not a dataset problem and not a plumbing problem: any reduce -
-which means any loss - takes that path. `measure_peak_throughput` is a
-plain `fn` all the way down, so making it work on wasm means making the
-autotune-bounds path async through cubecl and burn. That is upstream
-work in `Repos/brush`'s dependency tree, not app work.
-
-Two smaller things fall out of it. There is a second panic just before,
-in `WgpuServer::create_module`, where wgpu pops an error scope and gets
-a `GPUError` that is neither validation nor out-of-memory and panics
-with "Unexpected error" rather than reporting it - worth a look once
-autotune runs. And note the trainer swallows panics: the wasm future
-stops, the promise never resolves, and the UI shows "loading". A
-watchdog on `trainSteps` that surfaces a stall as an error would have
-saved most of this investigation.
-
-How to reproduce, since it took some doing: run the training probe under
+How to debug the trainer, since it took some doing: run it under
 headless Chrome with `--enable-unsafe-webgpu`, hook
 `GPUDevice.createShaderModule` and read `getCompilationInfo()` for the
 real shader errors (wgpu only says "invalid due to a previous error"),
@@ -196,62 +169,31 @@ numerically identical across both backends in headless Chrome (which,
 unlike the embedded test pane, has a WebGPU adapter with subgroups -
 driven over CDP, the debugging loop that made this port possible).
 
-What remains on this front: the centers overlay draws one-pixel points
-on WebGPU (WGSL has no point size; restoring splatSize wants a
-quad-expansion pass); the engine loses one frame at startup to a
+What remains on this front: the engine loses one frame at startup to a
 backbuffer-resize race (*Destroyed texture WebgpuFramebuffer*,
 engine-side, cosmetic); a click-through in the user's real Chrome is
 still owed; and the original payoff - sharing the device with the Brush
 trainer so training renders in the viewport without the PLY round-trip -
-is now actually reachable.
+is now actually reachable. Since done: the centers overlay draws quads,
+so splatSize holds on WebGPU, and the lens runs inside the frame again -
+the offscreen quad pass that seemed to render nothing was an invalid
+lens pipeline discarding the whole command buffer it was in.
 
-**One of our quad passes renders nothing into an offscreen target on
-WebGPU.** Found while building the camera node's lens: a
-`SimpleRenderPass` + `ShaderQuad` writing to a render target executes
-(the pass runs, the draw is issued, no validation error) and the target
-reads back empty, while the identical quad to the backbuffer works and
-the engine's own `drawQuadWithShader` works to targets. Until this is
-understood, in-frame post effects are not available - the lens had to
-move into the final blit, which is why it warps the gizmos too. Worth
-solving: it also blocks any future effect that must run before the
-overlays.
+**The trainer shares the viewport's device now** (CHANGELOG.md): one device,
+falling back to its own only where the viewport's lacks subgroups. What
+that was for is half built: interim snapshots now read the trainer's
+buffers straight into splat data (`BrushEngine.readSplats`), no PLY
+written or parsed; the first and final snapshots still go through a PLY.
+On 10k gaussians the readback itself is no faster (about 0.26 s against
+0.27 s for the PLY export, before its parse); the gain to measure is at a
+million. Still to build - the viewport drawing those buffers with no
+CPU copy at all. That wants the trainer's layout (packed transforms, SH coefficients, raw opacities)
+turned into what the gsplat renderer reads, on the GPU. It is also the
+prerequisite for conditioning 4D gaussians in the shader, which is what
+would make scrubbing a TGH sequence cost the CPU nothing.
 
-**Sharing the device works untouched.** The question was whether PlayCanvas's
-WebGPU device could carry what Brush needs. `createDevice` in the 2.21 engine
-calls `requireFeature("subgroups")` and copies every adapter limit into
-`requiredLimits` - the same device Brush asks for when it makes its own. So
-`BrushApp.initExisting` can take PlayCanvas's adapter, device and queue as
-they are. No engine patch, no second fork.
-
-**The sixteen shaders do not need rewriting.** The engine transpiles GLSL
-through glslang and twgsl; it is opt-in, via `glslangUrl` and `twgslUrl` at
-device creation, which VoluLab does not pass today. Two wasm libraries to
-serve out of `static/lib` in place of hand-porting `src/shaders` to WGSL.
-
-**The readbacks are already right.** `src/data-processor` and `src/picker.ts`
-call `texture.read()`, which is backend-agnostic and already awaited at every
-call site. The sync-to-async ripple that was expected does not exist.
-
-What is genuinely unknown is whether *our* GLSL survives that transpiler -
-`splat-shader.ts` overrides the engine's gsplat chunks, and the grade palette
-is RGBA32F, whose filtering and blending are optional WebGPU features an
-adapter may not expose. That cannot be reasoned out from the source; it wants
-a spike. Flip `deviceTypes` to `['webgpu', 'webgl2']`, wire the transpilers,
-and write down what breaks. Keep the ordering rather than deleting the WebGL2
-path, so the fallback survives.
-
-There is a second reason to do it: the engine warns that
-`GSplatComponent#unified` is deprecated and non-unified gsplat rendering is
-going away. That migration is coming whether or not the device changes, and
-doing both at once is cheaper than doing them a month apart.
-
-The payoff is that training stops being a guest. One device means the
-trainer's buffers are rendered by the viewport directly - real camera, real
-gaussian rendering, no PLY round-trip on commit - and
-`src/training/preview-renderer.ts` and its canvas are deleted rather than
-maintained. It is also the prerequisite for conditioning 4D gaussians in the
-shader, which is what would make scrubbing a TGH sequence cost the CPU
-nothing.
+The engine also warns that `GSplatComponent#unified` is deprecated and
+non-unified gsplat rendering is going away; that migration is still to do.
 
 ---
 
@@ -378,9 +320,8 @@ same from every side.
 (six for a point light), opacity rather than depth for semi-transparent
 gaussians, and filtering tricks for softness - and still say nothing about
 occlusion or volume lights. The grid answers every visibility question
-with one structure. It also runs in compute, which sidesteps the WebGPU
-bug above where our offscreen quad passes render nothing; screen-space
-occlusion would need exactly such a pass.
+with one structure. It also runs in compute, so it needs no offscreen
+render pass of the kind screen-space occlusion would.
 
 **De-lighting, and why occlusion does most of it.** New light multiplied
 onto a capture leaves the old shadows under the new ones, so the captured
@@ -549,49 +490,31 @@ proves slow on real captures.
 Everything below works. These are the places where one could work better, and
 what each would take:
 
-**Training is Chromium-only, and unproven end to end.** Brush's backward
-kernels need WebGPU subgroups, which Firefox and Safari do not expose yet;
-the pane says so rather than failing obscurely. And no full run has been
-watched from dataset to committed node - the pieces typecheck, build and
-load, but a real training run is the next thing to sit down and verify.
-
-**The voxel renderer is a box entity per cell.** Certainly correct, no custom
-shader, and slow once the count runs to thousands. Fast means instancing with
-a per-instance colour stream - a vertex format and a shader.
+**Training is Chromium-only.** Brush's backward kernels need WebGPU
+subgroups, which Firefox and Safari do not expose yet; the pane says so
+rather than failing obscurely.
 
 **Voxels have no export path.** They render and they are an element the scene
 holds, but nothing writes them out. That wants a target format chosen first,
 since the format decides what the writer looks like.
 
-**Merging is offered by name**, in the context menu, rather than by dragging
-one node's output onto another's input. Nodes can declare named inputs now -
-a `ports` getter on the op, wired through `graph.connect` in the editor -
-and the train node's dataset, the select node's mesh and the light's source
-use them. Merge wants a second input of its own, the same way.
+**Cleanup takes about a minute on a million points**, in a worker, with
+the editor drawing throughout (CHANGELOG.md). Most of that minute is the
+few hundred isolated floaters, whose exact search widens until it has
+crossed the whole grid. A cap on that widening would make it quicker at
+the price of exactness, for exactly the points the node exists to judge -
+so it is not taken.
 
-**Cleanup runs on the CPU inside the op's resolver.** Fine at the counts
-tested; a million-point capture wants it in a worker. That is a change of
-where it runs, not of what it does.
-
-**Decimate's ranking is not stable between frames**, so a decimated sequence
-may shimmer. It ranks by importance within one frame; keeping a sequence
-steady means ranking against something that does not move frame to frame.
-
-The cause is in `DecimateOp`: it sorts by `sigmoid(opacity) × volume`, and on
-a TGH sequence both are re-evaluated per frame, so the order - and with it
-the dropped set - changes as time moves. The fix is to rank the 4D
-primitives once, on attributes that do not depend on time, so the dropped
-set is the same in every frame by construction. That an attribute-only score
-holds up without rendering anything is what Camera-Agnostic Pruning (arXiv
+**Decimate ranks on a time-invariant score on TGH sequences** (CHANGELOG.md),
+so the dropped set holds still between frames except where a hierarchy
+segment begins or ends. A PLY sequence has no identity between frames and
+still ranks each frame on its own. That an attribute-only score holds up
+without rendering anything is what Camera-Agnostic Pruning (arXiv
 2603.21933) and RAP (CVPR 2026, arXiv 2602.19753) show.
 
-Two further improvements, independent of the shimmer:
+The budget can be spread too - "rank per region" (CHANGELOG.md). What is
+left:
 
-- **Spread the budget.** A global top-K piles the kept budget wherever scores
-  run high, and `opacity × volume` runs high on large blobs. SplatQ (arXiv
-  2610.13503) partitions into spatial blocks and gives each a smoothed quota.
-  The quota step alone is cheap; its quadratic selection solved by annealing
-  is not needed for this.
 - **Merge instead of drop.** NanoGS (ECCV 2026, arXiv 2603.16103) builds a kNN
   graph, scores neighbouring pairs by the I-divergence between the pair and
   one moment-matched Gaussian, and greedily collapses the cheapest disjoint
@@ -599,27 +522,19 @@ Two further improvements, independent of the shimmer:
   fits a worker, and it keeps quality better than dropping at aggressive
   ratios - a "merge" mode for the node.
 
-**Replay after a change is conservative.** It invalidates everything after a
-node rather than everything reachable from it, so it may re-resolve a node no
-path touches. Correct, and cheaper than a second ordering to keep consistent.
-If it becomes slow, walk `inputs` backwards from the changed node. A
-primitive wired into a select node makes it more frequent: every time the
-primitive settles - a drag ending, a size typed in, an undo - the select node
-and everything after it replay.
+**Replay after a change still winds through everything after it.** Only
+what the change reaches is resolved again now (CHANGELOG.md), but every
+later op is still undone and redone, because history is one line. That is
+cheap - redoing a resolved op replays its stored set.
+
+**Nodes move one step at a time**, up or down their chain from the context
+menu. Dragging a node into a new place in its lane would be the direct
+gesture; the history move underneath it already takes any distance.
 
 **A select node's shape selects again when the primitive settles**, not live
 while it is dragged: each re-selection is that replay, too slow to run per
 pointer move on a large capture. The node keeps a copy of the shape for the
 same reason - see SelectMesh in `src/edit-ops.ts`.
-
-**The bound pass needs 64 bytes of colour targets per sample.**
-`src/data-processor/calc-bound.ts` renders into four RGBA32F targets.
-WebGPU only guarantees 32 bytes per sample. The engine asks for whatever
-the adapter offers and real GPUs offer more, but an adapter at the minimum
-rejects the pass - SwiftShader is one, found while testing relighting
-headless - and every splat is left with an empty bound, so culling hides
-it and camera framing breaks. Splitting the pass in two, or RGBA16F where
-the precision allows, would fit the minimum.
 
 **TGH frames are evaluated on the main thread.** A million active gaussians
 per frame costs seconds of CPU per scrub. A worker and a small frame cache
@@ -640,10 +555,3 @@ would unlock, is the one after.
   is the defensible choice for anything modern. Left alone deliberately:
   changing them changes how every existing grade looks, so it is a decision
   rather than a fix.
-- **Node reordering is impossible.** Node positions are free, but the chain
-  order is history order. Reordering means reordering history, which is a
-  real feature and not a drawing change.
-- **Nothing seeds training from an edited scene.** Brush accepts an
-  `init.ply` in the dataset, so retraining from a cleaned-up result is
-  reachable - it needs a zip writer on the JS side, which VoluLab has not
-  got.
