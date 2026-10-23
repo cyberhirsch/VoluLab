@@ -59,10 +59,12 @@ class EyedropperSelection {
         };
 
         const resetPointer = () => {
-            if (pointerId !== null) {
+            // a touch that has lifted, or was cancelled, no longer holds the
+            // capture and releasing it throws
+            if (pointerId !== null && parent.hasPointerCapture(pointerId)) {
                 parent.releasePointerCapture(pointerId);
-                pointerId = null;
             }
+            pointerId = null;
         };
 
         thresholdInput.on('change', () => {

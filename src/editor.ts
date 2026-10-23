@@ -829,6 +829,8 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                 // gestures and may be replaced before this runs
                 const texture = maskTexture;
                 await scene.commandQueue.enqueue(async () => {
+                    // the splat may have been deleted while the task was queued
+                    if (!splat.scene) return;
                     const data = await scene.dataProcessor.intersect({ mask: texture }, splat);
                     addSelect(splat, op, freeze('paint', data, splat.splatData.numSplats));
                     scene.dataProcessor.releaseMask(data);
