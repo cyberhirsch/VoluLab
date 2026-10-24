@@ -9,7 +9,39 @@ months finds out why before they change it.
 
 ---
 
-## A TGH model written out as a Gaussian Splat Video
+## GSV's compact encoding
+
+The export menu's "Gaussian Splat Video" now writes the compact WebP
+encoding; "lossless" keeps f32. A compact `.gsv` opens like any other.
+
+The primitives are stored in motion form, not as 4D gaussians. A
+conditioned 4D gaussian is a 3D gaussian of fixed shape moving at constant
+velocity - the conditional covariance does not depend on t - so each is
+written as that: SOG's layout for the 3D part (16-bit log-transformed
+positions, 256-entry scale codebook, smallest-three rotation, SH palette),
+plus 16-bit time and velocity and a temporal-scale codebook of its own.
+
+The first version quantised the 4D form, and it failed in a way worth
+remembering. On flame_salmon a few dozen visible gaussians jumped by up to
+109 units in a scene some 300 across: they were strongly elongated (log
+scales 4.3 against -20.7), and an 8-bit rotation error of under a degree
+tipped the long spatial axis into time, which conditioning reads as a
+velocity. In motion form the same capture's visible gaussians move by
+0.00075 on average and 0.14 at most, none by more than one unit.
+
+Measured on flame_salmon (1.47M primitives, 300 frames): 32 MB, against
+383 MB in f32 and 256 MB for the checkpoint's `.npz`; 165 s to encode,
+nearly all of it k-means. The SH palette (65 536 centroids over 45
+dimensions) is clustered on the GPU, so the compact export needs WebGPU,
+as SOG's does. Open: a handful of primitives change opacity a lot at some
+instants, from the 8-bit temporal scale (docs/format-gsv.md, section 13).
+
+`TghModel` holds either form now; conditioning the 4D form is unchanged
+and still passes the parity check against the training code.
+
+---
+
+## A TGH model written out as a Gaussian Splat Video
 
 A loaded TGH model can now be exported whole, as a `.gsv` in the lossless
 f32 encoding of the draft format (docs/format-gsv.md), and a `.gsv` opens

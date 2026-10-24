@@ -363,9 +363,22 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
 
     events.function('tgh.canExportGsv', () => !!playingTgh());
 
-    events.function('tgh.exportGsv', async () => {
+    // encoding: 'webp' for the compact file, 'f32' for the lossless one;
+    // mortonOrder: false keeps the model's row order (webp), for comparing
+    events.function('tgh.exportGsv', async (encoding: 'f32' | 'webp' = 'webp', mortonOrder = true) => {
         const source = playingTgh();
         if (!source) return;
+
+        // the compact encoding clusters the SH palette on the GPU
+        const device = (scene.graphicsDevice as any).wgpu as GPUDevice | undefined;
+        if (encoding === 'webp' && !device) {
+            await events.invoke('showPopup', {
+                type: 'error',
+                header: i18n.t('popup.error'),
+                message: i18n.t('popup.webgpu-unavailable')
+            });
+            return;
+        }
 
         const filename = `${source.name}.gsv`;
         let writable: FileSystemWritableFileStream | null = null;
@@ -385,10 +398,10 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
 
         events.fire('startSpinner');
         try {
-            const bytes = writeGsv(source.model, {
+            const bytes = await writeGsv(source.model, {
                 frames: source.frameCount,
                 fps: events.invoke('timeline.frameRate') ?? source.model.meta.fps
-            });
+            }, { encoding, device, mortonOrder });
             if (writable) {
                 await writable.write(bytes as BlobPart);
                 await writable.close();

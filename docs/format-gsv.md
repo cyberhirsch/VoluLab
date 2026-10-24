@@ -178,6 +178,34 @@ eigenvalues MUST be clamped to at least `1e-18`.
 This is the same computation as `GaussianModel4D.get_conditional_3d` in the
 TGH training code, clamps included, and as `TghModel.evalFrame` in VoluLab.
 
+### 6.1 The motion form
+
+Steps 1–3 show that a conditioned 4D gaussian is a **3D gaussian of fixed
+shape moving at constant velocity**: the conditional covariance
+`Σ₃ − σσᵀ / v` does not depend on `t`, and the position is linear in it.
+So every primitive can equally be written as
+
+| Field | Value |
+|---|---|
+| `mean`, `opacity`, `sh` | as in 4.1 |
+| `velocity` | `σ / v` (3 floats), per unit of normalised time |
+| `logScale` (3) and `rot` | the conditional covariance's eigen-decomposition: log std and wxyz rotation |
+| `logScaleT` | `½ · ln(v)`, the log temporal std (of the clamped variance) |
+
+and conditioned at `t`, with `Δ = t − mean.t`, as
+
+```
+position = mean.xyz + velocity · Δ
+scale, rotation as stored
+α = sigmoid(opacity) · exp(−½ · Δ² · exp(−2 · logScaleT))
+```
+
+The two forms are the same gaussian; the motion form is simply step 1–3
+done once instead of every frame. It is what the compact encoding stores
+(7.2), and the cheaper one to play: a shader needs one multiply-add per
+axis, no 4 × 4 matrices. The 4D form is what the `f32` encoding keeps, so
+that a file carries the checkpoint exactly.
+
 ## 7. Encodings
 
 Every page uses one of two encodings, named in its `encoding` field.
@@ -203,47 +231,85 @@ a training checkpoint.
 
 ### 7.2 `webp`: compact
 
+Primitives are stored in the **motion form** (6.1). Quantising the 4D
+rotation instead does not hold up: on a strongly elongated gaussian, an
+8-bit rotation error of under a degree tips its long spatial axis into
+time, which reads as a velocity it never had. Measured on a real TGH
+capture, that moved a few dozen visible gaussians by up to a third of the
+scene. In the motion form a quantisation error changes a shape or a speed
+a little, and nothing more.
+
 Following SOG, attributes become RGBA images saved as **lossless WebP**,
-one texel per primitive, row-major, width `W` from the page header. All
-pages of a file share the codebooks in `meta.json`.
+one texel per primitive, row-major, `width` texels wide (from the page
+entry; `height = ceil(count / width)`). All pages of a file share the
+codebooks in `meta.json`.
 
 | Texture | R | G | B | A |
 |---|---|---|---|---|
 | `means_l.webp` | x low byte | y low byte | z low byte | t low byte |
 | `means_u.webp` | x high byte | y high byte | z high byte | t high byte |
+| `vel_l.webp` | vx low byte | vy low byte | vz low byte | 255 |
+| `vel_u.webp` | vx high byte | vy high byte | vz high byte | 255 |
 | `scales.webp` | sx index | sy index | sz index | st index |
-| `rot_l.webp` | smallest-three of `rotL` (3 bytes) | | | largest-component tag |
-| `rot_r.webp` | smallest-three of `rotR` (3 bytes) | | | largest-component tag |
+| `rot.webp` | smallest-three of `rot` (3 bytes) | | | largest-component tag |
 | `sh0.webp` | DC r index | DC g index | DC b index | `round(255 · sigmoid(opacity))` |
-| `shN_labels.webp` | label low byte | label high byte | – | – |
+| `shN_labels.webp` | label low byte | label high byte | 0 | 255 |
+
+The alpha channel carries data, so a texel with alpha 0 must keep its
+colour. libwebp discards the colour of fully transparent texels in its
+default lossless mode; encoders MUST select an explicit effort level (or
+otherwise disable that), or `t` and the scales are lost wherever the low
+byte happens to be 0.
 
 - **Positions** (x, y, z) are 16-bit lerps between the page's `mins` and
-  `maxs` of `sign(v) · ln(|v| + 1)`, as in SOG.
-- **Time** is a 16-bit linear lerp between the page's `tMin` and `tMax`.
-  A page spans a short window, so the resolution is far finer than the
-  frame spacing.
-- **Spatial scales** index a 256-entry codebook `scaleCodebook`; the
-  **temporal scale** indexes a separate one, `timeScaleCodebook`, because
-  its distribution has nothing to do with the spatial one.
-- **Rotations** use SOG's smallest-three packing: the three smaller
-  components times √2, mapped to bytes, and a tag `252 + i` naming the
-  dropped largest component `i`, which is reconstructed as positive.
-- **DC colour** indexes the 256-entry `colourCodebook`.
-- **Rest SH** use SOG's palette: up to 65 536 centroids stored in
-  `meta.json`'s `shN` texture, quantised through `shCodebook`, selected per
-  primitive by a 16-bit label.
+  `maxs` of `sign(v) · ln(|v| + 1)`, as in SOG:
+  `v = invLog(min + (max − min) · q / 65535)`.
+- **Velocities** are 16-bit lerps between the page's `velMins` and
+  `velMaxs`, through the same `sign(v) · ln(|v| + 1)`: still and slow
+  primitives, the great majority, get the finest steps.
+- **Time** is a 16-bit linear lerp over the page's `timeRange`,
+  `[lo, hi]`, the range of the page's temporal means. It is not
+  `[tMin, tMax]`: a primitive belongs to a segment by its hierarchy, and its
+  temporal centre may lie outside the segment's window.
+- **Spatial scales** (the conditional log std) index the 256-entry
+  codebook `codebooks.scale`; the **temporal scale** indexes a separate
+  one, `codebooks.timeScale`, because its distribution has nothing to do
+  with the spatial one.
+- **The rotation** uses SOG's smallest-three packing. The quaternion is
+  normalised, `i` is its largest-magnitude component (in w, x, y, z order),
+  and the sign is flipped if that component is negative. The other three
+  are stored in the order SOG uses - the components after `i`, cyclically:
+  for `i` = w, x, y, z they are (x, y, z), (y, z, w), (z, w, x), (w, x, y) -
+  each as `round((c · √2 · ½ + ½) · 255)`; the tag is `252 + i`. Decoding
+  reverses this and rebuilds the dropped component as
+  `sqrt(max(0, 1 − a² − b² − c²))`.
+- **DC colour** indexes the 256-entry `codebooks.colour`.
+- **Opacity** decodes as `logit(clamp(byte / 255, 1e-6, 1 − 1e-6))`.
+- **Rest SH** use SOG's palette. Up to 65 536 centroids of all `3K` rest
+  coefficients are stored in the texture `codebooks.shN.file`, 64
+  centroids per row and one texel per coefficient (width `64 · K`): texel
+  `(row = c / 64, column = (c mod 64) · K + j)` holds coefficient `j` of
+  centroid `c`, its r, g, b as indices into `codebooks.sh`. A primitive's
+  16-bit label selects its centroid.
+
+How codebooks and the palette are fitted is the encoder's business; the
+format only fixes how they are read. VoluLab fits each 256-entry codebook
+by Lloyd's algorithm in one dimension and the palette by k-means on the GPU
+over a random subset, then assigns every primitive.
 
 Static pages omit `t` (`means_*.webp` alpha is unused), the temporal scale
-and `rot_r.webp`.
+and the velocity textures.
 
 Unless the page uses prefix order (7.3), rows within each block SHOULD be
 in Morton order of the spatial mean, which helps WebP compression and GPU
 sorting.
 
-**Size.** Before WebP compression, a 4D primitive takes 28 bytes in this
-encoding (8 means, 4 scales, 8 rotations, 4 colour/opacity, 4 for the
-label texel), against 260 in `f32` at SH degree 3 (65 floats): about 9 ×.
-Lossless WebP typically saves a further 20–40 %.
+**Size.** Before WebP compression, a 4D primitive takes 32 bytes in this
+encoding (8 means, 8 velocity, 4 scales, 4 rotation, 4 colour/opacity, 4
+for the label texel), against 260 in `f32` at SH degree 3 (65 floats):
+about 8 ×. WebP then saves a good deal more: on a 1.47M-primitive TGH
+capture the whole file came to 32 MB, 12 × smaller than `f32` and 8 ×
+smaller than the training checkpoint's deflated `.npz`.
 
 ### 7.3 Prefix order: level of detail without extra data (optional)
 
@@ -317,7 +383,7 @@ the coarse levels cheaply and keeps the per-page overhead small.
     "timeScale": [ /* 256 floats */ ],
     "colour": [ /* 256 floats */ ],
     "sh": [ /* 256 floats */ ],
-    "shN": { "count": 65536, "file": "shN_centroids.webp" }
+    "shN": { "count": 65536, "file": "shN_centroids.webp" }   // absent at 0 bands
   },
 
   "levels": [ 0.5, 0.25, 0.125 ],  // S_l per level
@@ -338,7 +404,9 @@ the coarse levels cheaply and keeps the per-page overhead small.
       "count": 48000,
       "width": 256,
       "mins": [/*…*/], "maxs": [/*…*/],
-      "tMin": 0.0, "tMax": 0.25
+      "tMin": 0.0, "tMax": 0.25,    // the window: which pages to fetch
+      "timeRange": [-0.02, 0.27],   // webp: what the 16-bit time spans
+      "velMins": [/*…*/], "velMaxs": [/*…*/]
     },
     {
       "id": "p0001",
@@ -348,6 +416,7 @@ the coarse levels cheaply and keeps the per-page overhead small.
       "width": 256,
       "mins": [/*…*/], "maxs": [/*…*/],
       "tMin": 0.25, "tMax": 0.5,
+      "timeRange": [0.23, 0.52],
       // optional, section 7.3
       "order": "prefix",
       "tierOrder": "importance",
@@ -458,5 +527,10 @@ any static format, PLY, SOG, SPZ or glTF.
   trained prefix order carries over to 4D primitives - and to TGH, where a
   block is already a temporal subset - is untested; so is how much
   `opacityVolume` loses against it at low detail.
+- **Temporal scale precision.** On the same capture, a handful of
+  primitives change opacity by up to 0.4–0.9 at some instants (mean change
+  0.0015): the 256-entry `timeScale` codebook is coarse where the temporal
+  falloff `exp(−½ Δ² / σ_t²)` is steep. A 16-bit temporal scale would cost
+  one more texture.
 - **Relation to MPEG GSC.** If MPEG's dynamic call ends up favouring a
   primitive like this one, GSV should map onto it rather than compete.

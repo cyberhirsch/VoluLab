@@ -19,17 +19,33 @@ import { NpzFile, NpyData } from './npz';
 
 const GLOBAL_LEVEL = -1;
 
+// scratch for conditioning, one gaussian at a time
+const L = new Float64Array(16);
+const R = new Float64Array(16);
+const R4 = new Float64Array(16);
+const S2 = new Float64Array(4);
+const SIGMA = new Float64Array(16);
+const QUAT = new Float32Array(4);
+
 type TghMeta = {
     frames: number | null;
     fps: number | null;
 };
 
 // what a model is built from: the per-gaussian tensors, flat row-major,
-// and the hierarchy - which level and segment each row belongs to
+// and the hierarchy - which level and segment each row belongs to.
+//
+// Two forms. The checkpoint's: a 4D scale and an SO(4) rotation (rotL,
+// rotR). Or the motion form, which is the same gaussian conditioned once
+// and for all - a conditioned 4D gaussian is a 3D gaussian of fixed shape
+// moving at constant velocity - with `velocity` and `rot3` present,
+// `scaling` the conditional 3D log std, `scalingT` the log temporal std
+// (of the clamped variance), and rotL / rotR unused.
 type TghTensors = {
     xyz: Float32Array; t: Float32Array;
     scaling: Float32Array; scalingT: Float32Array;
     rotL: Float32Array; rotR: Float32Array;
+    velocity?: Float32Array; rot3?: Float32Array;
     opacity: Float32Array;
     featuresDc: Float32Array; featuresRest: Float32Array;
     level: Int32Array; segment: Int32Array; segLen: Float64Array;
@@ -87,6 +103,10 @@ class TghModel {
     private featuresDc: Float32Array;   // (N,3)
     private featuresRest: Float32Array; // (N, restCoeffs, 3) coeff-major
 
+    // motion form only (see TghTensors)
+    private velocity: Float32Array | null;  // (N,3) per unit of normalised time
+    private rot3: Float32Array | null;      // (N,4) wxyz
+
     // hierarchy: segment lengths in float64 (the training code's
     // active_indices floors in python floats, and S is a power-of-two
     // fraction, so converting the stored f32 values is exact)
@@ -109,6 +129,8 @@ class TghModel {
         this.opacity = init.opacity;
         this.featuresDc = init.featuresDc;
         this.featuresRest = init.featuresRest;
+        this.velocity = init.velocity ?? null;
+        this.rot3 = init.rot3 ?? null;
         this.segLen = init.segLen;
 
         // index rows by (level, segment), preserving ascending row order to
@@ -165,8 +187,102 @@ class TghModel {
             rotR: this.rotR,
             opacity: this.opacity,
             featuresDc: this.featuresDc,
-            featuresRest: this.featuresRest
+            featuresRest: this.featuresRest,
+            velocity: this.velocity,
+            rot3: this.rot3
         };
+    }
+
+    /** True when the model holds the motion form rather than 4D rotations. */
+    get isMotionForm() {
+        return !!this.velocity;
+    }
+
+    /**
+     * Gaussian n in motion form, into `out` (11 floats): velocity (3), the
+     * conditional 3D log std (3), its rotation wxyz (4), the log temporal
+     * std (1). Exactly what conditioning computes, done once: the
+     * conditional covariance and velocity do not depend on t.
+     */
+    motionParams(n: number, out: Float32Array) {
+        if (this.velocity) {
+            out[0] = this.velocity[n * 3];
+            out[1] = this.velocity[n * 3 + 1];
+            out[2] = this.velocity[n * 3 + 2];
+            out[3] = this.scaling[n * 3];
+            out[4] = this.scaling[n * 3 + 1];
+            out[5] = this.scaling[n * 3 + 2];
+            out.set(this.rot3.subarray(n * 4, n * 4 + 4), 6);
+            out[10] = this.scalingT[n];
+            return;
+        }
+        const sigma = this.sigma4(n);
+        const varT = Math.max(sigma[15], 1e-12);
+        const invTT = 1 / varT;
+        out[0] = sigma[3] * invTT;
+        out[1] = sigma[7] * invTT;
+        out[2] = sigma[11] * invTT;
+        const eig = eigenSymmetric3(
+            sigma[0] - sigma[3] * sigma[3] * invTT,
+            sigma[1] - sigma[3] * sigma[7] * invTT,
+            sigma[2] - sigma[3] * sigma[11] * invTT,
+            sigma[5] - sigma[7] * sigma[7] * invTT,
+            sigma[6] - sigma[7] * sigma[11] * invTT,
+            sigma[10] - sigma[11] * sigma[11] * invTT
+        );
+        out[3] = 0.5 * Math.log(Math.max(eig.values[0], 1e-18));
+        out[4] = 0.5 * Math.log(Math.max(eig.values[1], 1e-18));
+        out[5] = 0.5 * Math.log(Math.max(eig.values[2], 1e-18));
+        rotationToQuat(eig.vectors, QUAT, 0);
+        out.set(QUAT, 6);
+        out[10] = 0.5 * Math.log(varT);
+    }
+
+    /** Sigma4 = R4 diag(s^2) R4^T of gaussian n, upper triangle, in shared scratch. */
+    private sigma4(n: number): Float64Array {
+        // normalised quaternion pair -> 4D rotation R4 = L(ql) @ R(qr)
+        let a = this.rotL[n * 4], b = this.rotL[n * 4 + 1], c = this.rotL[n * 4 + 2], d = this.rotL[n * 4 + 3];
+        let inv = 1 / Math.sqrt(a * a + b * b + c * c + d * d);
+        a *= inv; b *= inv; c *= inv; d *= inv;
+        L[0] = a; L[1] = -b; L[2] = -c; L[3] = -d;
+        L[4] = b; L[5] = a; L[6] = -d; L[7] = c;
+        L[8] = c; L[9] = d; L[10] = a; L[11] = -b;
+        L[12] = d; L[13] = -c; L[14] = b; L[15] = a;
+
+        let p = this.rotR[n * 4], q = this.rotR[n * 4 + 1], r = this.rotR[n * 4 + 2], s = this.rotR[n * 4 + 3];
+        inv = 1 / Math.sqrt(p * p + q * q + r * r + s * s);
+        p *= inv; q *= inv; r *= inv; s *= inv;
+        R[0] = p; R[1] = -q; R[2] = -r; R[3] = -s;
+        R[4] = q; R[5] = p; R[6] = s; R[7] = -r;
+        R[8] = r; R[9] = -s; R[10] = p; R[11] = q;
+        R[12] = s; R[13] = r; R[14] = -q; R[15] = p;
+
+        for (let row = 0; row < 4; row++) {
+            for (let col = 0; col < 4; col++) {
+                R4[row * 4 + col] =
+                    L[row * 4] * R[col] +
+                    L[row * 4 + 1] * R[4 + col] +
+                    L[row * 4 + 2] * R[8 + col] +
+                    L[row * 4 + 3] * R[12 + col];
+            }
+        }
+
+        // squared 4D scales
+        S2[0] = Math.exp(2 * this.scaling[n * 3]);
+        S2[1] = Math.exp(2 * this.scaling[n * 3 + 1]);
+        S2[2] = Math.exp(2 * this.scaling[n * 3 + 2]);
+        S2[3] = Math.exp(2 * this.scalingT[n]);
+
+        for (let row = 0; row < 4; row++) {
+            for (let col = row; col < 4; col++) {
+                SIGMA[row * 4 + col] =
+                    R4[row * 4] * S2[0] * R4[col * 4] +
+                    R4[row * 4 + 1] * S2[1] * R4[col * 4 + 1] +
+                    R4[row * 4 + 2] * S2[2] * R4[col * 4 + 2] +
+                    R4[row * 4 + 3] * S2[3] * R4[col * 4 + 3];
+            }
+        }
+        return SIGMA;
     }
 
     /** Segment length per level, in normalised time. */
@@ -304,91 +420,64 @@ class TghModel {
         const rot = props.get('rot_0');
         const rots = [rot, props.get('rot_1'), props.get('rot_2'), props.get('rot_3')];
 
-        const L = new Float64Array(16);
-        const R = new Float64Array(16);
-        const R4 = new Float64Array(16);
-        const s2 = new Float64Array(4);
-        const sigma = new Float64Array(16);
-        const quat = new Float32Array(4);
+        const quat = QUAT;
+        const motion = this.velocity;
 
         for (let i = 0; i < M; i++) {
             const n = idx[i];
 
-            // normalised quaternion pair -> 4D rotation R4 = L(ql) @ R(qr)
-            let a = this.rotL[n * 4], b = this.rotL[n * 4 + 1], c = this.rotL[n * 4 + 2], d = this.rotL[n * 4 + 3];
-            let inv = 1 / Math.sqrt(a * a + b * b + c * c + d * d);
-            a *= inv; b *= inv; c *= inv; d *= inv;
-            L[0] = a; L[1] = -b; L[2] = -c; L[3] = -d;
-            L[4] = b; L[5] = a; L[6] = -d; L[7] = c;
-            L[8] = c; L[9] = d; L[10] = a; L[11] = -b;
-            L[12] = d; L[13] = -c; L[14] = b; L[15] = a;
+            if (motion) {
+                // the motion form: already conditioned, so a frame is the
+                // mean moved along its velocity, and the temporal falloff
+                const dt = t - this.t[n];
+                x[i] = this.xyz[n * 3] + motion[n * 3] * dt;
+                y[i] = this.xyz[n * 3 + 1] + motion[n * 3 + 1] * dt;
+                z[i] = this.xyz[n * 3 + 2] + motion[n * 3 + 2] * dt;
+                scales[0][i] = this.scaling[n * 3];
+                scales[1][i] = this.scaling[n * 3 + 1];
+                scales[2][i] = this.scaling[n * 3 + 2];
+                rots[0][i] = this.rot3[n * 4];
+                rots[1][i] = this.rot3[n * 4 + 1];
+                rots[2][i] = this.rot3[n * 4 + 2];
+                rots[3][i] = this.rot3[n * 4 + 3];
+                const alphaRaw = (1 / (1 + Math.exp(-this.opacity[n]))) * Math.exp(-0.5 * dt * dt * Math.exp(-2 * this.scalingT[n]));
+                const alpha = Math.min(1 - 1e-6, Math.max(1e-6, alphaRaw));
+                op[i] = Math.log(alpha / (1 - alpha));
+            } else {
+                const sigma = this.sigma4(n);
 
-            let p = this.rotR[n * 4], q = this.rotR[n * 4 + 1], r = this.rotR[n * 4 + 2], s = this.rotR[n * 4 + 3];
-            inv = 1 / Math.sqrt(p * p + q * q + r * r + s * s);
-            p *= inv; q *= inv; r *= inv; s *= inv;
-            R[0] = p; R[1] = -q; R[2] = -r; R[3] = -s;
-            R[4] = q; R[5] = p; R[6] = s; R[7] = -r;
-            R[8] = r; R[9] = -s; R[10] = p; R[11] = q;
-            R[12] = s; R[13] = r; R[14] = -q; R[15] = p;
+                // condition on time, with the training code's variance clamp
+                const varT = Math.max(sigma[15], 1e-12);
+                const invTT = 1 / varT;
+                const dt = t - this.t[n];
 
-            for (let row = 0; row < 4; row++) {
-                for (let col = 0; col < 4; col++) {
-                    R4[row * 4 + col] =
-                        L[row * 4] * R[col] +
-                        L[row * 4 + 1] * R[4 + col] +
-                        L[row * 4 + 2] * R[8 + col] +
-                        L[row * 4 + 3] * R[12 + col];
-                }
+                x[i] = this.xyz[n * 3] + sigma[3] * invTT * dt;
+                y[i] = this.xyz[n * 3 + 1] + sigma[7] * invTT * dt;
+                z[i] = this.xyz[n * 3 + 2] + sigma[11] * invTT * dt;
+
+                const cxx = sigma[0] - sigma[3] * sigma[3] * invTT;
+                const cxy = sigma[1] - sigma[3] * sigma[7] * invTT;
+                const cxz = sigma[2] - sigma[3] * sigma[11] * invTT;
+                const cyy = sigma[5] - sigma[7] * sigma[7] * invTT;
+                const cyz = sigma[6] - sigma[7] * sigma[11] * invTT;
+                const czz = sigma[10] - sigma[11] * sigma[11] * invTT;
+
+                // covariance -> log-scales + rotation
+                const eig = eigenSymmetric3(cxx, cxy, cxz, cyy, cyz, czz);
+                scales[0][i] = 0.5 * Math.log(Math.max(eig.values[0], 1e-18));
+                scales[1][i] = 0.5 * Math.log(Math.max(eig.values[1], 1e-18));
+                scales[2][i] = 0.5 * Math.log(Math.max(eig.values[2], 1e-18));
+                rotationToQuat(eig.vectors, quat, 0);
+                rots[0][i] = quat[0];
+                rots[1][i] = quat[1];
+                rots[2][i] = quat[2];
+                rots[3][i] = quat[3];
+
+                // linear alpha (temporal falloff applied) -> stored logit
+                const alphaRaw = (1 / (1 + Math.exp(-this.opacity[n]))) * Math.exp(-0.5 * dt * dt * invTT);
+                const alpha = Math.min(1 - 1e-6, Math.max(1e-6, alphaRaw));
+                op[i] = Math.log(alpha / (1 - alpha));
             }
-
-            // squared 4D scales
-            s2[0] = Math.exp(2 * this.scaling[n * 3]);
-            s2[1] = Math.exp(2 * this.scaling[n * 3 + 1]);
-            s2[2] = Math.exp(2 * this.scaling[n * 3 + 2]);
-            s2[3] = Math.exp(2 * this.scalingT[n]);
-
-            // Sigma4 = R4 diag(s2) R4^T, symmetric
-            for (let row = 0; row < 4; row++) {
-                for (let col = row; col < 4; col++) {
-                    sigma[row * 4 + col] =
-                        R4[row * 4] * s2[0] * R4[col * 4] +
-                        R4[row * 4 + 1] * s2[1] * R4[col * 4 + 1] +
-                        R4[row * 4 + 2] * s2[2] * R4[col * 4 + 2] +
-                        R4[row * 4 + 3] * s2[3] * R4[col * 4 + 3];
-                }
-            }
-
-            // condition on time, with the training code's variance clamp
-            const varT = Math.max(sigma[15], 1e-12);
-            const invTT = 1 / varT;
-            const dt = t - this.t[n];
-
-            x[i] = this.xyz[n * 3] + sigma[3] * invTT * dt;
-            y[i] = this.xyz[n * 3 + 1] + sigma[7] * invTT * dt;
-            z[i] = this.xyz[n * 3 + 2] + sigma[11] * invTT * dt;
-
-            const cxx = sigma[0] - sigma[3] * sigma[3] * invTT;
-            const cxy = sigma[1] - sigma[3] * sigma[7] * invTT;
-            const cxz = sigma[2] - sigma[3] * sigma[11] * invTT;
-            const cyy = sigma[5] - sigma[7] * sigma[7] * invTT;
-            const cyz = sigma[6] - sigma[7] * sigma[11] * invTT;
-            const czz = sigma[10] - sigma[11] * sigma[11] * invTT;
-
-            // covariance -> log-scales + rotation
-            const eig = eigenSymmetric3(cxx, cxy, cxz, cyy, cyz, czz);
-            scales[0][i] = 0.5 * Math.log(Math.max(eig.values[0], 1e-18));
-            scales[1][i] = 0.5 * Math.log(Math.max(eig.values[1], 1e-18));
-            scales[2][i] = 0.5 * Math.log(Math.max(eig.values[2], 1e-18));
-            rotationToQuat(eig.vectors, quat, 0);
-            rots[0][i] = quat[0];
-            rots[1][i] = quat[1];
-            rots[2][i] = quat[2];
-            rots[3][i] = quat[3];
-
-            // linear alpha (temporal falloff applied) -> stored logit
-            const alphaRaw = (1 / (1 + Math.exp(-this.opacity[n]))) * Math.exp(-0.5 * dt * dt * invTT);
-            const alpha = Math.min(1 - 1e-6, Math.max(1e-6, alphaRaw));
-            op[i] = Math.log(alpha / (1 - alpha));
 
             // peak opacity times spatial volume, before conditioning: the
             // same measure DecimateOp uses on a still, taken at the

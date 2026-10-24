@@ -178,7 +178,12 @@ class Menu extends Container {
             text: 'Gaussian Splat Video (.gsv)',
             icon: createSvg(sceneExport),
             isEnabled: () => events.invoke('tgh.canExportGsv'),
-            onSelect: () => events.invoke('tgh.exportGsv')
+            onSelect: () => events.invoke('tgh.exportGsv', 'webp')
+        }, {
+            text: 'Gaussian Splat Video, lossless (.gsv)',
+            icon: createSvg(sceneExport),
+            isEnabled: () => events.invoke('tgh.canExportGsv'),
+            onSelect: () => events.invoke('tgh.exportGsv', 'f32')
         }, {
             // separator
         }, {
