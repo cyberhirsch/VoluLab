@@ -12,10 +12,10 @@ import { TghModel } from './tgh-model';
  * on it unchanged - to the rest of the app this is just another sequence.
  */
 class TghFrameSource implements FrameSource {
-    private model: TghModel;
+    readonly model: TghModel;
     private frames: number;
     private scene: Scene;
-    private name: string;
+    readonly name: string;
 
     // splat files are Z-up like the model, so frames take the same 180
     // degree flip about Z that the PLY import path applies

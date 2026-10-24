@@ -174,6 +174,12 @@ class Menu extends Container {
             isEnabled: () => !events.invoke('scene.empty'),
             onSelect: () => events.invoke('scene.export', 'splat')
         }, {
+            // the loaded 4D model itself, not the frame on screen
+            text: 'Gaussian Splat Video (.gsv)',
+            icon: createSvg(sceneExport),
+            isEnabled: () => events.invoke('tgh.canExportGsv'),
+            onSelect: () => events.invoke('tgh.exportGsv')
+        }, {
             // separator
         }, {
             text: () => i18n.t('menu.file.export.viewer', { ellipsis: true }),

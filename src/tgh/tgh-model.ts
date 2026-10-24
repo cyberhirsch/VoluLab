@@ -24,6 +24,25 @@ type TghMeta = {
     fps: number | null;
 };
 
+// what a model is built from: the per-gaussian tensors, flat row-major,
+// and the hierarchy - which level and segment each row belongs to
+type TghTensors = {
+    xyz: Float32Array; t: Float32Array;
+    scaling: Float32Array; scalingT: Float32Array;
+    rotL: Float32Array; rotR: Float32Array;
+    opacity: Float32Array;
+    featuresDc: Float32Array; featuresRest: Float32Array;
+    level: Int32Array; segment: Int32Array; segLen: Float64Array;
+    meta: TghMeta;
+};
+
+// the rows of one (level, segment) pair; level -1 is the global set
+type TghBlock = {
+    level: number;
+    segment: number;
+    rows: Uint32Array;
+};
+
 type TghFrame = {
     count: number;
     // column name -> per-gaussian values, in PLY property order
@@ -75,15 +94,7 @@ class TghModel {
     private globalRows: Uint32Array;
     private segmentRows: Map<number, Uint32Array>[];
 
-    private constructor(init: {
-        xyz: Float32Array; t: Float32Array;
-        scaling: Float32Array; scalingT: Float32Array;
-        rotL: Float32Array; rotR: Float32Array;
-        opacity: Float32Array;
-        featuresDc: Float32Array; featuresRest: Float32Array;
-        level: Int32Array; segment: Int32Array; segLen: Float64Array;
-        meta: TghMeta;
-    }) {
+    private constructor(init: TghTensors) {
         const N = init.t.length;
         this.numSplats = N;
         this.restCoeffs = N ? init.featuresRest.length / N / 3 : 0;
@@ -137,6 +148,51 @@ class TghModel {
                 cursor.set(segment[i], at + 1);
             }
         }
+    }
+
+    static fromTensors(init: TghTensors): TghModel {
+        return new TghModel(init);
+    }
+
+    /** The per-gaussian tensors as loaded, for writing the model out. */
+    get tensors() {
+        return {
+            xyz: this.xyz,
+            t: this.t,
+            scaling: this.scaling,
+            scalingT: this.scalingT,
+            rotL: this.rotL,
+            rotR: this.rotR,
+            opacity: this.opacity,
+            featuresDc: this.featuresDc,
+            featuresRest: this.featuresRest
+        };
+    }
+
+    /** Segment length per level, in normalised time. */
+    get levels(): Float64Array {
+        return this.segLen;
+    }
+
+    /**
+     * Every non-empty block: the global set first, then each level's
+     * segments in ascending order - the order activeIndices concatenates
+     * them in, rows ascending within each.
+     */
+    blocks(): TghBlock[] {
+        const out: TghBlock[] = [];
+        if (this.globalRows.length > 0) {
+            out.push({ level: GLOBAL_LEVEL, segment: 0, rows: this.globalRows });
+        }
+        this.segmentRows.forEach((segments, level) => {
+            [...segments.keys()].sort((a, b) => a - b).forEach((segment) => {
+                const rows = segments.get(segment);
+                if (rows.length > 0) {
+                    out.push({ level, segment, rows });
+                }
+            });
+        });
+        return out;
     }
 
     static async fromNpz(blob: Blob): Promise<TghModel> {
@@ -356,4 +412,4 @@ class TghModel {
     }
 }
 
-export { TghModel, type TghFrame, type TghMeta };
+export { TghModel, type TghBlock, type TghFrame, type TghMeta, type TghTensors };

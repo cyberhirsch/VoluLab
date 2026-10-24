@@ -9,7 +9,31 @@ months finds out why before they change it.
 
 ---
 
-## SuperSplat fixes taken over
+## A TGH model written out as a Gaussian Splat Video
+
+A loaded TGH model can now be exported whole, as a `.gsv` in the lossless
+f32 encoding of the draft format (docs/format-gsv.md), and a `.gsv` opens
+like an `.npz`. Export is in the export menu, enabled while a TGH sequence
+is playing; it writes the model, not the frame on screen.
+
+The rows go out block by block in the order `activeIndices` concatenates
+them - the global set, then each level's segments ascending - so a model
+read back conditions every frame into the same gaussians in the same
+order. Blocks are grouped into pages by windows of the coarsest level.
+
+Verified headless: the parity fixture and flame_salmon (1.47M primitives,
+300 frames) round-trip with every column of every conditioned frame
+bit-identical, at six times including 0 and 1. flame_salmon writes in
+about 2 s. The f32 file is larger than the `.npz` (383 MB against 256 MB),
+since numpy's archive is deflated and f32 is stored raw on purpose; the
+compact WebP encoding is the one meant for delivery, and is still to come.
+
+The hand-written zip writer moved out of the dataset packer into
+`io/write/stored-zip.ts`, which both now use.
+
+---
+
+## SuperSplat fixes taken over
 
 Five upstream changes were looked at; three came over, adapted where
 VoluLab has diverged.

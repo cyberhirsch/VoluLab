@@ -164,6 +164,8 @@ const registerSequenceEvents = (events: Events, scene: Scene) => {
         setSource(newSource);
     });
 
+    events.function('sequence.source', () => source);
+
     events.on('timeline.frame', async (frame: number) => {
         await setFrame(frame);
     });

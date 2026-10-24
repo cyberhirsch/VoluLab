@@ -8,6 +8,7 @@ import { readVox } from './io/read/vox';
 import { Scene } from './scene';
 import { Splat } from './splat';
 import { SerializeSettings, serializeSog, serializeSpz, serializeViewer, SogSettings, SpzSettings, ViewerExportSettings, WebGPUUnavailableError, writeSplatFile } from './splat-serialize';
+import { readGsv, writeGsv } from './tgh/gsv';
 import { TghFrameSource } from './tgh/tgh-frame-source';
 import { TghModel } from './tgh/tgh-model';
 import { BridgeImage, bridgeReady } from './training/bridge-client';
@@ -91,6 +92,12 @@ const filePickerTypes: { [key: string]: FilePickerAcceptType } = {
             'application/x-numpy': ['.npz']
         }
     },
+    'gsv': {
+        description: 'Gaussian Splat Video',
+        accept: {
+            'application/x-gaussian-splat-video': ['.gsv']
+        }
+    },
     'pointCloud': {
         description: 'Point Cloud',
         accept: {
@@ -140,6 +147,7 @@ const allImportTypes = {
         'image/webp': ['.webp'],
         'application/x-lcc': ['.lcc', '.lcc2', '.bin'],
         'application/x-numpy': ['.npz'],
+        'application/x-gaussian-splat-video': ['.gsv'],
         'application/octet-stream': ['.las', '.laz', '.pcd', '.xyz', '.pts', '.vox'],
         'application/zip': ['.zip'],
         'video/mp4': ['.mp4', '.mov', '.webm', '.mkv'],
@@ -312,7 +320,9 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         events.fire('startSpinner');
         try {
             const blob: Blob = file.contents ?? await (await fetch(file.url)).blob();
-            const model = await TghModel.fromNpz(blob);
+            const model = file.filename.toLowerCase().endsWith('.gsv') ?
+                await readGsv(blob) :
+                await TghModel.fromNpz(blob);
 
             let frames = model.meta.frames;
             if (!frames) {
@@ -331,7 +341,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 frames = Math.max(1, Math.floor(parseFloat(result.inputValue))) || 300;
             }
 
-            const name = file.filename.replace(/\.npz$/i, '');
+            const name = file.filename.replace(/\.(npz|gsv)$/i, '');
             events.fire('sequence.setSource', new TghFrameSource(model, frames, scene, name));
             if (model.meta.fps) {
                 events.fire('timeline.setFrameRate', model.meta.fps);
@@ -343,6 +353,63 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             events.fire('stopSpinner');
         }
     };
+
+    // a TGH model playing as the sequence can be written out whole, as a
+    // Gaussian Splat Video - lossless, so it loads back as the same model
+    const playingTgh = () => {
+        const source = events.invoke('sequence.source');
+        return source instanceof TghFrameSource ? source : null;
+    };
+
+    events.function('tgh.canExportGsv', () => !!playingTgh());
+
+    events.function('tgh.exportGsv', async () => {
+        const source = playingTgh();
+        if (!source) return;
+
+        const filename = `${source.name}.gsv`;
+        let writable: FileSystemWritableFileStream | null = null;
+        if (window.showSaveFilePicker) {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    id: 'VoluLabFileExport',
+                    types: [filePickerTypes.gsv],
+                    suggestedName: filename
+                });
+                writable = await handle.createWritable();
+            } catch (error) {
+                if (error.name !== 'AbortError') console.error(error);
+                return;
+            }
+        }
+
+        events.fire('startSpinner');
+        try {
+            const bytes = writeGsv(source.model, {
+                frames: source.frameCount,
+                fps: events.invoke('timeline.frameRate') ?? source.model.meta.fps
+            });
+            if (writable) {
+                await writable.write(bytes as BlobPart);
+                await writable.close();
+            } else {
+                const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'application/octet-stream' }));
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+            }
+        } catch (error) {
+            await events.invoke('showPopup', {
+                type: 'error',
+                header: i18n.t('popup.error'),
+                message: `${error.message ?? error} while writing '${filename}'`
+            });
+        } finally {
+            events.fire('stopSpinner');
+        }
+    });
 
     // import splat model(s) - handles single files, SOG, and LCC formats
     const importSplatModel = async (files: ImportFile[], animationFrame: boolean) => {
@@ -418,7 +485,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         } else {
             // check for unrecognized file types
             const known = [
-                '.vlp', '.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz', '.npz',
+                '.vlp', '.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz', '.npz', '.gsv',
                 '.zip', '.csv', '.mp4', '.mov', '.webm', '.mkv', '.jpg', '.jpeg', '.png',
                 '.las', '.laz', '.pcd', '.xyz', '.pts', '.vox'
             ];
@@ -483,8 +550,9 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 } else if (filename.endsWith('.json')) {
                     // load inria camera poses
                     await loadCameraPoses(files[i], events);
-                } else if (filename.endsWith('.npz')) {
-                    // load a TGH volumetric video checkpoint
+                } else if (filename.endsWith('.npz') || filename.endsWith('.gsv')) {
+                    // load a TGH volumetric video checkpoint, or one written
+                    // out as a Gaussian Splat Video
                     await importTghModel(files[i]);
                 } else if (filename.endsWith('.zip')) {
                     // a zip is a dataset for training - Brush sniffs the contents
@@ -547,7 +615,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         fileSelector = document.createElement('input');
         fileSelector.setAttribute('id', 'file-selector');
         fileSelector.setAttribute('type', 'file');
-        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.vlp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz,.npz,.zip,.csv,.mp4,.mov,.webm,.mkv,.jpg,.jpeg,.png,.las,.laz,.pcd,.xyz,.pts,.vox');
+        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.vlp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz,.npz,.gsv,.zip,.csv,.mp4,.mov,.webm,.mkv,.jpg,.jpeg,.png,.las,.laz,.pcd,.xyz,.pts,.vox');
         fileSelector.setAttribute('multiple', 'true');
 
         fileSelector.onchange = () => {
@@ -614,6 +682,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                         filePickerTypes.ksplat,
                         filePickerTypes.spz,
                         filePickerTypes.npz,
+                        filePickerTypes.gsv,
                         filePickerTypes.pointCloud,
                         filePickerTypes.vox,
                         filePickerTypes.dataset,
