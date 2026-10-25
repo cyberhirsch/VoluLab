@@ -14,3 +14,6 @@ Repos
 
 # the bridge's self-provisioned COLMAP
 bridge/.colmap/
+
+# paper drafts, experiment notes and raw results - not part of the app
+paper/
