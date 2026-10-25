@@ -30,12 +30,16 @@ type NumberField = {
 
 // An area light's size is its softness, so it has no softness of its own.
 // One setting serves as a rectangle's width and a disk's or sphere's size.
+// Sizes are multiples of the aim distance and have no upper bound: a huge
+// rectangle is a glowing plane, and the form factor stays finite. Only the
+// minimum matters - the light is normalised by how much of the view it
+// fills at the aim point, which a zero-sized light would not.
 const LIGHT_FIELDS: NumberField[] = [
     { key: 'intensity', label: 'light.intensity', step: 0.05, min: 0 },
     { key: 'softness', label: 'light.softness', step: 0.05, min: 0, max: 1, kinds: ['point', 'spot', 'sun'] },
-    { key: 'size', label: 'light.width', step: 0.05, min: 0.01, max: 4, kinds: ['rect'] },
-    { key: 'height', label: 'light.height', step: 0.05, min: 0.01, max: 4, kinds: ['rect'] },
-    { key: 'size', label: 'light.size', step: 0.05, min: 0.01, max: 4, kinds: ['disk', 'sphere'] },
+    { key: 'size', label: 'light.width', step: 0.05, min: 0.01, kinds: ['rect'] },
+    { key: 'height', label: 'light.height', step: 0.05, min: 0.01, kinds: ['rect'] },
+    { key: 'size', label: 'light.size', step: 0.05, min: 0.01, kinds: ['disk', 'sphere'] },
     { key: 'spotAngle', label: 'light.spot-angle', step: 1, min: 1, max: 179, kinds: ['spot'] },
     { key: 'spotBlend', label: 'light.spot-blend', step: 0.05, min: 0, max: 1, kinds: ['spot'] },
     { key: 'rotation', label: 'light.rotation', step: 5, kinds: ['ambient'] }
