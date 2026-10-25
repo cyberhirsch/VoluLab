@@ -70,6 +70,21 @@ setting shots up.
 timeline, so a capture that changes over time can be reviewed in motion instead
 of frame by frame.
 
+**Play 4D Gaussian splats in real time.** A trained 4D model - a Temporal
+Gaussian Hierarchy checkpoint (`.npz`) or a Gaussian Splat Video (`.gsv`) -
+is uploaded to the GPU once and played there: each gaussian is a 3D splat
+moving at its own velocity and fading in and out over time, so a new frame
+costs the shader a multiply-add, not a new upload. A million-gaussian
+capture plays smoothly.
+
+**GSV, our 4D format.** Gaussian Splat Video stores a 4D model in motion
+form - each gaussian as the moving 3D splat it is at any instant - as WebP
+textures in a zip, cut into time pages for streaming and keeping TGH's
+temporal hierarchy. A 300-frame, 1.5-million-gaussian capture is 31 MB,
+against 256 MB for the training checkpoint and gigabytes as per-frame
+splats; a lossless variant keeps full precision for archiving. The
+specification is [docs/format-gsv.md](docs/format-gsv.md).
+
 **Get it out.** Export to the standard splat formats, including compressed
 variants for delivery, or render straight to an image or a video.
 
@@ -160,8 +175,8 @@ Refresh your browser to see your changes.
 
 | Direction | Formats |
 |---|---|
-| Import | `.ply`, `.splat`, `.ksplat`, `.spz`, `.sog`, `.lcc`/`.lcc2`, `.ssproj` |
-| Export | `.ply`, compressed `.ply`, `.splat`, `.sog`, `.spz` |
+| Import | `.ply`, `.splat`, `.ksplat`, `.spz`, `.sog`, `.lcc`/`.lcc2`, `.ssproj`; 4D: `.gsv`, TGH `.npz` |
+| Export | `.ply`, compressed `.ply`, `.splat`, `.sog`, `.spz`; 4D: `.gsv` (compact or lossless) |
 
 Project files use the `.ssproj` extension, unchanged from upstream, so existing
 SuperSplat projects load without conversion.
