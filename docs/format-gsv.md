@@ -274,7 +274,11 @@ byte happens to be 0.
 - **Spatial scales** (the conditional log std) index the 256-entry
   codebook `codebooks.scale`; the **temporal scale** indexes a separate
   one, `codebooks.timeScale`, because its distribution has nothing to do
-  with the spatial one.
+  with the spatial one. A decoder only looks entries up; how they are
+  chosen is the encoder's business. VoluLab's encoder spaces the spatial
+  codebook evenly over the value range: a mean-error-optimal (Lloyd)
+  codebook leaves the few largest splats with size errors of up to e^4,
+  and they dominate the image.
 - **The rotation** uses SOG's smallest-three packing. The quaternion is
   normalised, `i` is its largest-magnitude component (in w, x, y, z order),
   and the sign is flipped if that component is negative. The other three
@@ -529,8 +533,9 @@ any static format, PLY, SOG, SPZ or glTF.
   `opacityVolume` loses against it at low detail.
 - **Temporal scale precision.** On the same capture, a handful of
   primitives change opacity by up to 0.4–0.9 at some instants (mean change
-  0.0015): the 256-entry `timeScale` codebook is coarse where the temporal
-  falloff `exp(−½ Δ² / σ_t²)` is steep. A 16-bit temporal scale would cost
-  one more texture.
+  0.0015). Measured since: the cause is the 16-bit `t`, not the
+  `timeScale` codebook - with `t` exact the worst change drops to 0.26.
+  Primitives whose temporal std is a small fraction of a frame might store
+  their frame index instead.
 - **Relation to MPEG GSC.** If MPEG's dynamic call ends up favouring a
   primitive like this one, GSV should map onto it rather than compete.

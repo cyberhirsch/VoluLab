@@ -110,6 +110,26 @@ const codebook1d = (values: Float32Array, k = CODEBOOK_SIZE): Float32Array => {
     return out;
 };
 
+/**
+ * k evenly spaced values over the range of `values`, as a codebook. Used
+ * for the spatial log-scales: a Lloyd codebook minimises the mean error and
+ * so leaves the sparse tail of large splats with size errors up to e^4,
+ * and those few large splats dominate the image; even spacing bounds every
+ * error by half a step.
+ */
+const uniformCodebook = (values: Float32Array, k = CODEBOOK_SIZE): Float32Array => {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < values.length; i++) {
+        const v = values[i];
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+    }
+    const out = new Float32Array(k);
+    if (!(hi >= lo)) return out;
+    for (let i = 0; i < k; i++) out[i] = lo + ((hi - lo) * i) / (k - 1);
+    return out;
+};
+
 /** The index of the codebook entry nearest v (codebook ascending). */
 const nearest = (codebook: Float32Array, v: number) => {
     if (!(v > codebook[0])) return 0;               // also catches NaN
@@ -197,7 +217,7 @@ const encodeWebpPages = async (pages: { id: string, data: MotionPage }[], K: num
             colour[at * 3 + 2] = data.sh[i * shStride + 2];
         }
     }
-    const scaleBook = codebook1d(spatial);
+    const scaleBook = uniformCodebook(spatial);
     const timeScaleBook = codebook1d(temporal);
     const colourBook = codebook1d(colour);
 
