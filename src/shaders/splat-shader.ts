@@ -123,6 +123,15 @@ uniform sampler2D gradePalette;         // palette of colour grades
     uniform sampler2D splatLightMinus;
 #endif
 
+// A 4D gaussian played on the GPU (TGH motion form): conditioned on time it
+// is the stored 3D gaussian moved along its velocity and faded by its
+// temporal falloff. Everything else about it is constant.
+#ifdef SPLAT_MOTION
+    uniform highp sampler2D splatMotion;    // xyz: velocity per unit time, w: temporal centre
+    uniform highp sampler2D splatFalloff;   // r: 1 / (2 sigma_t^2)
+    uniform float motionTime;               // normalised time being shown
+#endif
+
 // Two grades, in order: whatever colour nodes have put on this gaussian, then
 // the object's own.
 //
@@ -205,6 +214,19 @@ void main(void) {
     // get center
     vec3 modelCenter = getCenter();
 
+    #ifdef SPLAT_MOTION
+        vec4 motion = texelFetch(splatMotion, splat.uv, 0);
+        float motionDt = motionTime - motion.w;
+        modelCenter += motion.xyz * motionDt;
+        float motionAlpha = exp(-motionDt * motionDt * texelFetch(splatFalloff, splat.uv, 0).r);
+        if (motionAlpha < 1.0 / 255.0) {
+            gl_Position = discardVec;
+            return;
+        }
+    #else
+        float motionAlpha = 1.0;
+    #endif
+
     SplatCenter center;
     center.modelCenterOriginal = modelCenter;
     center.modelCenterModified = modelCenter;
@@ -238,7 +260,7 @@ void main(void) {
             float linearDepth = -center.view.z;
             float normalizedDepth = (linearDepth - camera_params.z) / (camera_params.y - camera_params.z);
             vec4 clr = getColor();
-            color = vec4(normalizedDepth, 0.0, 0.0, 1.0) * clr.a;
+            color = vec4(normalizedDepth, 0.0, 0.0, 1.0) * clr.a * motionAlpha;
         } else {
             // pick id
             uvec4 bits = (uvec4(splat.index) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u);
@@ -250,7 +272,7 @@ void main(void) {
         color = getColor();
 
         // a defocused gaussian covers more screen, so it must be fainter
-        color.a *= camDofAlpha;
+        color.a *= camDofAlpha * motionAlpha;
 
         // evaluate spherical harmonics
         #if SH_BANDS > 0
@@ -584,6 +606,13 @@ var gradePalette: texture_2d<f32>;  // palette of colour grades
     var splatLightMinus: texture_2d<f32>;
 #endif
 
+// a 4D gaussian played on the GPU - see the GLSL twin
+#ifdef SPLAT_MOTION
+    var splatMotion: texture_2d<f32>;   // xyz: velocity per unit time, w: temporal centre
+    var splatFalloff: texture_2d<f32>;  // r: 1 / (2 sigma_t^2)
+    uniform motionTime: f32;            // normalised time being shown
+#endif
+
 varying vTexCoordFlags: vec4f;      // xy: texCoord, z: selected, w: locked
 varying vColor: vec4f;
 varying vDefocus: f32;              // 0 sharp, ->1 fully out of focus
@@ -659,6 +688,18 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
 
     var modelCenter: vec3f = getCenter();
 
+    var motionAlpha: f32 = 1.0;
+    #ifdef SPLAT_MOTION
+        let motion: vec4f = textureLoad(splatMotion, splat.uv, 0);
+        let motionDt: f32 = uniform.motionTime - motion.w;
+        modelCenter = modelCenter + motion.xyz * motionDt;
+        motionAlpha = exp(-motionDt * motionDt * textureLoad(splatFalloff, splat.uv, 0).r);
+        if (motionAlpha < 1.0 / 255.0) {
+            output.position = discardVec;
+            return output;
+        }
+    #endif
+
     var center: SplatCenter;
     center.modelCenterOriginal = modelCenter;
     center.modelCenterModified = modelCenter;
@@ -691,7 +732,7 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
             let linearDepth: f32 = -center.view.z;
             let normalizedDepth: f32 = (linearDepth - uniform.camera_params.z) / (uniform.camera_params.y - uniform.camera_params.z);
             let clr: vec4f = getColor();
-            output.vColor = vec4f(normalizedDepth, 0.0, 0.0, 1.0) * clr.a;
+            output.vColor = vec4f(normalizedDepth, 0.0, 0.0, 1.0) * clr.a * motionAlpha;
         } else {
             // pick id
             let bits: vec4<u32> = (vec4<u32>(splat.index) >> vec4<u32>(0u, 8u, 16u, 24u)) & vec4<u32>(255u);
@@ -701,7 +742,7 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
         var color: vec4f = getColor();
 
         // a defocused gaussian covers more screen, so it must be fainter
-        color.a = color.a * camDofAlpha;
+        color.a = color.a * camDofAlpha * motionAlpha;
 
         #if SH_BANDS > 0
             let modelView3x3 = mat3x3f(center.modelView[0].xyz, center.modelView[1].xyz, center.modelView[2].xyz);

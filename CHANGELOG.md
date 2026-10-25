@@ -9,6 +9,34 @@ months finds out why before they change it.
 
 ---
 
+## TGH models play on the GPU
+
+A TGH model (`.npz` or `.gsv`) used to play by conditioning every frame on
+the CPU and rebuilding the whole splat from it - about a second per frame
+at a million gaussians, on the main thread, so playback stuttered at one
+or two frames a second. Now the model is uploaded once, each gaussian at
+its own temporal centre in motion form, with two extra textures: velocity
+and temporal centre (RGBA32F), and the falloff 1 / (2 sigma_t^2) (R32F).
+The vertex shader (`SPLAT_MOTION`) moves each gaussian by
+velocity * (t - centre) and fades it by exp(-falloff * dt^2); a frame
+change only sets `motionTime`.
+
+The CPU still owes the depth sort its centres. Per frame `Splat.sortMotion`
+computes the active gaussians' centres at t and posts them, with a mapping,
+straight to the engine's sort worker - the mapping both orders and limits
+what is drawn, which is how TGH's active segments are honoured. The engine's
+own `setMapping` cannot be used: it takes centres from its private copy,
+which here are the temporal centres. The mapping is kept until the active
+set (a segment boundary) or the deletions change. On flame_salmon a frame
+step costs ~22 ms on the main thread (was ~1 s), and the frames match the
+CPU-conditioned ones to 58-63 dB (the difference is sort order).
+
+`TghFrameSource` takes a `gpu` flag (default on); off, it is the old
+per-frame path. Known gaps: anything that reads the splat data rather than
+the shader - exporting the current frame, selection by position, the
+centres overlay - sees the gaussians at their temporal centres, not at the
+shown time.
+
 ## GSV's compact encoding
 
 The export menu's "Gaussian Splat Video" now writes the compact WebP
@@ -39,9 +67,9 @@ instants, from the 8-bit temporal scale (docs/format-gsv.md, section 13).
 `TghModel` holds either form now; conditioning the 4D form is unchanged
 and still passes the parity check against the training code.
 
----
-
-## A TGH model written out as a Gaussian Splat Video
+---
+
+## A TGH model written out as a Gaussian Splat Video
 
 A loaded TGH model can now be exported whole, as a `.gsv` in the lossless
 f32 encoding of the draft format (docs/format-gsv.md), and a `.gsv` opens
@@ -63,9 +91,9 @@ compact WebP encoding is the one meant for delivery, and is still to come.
 The hand-written zip writer moved out of the dataset packer into
 `io/write/stored-zip.ts`, which both now use.
 
----
-
-## SuperSplat fixes taken over
+---
+
+## SuperSplat fixes taken over
 
 Five upstream changes were looked at; three came over, adapted where
 VoluLab has diverged.

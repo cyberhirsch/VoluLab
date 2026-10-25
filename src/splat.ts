@@ -3,6 +3,8 @@ import {
     FILTER_NEAREST,
     PIXELFORMAT_R8,
     PIXELFORMAT_R16U,
+    PIXELFORMAT_R32F,
+    PIXELFORMAT_RGBA32F,
     Asset,
     BoundingBox,
     Color,
@@ -30,6 +32,19 @@ const vec = new Vec3();
 const veca = new Vec3();
 const vecb = new Vec3();
 const quat = new Quat();
+
+/**
+ * A 4D gaussian model played on the GPU: the splat data holds each
+ * gaussian at its own temporal centre, and a frame at time t moves it along
+ * its velocity and fades it by its temporal falloff in the vertex shader.
+ * Rows match the splat data's.
+ */
+type SplatMotion = {
+    // xyz: velocity per unit normalised time, w: temporal centre
+    velocityTime: Float32Array;
+    // 1 / (2 sigma_t^2)
+    falloff: Float32Array;
+};
 
 const boundingPoints =
     [-1, 1].map((x) => {
@@ -103,6 +118,17 @@ class Splat extends Element {
 
     rebuildMaterial: (bands: number) => void;
 
+    // GPU playback of a 4D model, if this splat is one (see setMotion)
+    motion: SplatMotion | null = null;
+    motionTime = 0;
+    // the gaussians alive at motionTime, or null for all of them
+    motionActive: Uint32Array | null = null;
+    private motionTexture: Texture | null = null;
+    private falloffTexture: Texture | null = null;
+    // the sort mapping for motionActive, kept until the active set or the
+    // deletions change - between TGH segment boundaries only centres move
+    private motionMapping: Uint32Array | null = null;
+
     constructor(asset: Asset, rotation: Quat) {
         super(ElementType.splat);
 
@@ -147,6 +173,12 @@ class Splat extends Element {
             material.setParameter('splatState', this.stateTexture);
             material.setParameter('splatTransform', this.transformTexture);
             material.setParameter('splatGrade', this.gradeTexture);
+            if (this.motionTexture) {
+                material.setDefine('SPLAT_MOTION', '');
+                material.setParameter('splatMotion', this.motionTexture);
+                material.setParameter('splatFalloff', this.falloffTexture);
+                material.setParameter('motionTime', this.motionTime);
+            }
             material.update();
         };
 
@@ -329,8 +361,98 @@ class Splat extends Element {
         this.scene.forceRender = true;
     }
 
+    /**
+     * Make this splat a 4D model played on the GPU. Its data must hold every
+     * gaussian at its temporal centre; showTime then picks the frame.
+     */
+    setMotion(motion: SplatMotion) {
+        const { device } = this.asset.resource as GSplatResource;
+        const { x: width, y: height } = (this.asset.resource as any).textureDimensions;
+        const texture = (name: string, format: number, data: Float32Array, stride: number) => {
+            const padded = new Float32Array(width * height * stride);
+            padded.set(data.subarray(0, Math.min(data.length, padded.length)));
+            return new Texture(device, {
+                name,
+                width,
+                height,
+                format,
+                mipmaps: false,
+                minFilter: FILTER_NEAREST,
+                magFilter: FILTER_NEAREST,
+                addressU: ADDRESS_CLAMP_TO_EDGE,
+                addressV: ADDRESS_CLAMP_TO_EDGE,
+                levels: [padded]
+            });
+        };
+        this.motionTexture?.destroy();
+        this.falloffTexture?.destroy();
+        this.motion = motion;
+        this.motionTexture = texture('splatMotion', PIXELFORMAT_RGBA32F, motion.velocityTime, 4);
+        this.falloffTexture = texture('splatFalloff', PIXELFORMAT_R32F, motion.falloff, 1);
+        this.rebuildMaterial(this.scene.events.invoke('view.bands'));
+    }
+
+    /**
+     * Show the 4D model at normalised time t, drawing only the gaussians in
+     * `active` (null: all). The GPU moves and fades them; here the depth sort
+     * gets their centres at t, which is all the CPU does per frame.
+     */
+    showTime(t: number, active: Uint32Array | null) {
+        if (active !== this.motionActive) {
+            this.motionMapping = null;
+        }
+        this.motionTime = t;
+        this.motionActive = active;
+        this.entity.gsplat.instance.material.setParameter('motionTime', t);
+        this.sortMotion();
+        this.changedCounter++;
+        this.scene.forceRender = true;
+    }
+
+    // hand the sorter the centres at motionTime of the gaussians alive then
+    // and not deleted: its mapping both orders and limits what is drawn
+    private sortMotion() {
+        const { sorter } = this.entity.gsplat.instance;
+        const base: Float32Array = sorter.centers;
+        const vt = this.motion.velocityTime;
+        if (!this.motionMapping) {
+            const state = this.splatData.getProp('state') as Uint8Array;
+            const active = this.motionActive;
+            const total = active ? active.length : this.splatData.numSplats;
+            const all = new Uint32Array(total);
+            let kept = 0;
+            for (let i = 0; i < total; i++) {
+                const n = active ? active[i] : i;
+                if ((state[n] & State.deleted) === 0) {
+                    all[kept++] = n;
+                }
+            }
+            this.motionMapping = all.subarray(0, kept);
+        }
+        const mapping = this.motionMapping;
+        const count = mapping.length;
+        const centers = new Float32Array(count * 3);
+        const t = this.motionTime;
+        for (let i = 0; i < count; i++) {
+            const n = mapping[i];
+            const dt = t - vt[n * 4 + 3];
+            centers[i * 3] = base[n * 3] + vt[n * 4] * dt;
+            centers[i * 3 + 1] = base[n * 3 + 1] + vt[n * 4 + 1] * dt;
+            centers[i * 3 + 2] = base[n * 3 + 2] + vt[n * 4 + 2] * dt;
+        }
+        const trimmed = mapping.slice(0, count);
+        // the engine's setMapping takes centres from its own copy, which here
+        // are the gaussians' temporal centres - so the message goes direct
+        (sorter as any).worker.postMessage({
+            centers: centers.buffer,
+            mapping: trimmed.buffer
+        }, [centers.buffer, trimmed.buffer]);
+    }
+
     destroy() {
         super.destroy();
+        this.motionTexture?.destroy();
+        this.falloffTexture?.destroy();
         this.entity.destroy();
         this.asset.registry.remove(this.asset);
         this.asset.unload();
@@ -393,7 +515,12 @@ class Splat extends Element {
         }
 
         // update sorting instance
-        this.entity.gsplat.instance.sorter.setMapping(mapping);
+        if (this.motion) {
+            this.motionMapping = null;
+            this.sortMotion();
+        } else {
+            this.entity.gsplat.instance.sorter.setMapping(mapping);
+        }
 
         // recalculate bounds after sorting changes
         await this.updateLocalBounds();
@@ -774,4 +901,4 @@ class Splat extends Element {
     }
 }
 
-export { Splat };
+export { Splat, type SplatMotion };

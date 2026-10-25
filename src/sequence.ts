@@ -16,6 +16,11 @@ interface FrameSource {
     readonly frameCount: number;
     getFrame(index: number): Promise<FrameData>;
     destroy(): void;
+
+    // A source played on the GPU (a 4D model): its getFrame gives one asset,
+    // used for every frame, and showFrame moves the persistent splat to
+    // another frame without new data.
+    showFrame?(splat: Splat, index: number): void;
 }
 
 // PLY sequence: a set of frameNNNN.ply files, sorted by trailing frame number.
@@ -127,6 +132,12 @@ const registerSequenceEvents = (events: Events, scene: Scene) => {
             return;
         }
 
+        if (source.showFrame && splat) {
+            source.showFrame(splat, frame);
+            currentFrame = frame;
+            return;
+        }
+
         loading = true;
         const loadSource = source;
         try {
@@ -139,6 +150,7 @@ const registerSequenceEvents = (events: Events, scene: Scene) => {
                 // applyFrame swaps data in place; replaceData keeps the previous frame
                 // on screen until the new one has rendered, so no extra wait is needed
                 await applyFrame(data);
+                source.showFrame?.(splat, frame);
                 currentFrame = frame;
             }
         } catch (error) {
@@ -200,6 +212,12 @@ const registerSequenceEvents = (events: Events, scene: Scene) => {
             return null;
         }
 
+        if (source.showFrame && splat) {
+            source.showFrame(splat, frame);
+            currentFrame = frame;
+            return splat;
+        }
+
         loadingPromise = (async () => {
             loading = true;
             const loadSource = source;
@@ -210,6 +228,7 @@ const registerSequenceEvents = (events: Events, scene: Scene) => {
                     discardAsset(data.asset);
                 } else {
                     await applyFrame(data);
+                    source.showFrame?.(splat, frame);
                     currentFrame = frame;
                 }
             } finally {

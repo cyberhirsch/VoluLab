@@ -499,6 +499,60 @@ class TghModel {
 
         return { count: M, props };
     }
+
+    /**
+     * Every gaussian at its own temporal centre, in motion form, for playback
+     * on the GPU: the 3D columns of evalFrame (opacity without the temporal
+     * falloff) plus, per row, the velocity and temporal centre and the
+     * falloff's 1 / (2 sigma_t^2). A frame at time t is then each gaussian
+     * moved by velocity * (t - centre) and faded by exp(-falloff * dt^2).
+     */
+    restFrame(): TghFrame & { velocityTime: Float32Array, falloff: Float32Array } {
+        const N = this.numSplats;
+        const K = this.restCoeffs;
+
+        const names = ['x', 'y', 'z'];
+        for (let c = 0; c < 3; c++) names.push(`f_dc_${c}`);
+        for (let c = 0; c < 3 * K; c++) names.push(`f_rest_${c}`);
+        names.push('opacity', 'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3');
+        const props = new Map<string, Float32Array>();
+        names.forEach(n => props.set(n, new Float32Array(N)));
+
+        const pos = [props.get('x'), props.get('y'), props.get('z')];
+        const dc = [props.get('f_dc_0'), props.get('f_dc_1'), props.get('f_dc_2')];
+        const rest: Float32Array[] = [];
+        for (let c = 0; c < 3 * K; c++) rest.push(props.get(`f_rest_${c}`));
+        const scales = [props.get('scale_0'), props.get('scale_1'), props.get('scale_2')];
+        const rots = [props.get('rot_0'), props.get('rot_1'), props.get('rot_2'), props.get('rot_3')];
+        const op = props.get('opacity');
+
+        const velocityTime = new Float32Array(N * 4);
+        const falloff = new Float32Array(N);
+        const mp = new Float32Array(11);
+
+        for (let n = 0; n < N; n++) {
+            this.motionParams(n, mp);
+            for (let c = 0; c < 3; c++) {
+                pos[c][n] = this.xyz[n * 3 + c];
+                dc[c][n] = this.featuresDc[n * 3 + c];
+                scales[c][n] = mp[3 + c];
+                velocityTime[n * 4 + c] = mp[c];
+            }
+            for (let c = 0; c < 4; c++) rots[c][n] = mp[6 + c];
+            op[n] = this.opacity[n];
+            velocityTime[n * 4 + 3] = this.t[n];
+            falloff[n] = 0.5 * Math.exp(-2 * mp[10]);
+
+            const base = n * K * 3;
+            for (let k = 0; k < K; k++) {
+                rest[k][n] = this.featuresRest[base + k * 3];
+                rest[K + k][n] = this.featuresRest[base + k * 3 + 1];
+                rest[2 * K + k][n] = this.featuresRest[base + k * 3 + 2];
+            }
+        }
+
+        return { count: N, props, velocityTime, falloff };
+    }
 }
 
 export { TghModel, type TghBlock, type TghFrame, type TghMeta, type TghTensors };
