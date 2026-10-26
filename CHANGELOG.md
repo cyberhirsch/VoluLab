@@ -9,6 +9,45 @@ months finds out why before they change it.
 
 ---
 
+## Camera poses in the browser
+
+Photos or a video dropped into VoluLab get their camera poses without
+any helper now. COLMAP itself runs in the page: the colmap-wasm package
+(BSD-3, COLMAP 4.2.1 compiled to WebAssembly - SIFT, geometric
+verification, view-graph calibration and the global mapper, with SIFT
+matching on WebGPU). The stages stream onto the import node as before,
+and the result is a COLMAP binary model (`sparse/0/*.bin`) packed with
+the images, which the dataset reader already accepts.
+
+The order is browser, then the bridge, then the COLMAP kit for a manual
+run. The browser path needs WebGPU; when it fails and the bridge is
+running, the bridge gets a go (`training/bridge-ingest.ts`).
+
+Like Brush, the package is not bundled. Rollup copies it to
+`static/colmap-wasm` and it is imported from a computed URL, so its
+worker and wasm resolve beside it through `import.meta.url`. About 7 MB
+(2 MB gzipped), loaded only when poses are needed. No cross-origin
+isolation is needed.
+
+Measured on Mira (20 synthetic views at 1024 px, known poses), in
+headless Chrome: 19 of 20 cameras registered in 53 s (features 36 s,
+matching 0.7 s, mapping 16 s). After a similarity alignment, positions
+are within 6 mm on average (13 mm worst) at 3.2 m, rotations within
+0.15 degrees, and the focal length within 0.3 %. Through the import path
+the whole run, packing included, took 39 s.
+
+Traps:
+
+- **One shared camera.** The package fits a single SIMPLE_PINHOLE camera
+  to all images, so photos of different sizes or from different lenses
+  fail or come out wrong; they fall back to the bridge when it runs.
+- **No WebGPU, no browser path.** Matching runs on WebGPU only; such
+  browsers keep the bridge or the kit.
+- **Embedded browser panes may lack WebGPU**; test in
+  real Chrome.
+
+---
+
 ## TGH models play on the GPU
 
 A TGH model (`.npz` or `.gsv`) used to play by conditioning every frame on

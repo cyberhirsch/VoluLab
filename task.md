@@ -160,6 +160,12 @@ bridge running, and a posed dataset is still loadable by hand.
 
 ## Camera poses in the browser, no helper
 
+**Built** (CHANGELOG.md, "Camera poses in the browser"): colmap-wasm runs
+COLMAP in the page; the bridge and the kit remain as fallbacks. Left: a
+real capture against native COLMAP, photos of mixed sizes, a long video
+(hundreds of frames, memory), then retire the bridge. The text below is
+the plan as written.
+
 VoluLab is meant to stand alone: everything, training included, should
 run in the browser without a local helper. Training already does (Brush
 on WebGPU); camera poses are the one step that still needs the COLMAP

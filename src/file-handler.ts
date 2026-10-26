@@ -11,8 +11,8 @@ import { SerializeSettings, serializeSog, serializeSpz, serializeViewer, SogSett
 import { readGsv, writeGsv } from './tgh/gsv';
 import { TghFrameSource } from './tgh/tgh-frame-source';
 import { TghModel } from './tgh/tgh-model';
-import { BridgeImage, bridgeReady } from './training/bridge-client';
-import { bridgePoseIntoOp } from './training/bridge-ingest';
+import { BridgeImage } from './training/bridge-client';
+import { bridgePoseIntoOp, posesReady } from './training/bridge-ingest';
 import { isImageSet, listDirectory, looksLikeDataset, packDataset } from './training/dataset';
 import { extractVideoFrames, ingestImages, ingestImagesInPlace, ingestVideo } from './training/video-ingest';
 import { i18n } from './ui/localization';
@@ -510,12 +510,12 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 }
             }
 
-            // a set of bare photos is a dataset waiting for poses: the
-            // bridge estimates them right here; without it they are copied
-            // out with the COLMAP kit and an import node waits
+            // a set of bare photos is a dataset waiting for poses: they are
+            // estimated right here, in the browser or by the bridge; failing
+            // both they are copied out with the COLMAP kit and a node waits
             const imageFiles = files.filter((f, i) => /\.(?:jpg|jpeg|png)$/.test(filenames[i]));
             if (imageFiles.length > 1 && imageFiles.length === files.length) {
-                if (await bridgeReady()) {
+                if (await posesReady()) {
                     const op = events.invoke('dataset.addNode', null, 'photos');
                     const images: BridgeImage[] = imageFiles.map(f => ({ name: f.filename.split('/').pop(), data: f.contents as Blob }));
                     bridgePoseIntoOp(op, images, 'exhaustive', events).catch(() => {});
@@ -573,11 +573,11 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     const bytes = new Uint8Array(await contents.arrayBuffer());
                     events.invoke('training.addNode', { kind: 'bytes', bytes, name: files[i].filename }, files[i].filename);
                 } else if (['.mp4', '.mov', '.webm', '.mkv'].some(ext => filename.endsWith(ext))) {
-                    // video: with the bridge running, frames go straight to
-                    // pose estimation; without it they land on disk with the
+                    // video: frames go straight to pose estimation (browser
+                    // or bridge); failing both they land on disk with the
                     // COLMAP kit and an import node waits
                     const contents = files[i].contents ?? new File([await (await fetch(files[i].url)).blob()], files[i].filename);
-                    if (await bridgeReady()) {
+                    if (await posesReady()) {
                         const op = events.invoke('dataset.addNode', null, files[i].filename);
                         op.status = i18n.t('bridge.stage-frames');
                         events.fire('dataset.statusChanged', op);
@@ -741,7 +741,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             }
 
             if (names.length > 1 && isImageSet(names)) {
-                if (await bridgeReady()) {
+                if (await posesReady()) {
                     const op = events.invoke('dataset.addNode', null, handle.name);
                     const images: BridgeImage[] = await Promise.all(entries.map(async e => ({
                         name: e.path.split('/').pop(),

@@ -68,6 +68,10 @@ const application = {
                 { src: 'node_modules/@playcanvas/splat-transform/lib/webp.wasm', dest: 'static/lib/webp' },
                 { src: 'static/locales', dest: 'static' },
                 { src: 'static/brush', dest: 'static' },
+                { src: 'node_modules/colmap-wasm/dist', dest: 'static/colmap-wasm' },
+                { src: 'node_modules/colmap-wasm/wasm', dest: 'static/colmap-wasm' },
+                { src: 'node_modules/colmap-wasm/LICENSE', dest: 'static/colmap-wasm' },
+                { src: 'node_modules/colmap-wasm/THIRD_PARTY_NOTICES.md', dest: 'static/colmap-wasm' },
                 { src: 'static/env/VertebraeHDRI_v1_512.png', dest: 'static/env' }
             ]
         }),

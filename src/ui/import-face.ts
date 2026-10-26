@@ -4,8 +4,8 @@ import { i18n } from './localization';
 import { resolveDropPayload } from '../drop-handler';
 import { DatasetOp } from '../edit-ops';
 import { Events } from '../events';
-import { BridgeImage, bridgeReady } from '../training/bridge-client';
-import { bridgePoseIntoOp } from '../training/bridge-ingest';
+import { BridgeImage } from '../training/bridge-client';
+import { bridgePoseIntoOp, posesReady } from '../training/bridge-ingest';
 import { isImageSet, listDirectory, looksLikeDataset, packDataset } from '../training/dataset';
 import { ensureWrite, extractVideoFrames, ingestImages, ingestImagesInPlace, ingestVideo } from '../training/video-ingest';
 
@@ -136,9 +136,9 @@ class ImportFace extends Container {
         }
 
         if (names.length > 1 && isImageSet(names)) {
-            // the bridge poses the photos right here; without it the
-            // COLMAP kit lands next to them for a manual run
-            if (await bridgeReady()) {
+            // the photos are posed right here (browser or bridge); failing
+            // both the COLMAP kit lands next to them for a manual run
+            if (await posesReady()) {
                 const images: BridgeImage[] = await Promise.all(entries.map(async e => ({
                     name: e.path.split('/').pop(),
                     data: await e.handle.getFile() as Blob
@@ -170,8 +170,8 @@ class ImportFace extends Container {
             const file = files[0];
             const name = lower[0];
             if (file.type.startsWith('video/') || ['.mp4', '.mov', '.webm', '.mkv'].some(ext => name.endsWith(ext))) {
-                if (await bridgeReady()) {
-                    // frames go straight to the bridge - nothing touches disk
+                if (await posesReady()) {
+                    // frames go straight to pose estimation - nothing touches disk
                     const frames: BridgeImage[] = [];
                     this.notice(i18n.t('bridge.stage-frames'));
                     await extractVideoFrames(file, (frameName, blob) => {
@@ -206,9 +206,9 @@ class ImportFace extends Container {
         }
 
         if (isImageSet(lower)) {
-            // the bridge poses bare photos in place; without it they are
-            // copied out with the COLMAP kit for a manual run
-            if (await bridgeReady()) {
+            // bare photos are posed in place (browser or bridge); failing
+            // both they are copied out with the COLMAP kit for a manual run
+            if (await posesReady()) {
                 this.runBridge(files.map((f, i) => ({ name: filenames[i].split('/').pop(), data: f as Blob })), 'exhaustive', 'photos');
             } else if (await ingestImages(files, this.events)) {
                 this.markAwaiting();
@@ -219,7 +219,7 @@ class ImportFace extends Container {
         this.notice(i18n.t('import.folder-unrecognized'));
     }
 
-    /** Hand images to the bridge; progress lands on the node's status line. */
+    /** Estimate poses for the images; progress lands on the node's status line. */
     private runBridge(images: BridgeImage[], matcher: 'sequential' | 'exhaustive', label: string) {
         const op = this.op;
         if (!op) return;

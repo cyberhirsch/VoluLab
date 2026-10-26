@@ -1,15 +1,34 @@
-import { BridgeImage, estimatePoses } from './bridge-client';
+import { BridgeImage, bridgeReady, estimatePoses } from './bridge-client';
+import { browserPosesReady, estimatePosesInBrowser } from './browser-poses';
 import { packDataset } from './dataset';
 import { DatasetOp } from '../edit-ops';
 import { Events } from '../events';
 import { i18n } from '../ui/localization';
 
+/** Can poses be estimated right now: in the browser, or by the bridge? */
+const posesReady = async (): Promise<boolean> => await browserPosesReady() || await bridgeReady();
+
 /**
- * Drive a bridge pose job into an import node: images go out, the
- * COLMAP stages stream back onto the node's status line, and the posed
- * dataset lands as the node's source when the run succeeds. The node
- * exists the whole time, so the graph shows the work where its result
- * will live.
+ * Estimate poses in the browser when it can, else through the bridge.
+ * The browser run needs equal-sized images (one shared camera); when it
+ * fails and the bridge is running, the bridge gets a go.
+ */
+const estimateAny = async (images: BridgeImage[], matcher: 'sequential' | 'exhaustive', stage: (key: string, detail?: string) => void) => {
+    if (await browserPosesReady()) {
+        try {
+            return await estimatePosesInBrowser(images, matcher, stage);
+        } catch (error) {
+            if (!await bridgeReady()) throw error;
+        }
+    }
+    return estimatePoses(images, matcher, stage);
+};
+
+/**
+ * Drive a pose job into an import node: the COLMAP stages stream onto
+ * the node's status line, and the posed dataset lands as the node's
+ * source when the run succeeds. The node exists the whole time, so the
+ * graph shows the work where its result will live.
  */
 const bridgePoseIntoOp = async (op: DatasetOp, images: BridgeImage[], matcher: 'sequential' | 'exhaustive', events: Events): Promise<boolean> => {
     const stage = (key: string, detail = '') => {
@@ -18,8 +37,7 @@ const bridgePoseIntoOp = async (op: DatasetOp, images: BridgeImage[], matcher: '
     };
 
     try {
-        stage('upload', `0/${images.length}`);
-        const sparse = await estimatePoses(images, matcher, stage);
+        const sparse = await estimateAny(images, matcher, stage);
 
         stage('packing');
         const files = [
@@ -40,4 +58,4 @@ const bridgePoseIntoOp = async (op: DatasetOp, images: BridgeImage[], matcher: '
     }
 };
 
-export { bridgePoseIntoOp };
+export { bridgePoseIntoOp, posesReady };
