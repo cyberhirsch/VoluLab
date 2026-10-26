@@ -27,7 +27,8 @@ hard here is rarely the amount of code.
 | 0 | 11 | A whole training run on a real capture (synthetic runs reach "done") | Sonnet 5 |
 | 1 | 4 | COLMAP bridge | Opus 5 |
 | 2 | 1 | WebGPU: draw the trainer's buffers directly (device shared, interim snapshots read the buffers; zero-copy draw open) | Fable 5 |
-| 2 | 8 | TGH frames off the main thread | Sonnet 5 |
+| 2 | 20 | GSV encoder: per-band SH palettes | Opus 5 |
+| 3 | 21 | Camera poses in the browser, no helper | Opus 5 |
 | 4 | 3 | Colour beyond affine (gamma, contrast, curves) | Fable 5 |
 | 4 | 7 | A real temperature model | Opus 5 |
 | 4 | 15 | Rec.709 luma coefficients | Haiku 4.5 |
@@ -50,11 +51,8 @@ is left of the phase is COLMAP on a real capture.
 
 **Phase 2 is what is left of the device move.** The viewport runs on WebGPU
 by default, and voxels needed no shader after all (CHANGELOG.md). What
-remains is sharing the device with the trainer, and the TGH item, where
-WebGPU changes what the right answer *is*: a worker and a frame cache move
-the cost off the main thread, while conditioning the 4D gaussians in the
-shader takes the CPU out of it altogether. The device is decided, so the
-shader is the one to build; the worker would be thrown away after it.
+remains is sharing the device with the trainer. The TGH item that sat
+here is done: 4D gaussians are conditioned in the shader (CHANGELOG.md).
 
 **Phase 3 is done**: precise invalidation first, then node reordering on top
 of the dependency walk it built (CHANGELOG.md).
@@ -159,6 +157,28 @@ client-side, and it stays strictly optional: everything works with no
 bridge running, and a posed dataset is still loadable by hand.
 
 ---
+
+## Camera poses in the browser, no helper
+
+VoluLab is meant to stand alone: everything, training included, should
+run in the browser without a local helper. Training already does (Brush
+on WebGPU); camera poses are the one step that still needs the COLMAP
+bridge or a hand-run script kit. Heavy training - TGH, 4D, the paper's
+runs - lives in VoluGym; this is about VoluLab's own static workflow.
+
+The route that keeps the MIT license: build COLMAP's or GLOMAP's
+pipeline (both BSD) for WebAssembly - features, matching, mapping,
+bundle adjustment - and run it in a worker. The hard part is the native
+dependencies (Ceres, Eigen, SuiteSparse); CPU-only in the browser, so
+slow on hundreds of images, fine on dozens. A learned pose model (VGGT,
+MASt3R, MapAnything) on ONNX Runtime Web is the fast alternative or a
+later preview, but the downloads are 1-4 GB and several carry
+non-commercial licenses - check each. Spirula Studio's SfM is GPL-3.0
+and cannot be ported in.
+
+Done when importing photos or a video estimates poses with no helper
+running, and the poses match COLMAP's on a real capture. The bridge can
+then go; a connection to VoluGym, if wanted, is a separate item.
 
 ## WebGPU viewport — ported, now the default
 
@@ -483,6 +503,33 @@ proves slow on real captures.
 - A grid that ran out of memory never tries that many cells again in the
   session, even after memory frees up.
 
+## GSV encoder: per-band SH palettes
+
+GSV's compact encoding loses about 2 dB against the dataset's own images
+on flame_salmon (30.07 against 32.07, 24 training views, the training
+rasteriser), and taking one attribute at a time from the decoded file
+puts nearly all of it on the SH palette: 65 536 centroids over all 45 rest
+coefficients cannot hold this model's view dependence, which is worth some
+8 dB here. Position, motion, time, rotation, scale and opacity together
+cost 0.03 dB.
+
+Measured with the same pipeline (4 views, only the rest coefficients
+replaced): one 64k palette per SH band - 9, 15 and 21 coefficients -
+recovers 1.2 dB of the 2.2 for 32 more raw bits per gaussian (48 against
+16; roughly +17 after WebP, plus two centroid textures, ~37 MB for the
+file instead of 31). Clustering on all points for 30 iterations instead
+of a 262k sample for 10 is part of it. Storing band 1 directly adds
+nothing on top; even every coefficient direct at 8 bits loses 0.4 dB.
+
+To build: three palettes and three label textures in `gsv-webp.ts`, the
+decoder reading them, and the spec's texture table (section 7.2) and
+codebook block updated - an old single-palette file should still open.
+The k-means wants its distance block kept to a few hundred megabytes:
+one sized for 262k centroids overflowed a 24 GB card and crawled. Worth
+trying in the same pass: a codebook per band for the centroids, and a
+second, residual palette. The experiments and their numbers are in the
+paper notes (`paper/notes.md` in the private VoluGym repo, E4b-E4d).
+
 ---
 
 ## Known limits
@@ -536,10 +583,12 @@ while it is dragged: each re-selection is that replay, too slow to run per
 pointer move on a large capture. The node keeps a copy of the shape for the
 same reason - see SelectMesh in `src/edit-ops.ts`.
 
-**TGH frames are evaluated on the main thread.** A million active gaussians
-per frame costs seconds of CPU per scrub. A worker and a small frame cache
-are the next step; conditioning in the shader, which the WebGPU viewport
-would unlock, is the one after.
+**A TGH model plays on the GPU, but the splat data holds each gaussian at
+its temporal centre** (CHANGELOG.md, "TGH models play on the GPU"). What
+reads the data rather than the shader - exporting the current frame,
+selection by position, the centres overlay - sees that, not the frame on
+screen. The CPU path (`TghFrameSource` with `gpu` off) is the frame-exact
+fallback for those.
 
 ---
 
