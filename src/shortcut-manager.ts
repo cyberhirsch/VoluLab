@@ -25,8 +25,8 @@ const defaultShortcuts: Record<string, ShortcutBinding> = {
 
     // Playback
     'timeline.togglePlay': { keys: [' '] },
-    'timeline.prevFrame': { keys: [','], repeat: true },
-    'timeline.nextFrame': { keys: ['.'], repeat: true },
+    'timeline.prevFrame': { keys: ['ArrowLeft', ','], repeat: true },
+    'timeline.nextFrame': { keys: ['ArrowRight', '.'], repeat: true },
     'timeline.prevKey': { keys: ['<'], shift: 'optional', repeat: true },
     'timeline.nextKey': { keys: ['>'], shift: 'optional', repeat: true },
     'track.addKey': { keys: ['Enter'] },
@@ -130,6 +130,10 @@ class ShortcutManager {
             keyDisplay = 'Space';
         } else if (keyDisplay === 'Escape') {
             keyDisplay = 'Esc';
+        } else if (keyDisplay === 'ArrowLeft') {
+            keyDisplay = '←';
+        } else if (keyDisplay === 'ArrowRight') {
+            keyDisplay = '→';
         } else if (keyDisplay.startsWith('Key')) {
             // Physical key codes like 'KeyW' -> 'W'
             keyDisplay = keyDisplay.slice(3);
