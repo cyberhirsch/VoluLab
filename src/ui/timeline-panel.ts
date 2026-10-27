@@ -278,8 +278,10 @@ class Ticks extends Container {
             rebuild();
         });
 
+        // the cursor exists once the panel has been laid out; a hidden
+        // panel has not been, and still hears frame changes
         events.on('timeline.frame', (frame: number) => {
-            moveCursor(frame);
+            moveCursor?.(frame);
         });
 
         // rebuild when track keys change
