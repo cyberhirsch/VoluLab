@@ -13,7 +13,7 @@ import { TghFrameSource } from './tgh/tgh-frame-source';
 import { TghModel } from './tgh/tgh-model';
 import { BridgeImage } from './training/bridge-client';
 import { bridgePoseIntoOp, posesReady } from './training/bridge-ingest';
-import { isImageSet, listDirectory, looksLikeDataset, packDataset } from './training/dataset';
+import { isIgnoredFile, isImageSet, listDirectory, looksLikeDataset, packDataset } from './training/dataset';
 import { extractVideoFrames, ingestImages, ingestImagesInPlace, ingestVideo } from './training/video-ingest';
 import { i18n } from './ui/localization';
 
@@ -260,10 +260,11 @@ const loadImagesTxt = async (file: ImportFile, events: Events) => {
     .filter((_, i) => i % 2 === 0)              // remove every second line
     .map((line, i) => {
         const parts = line.split(' ');
-        if (parts.length !== 10) {
+        if (parts.length < 10) {
             return null;
         }
-        const name = parts[9];
+        // the name is the rest of the line: it may contain spaces
+        const name = parts.slice(9).join(' ');
         const order = parseInt(removeExtension(name).match(/\d+$/)?.[0], 10);
         return {
             w: parseFloat(parts[1]),
@@ -300,6 +301,20 @@ const loadImagesTxt = async (file: ImportFile, events: Events) => {
             target: new Vec3(-vec.x, -vec.y, vec.z)
         });
     });
+};
+
+/**
+ * Put a freshly set sequence on its first frame. Moving the playhead goes
+ * through 'timeline.setFrame', so the timeline's own frame agrees with what
+ * is shown; when the playhead already is at 0 that changes nothing and
+ * fires nothing, so the frame is announced directly to load it.
+ */
+const showFirstFrame = (events: Events) => {
+    if (events.invoke('timeline.frame') === 0) {
+        events.fire('timeline.frame', 0);
+    } else {
+        events.fire('timeline.setFrame', 0);
+    }
 };
 
 // initialize file handler events
@@ -346,7 +361,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             if (model.meta.fps) {
                 events.fire('timeline.setFrameRate', model.meta.fps);
             }
-            events.fire('timeline.frame', 0);
+            showFirstFrame(events);
         } catch (error) {
             await showLoadError(error.message ?? error, file.filename);
         } finally {
@@ -400,7 +415,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         try {
             const bytes = await writeGsv(source.model, {
                 frames: source.frameCount,
-                fps: events.invoke('timeline.frameRate') ?? source.model.meta.fps
+                fps: events.invoke('timeline.frameRate') ?? source.model.meta.fps,
+                zUp: source.model.meta.zUp
             }, { encoding, device, mortonOrder });
             if (writable) {
                 await writable.write(bytes as BlobPart);
@@ -474,6 +490,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
 
     // figure out what the set of files are (ply sequence, document, sog set, ply) and then import them
     const importFiles = async (files: ImportFile[], animationFrame = false) => {
+        // Thumbs.db, desktop.ini and the like ride along in dropped folders
+        files = files.filter(f => !isIgnoredFile(f.filename));
         const filenames = files.map(f => f.filename.toLowerCase());
 
         const result: Splat[] = [];
@@ -481,7 +499,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         if (isPlySequence(filenames)) {
             // handle ply sequence
             events.fire('sequence.setPlyFrames', files.map(f => f.contents));
-            events.fire('timeline.frame', 0);
+            showFirstFrame(events);
         } else if (isSog(filenames) || isLcc(filenames)) {
             const model = await importSplatModel(files, animationFrame);
             if (model) result.push(model);
@@ -490,8 +508,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             // pending train node, packed as one zip for the trainer
             events.fire('startSpinner');
             try {
-                const { bytes, name } = await packDataset(files);
-                events.invoke('dataset.addNode', { kind: 'bytes', bytes, name: `${name}.zip` }, name);
+                const { zip, name } = await packDataset(files);
+                events.invoke('dataset.addNode', { kind: 'bytes', bytes: zip, name: `${name}.zip` }, name);
             } finally {
                 events.fire('stopSpinner');
             }
@@ -517,7 +535,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             if (imageFiles.length > 1 && imageFiles.length === files.length) {
                 if (await posesReady()) {
                     const op = events.invoke('dataset.addNode', null, 'photos');
-                    const images: BridgeImage[] = imageFiles.map(f => ({ name: f.filename.split('/').pop(), data: f.contents as Blob }));
+                    // named by path: same-named photos in subfolders stay apart
+                    const images: BridgeImage[] = imageFiles.map(f => ({ name: f.filename, data: f.contents as Blob }));
                     bridgePoseIntoOp(op, images, 'exhaustive', events).catch(() => {});
                     return result;
                 }
@@ -568,25 +587,28 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     // out as a Gaussian Splat Video
                     await importTghModel(files[i]);
                 } else if (filename.endsWith('.zip')) {
-                    // a zip is a dataset for training - Brush sniffs the contents
+                    // a zip is a dataset for training - Brush sniffs the
+                    // contents. Kept as the blob it is: read when training starts
                     const contents = files[i].contents ?? await (await fetch(files[i].url)).blob();
-                    const bytes = new Uint8Array(await contents.arrayBuffer());
-                    events.invoke('training.addNode', { kind: 'bytes', bytes, name: files[i].filename }, files[i].filename);
+                    events.invoke('dataset.addNode', { kind: 'bytes', bytes: contents, name: files[i].filename }, files[i].filename);
                 } else if (['.mp4', '.mov', '.webm', '.mkv'].some(ext => filename.endsWith(ext))) {
                     // video: frames go straight to pose estimation (browser
                     // or bridge); failing both they land on disk with the
                     // COLMAP kit and an import node waits
                     const contents = files[i].contents ?? new File([await (await fetch(files[i].url)).blob()], files[i].filename);
                     if (await posesReady()) {
+                        // frames are extracted when the node's pose job gets
+                        // its turn, so several videos do not all sit in memory
+                        // at once, and a failed extraction lands on the node
                         const op = events.invoke('dataset.addNode', null, files[i].filename);
-                        op.status = i18n.t('bridge.stage-frames');
-                        events.fire('dataset.statusChanged', op);
-                        const frames: BridgeImage[] = [];
-                        await extractVideoFrames(contents, (frameName, blob) => {
-                            frames.push({ name: frameName, data: blob });
-                            return Promise.resolve();
-                        });
-                        bridgePoseIntoOp(op, frames, 'sequential', events).catch(() => {});
+                        bridgePoseIntoOp(op, async () => {
+                            const frames: BridgeImage[] = [];
+                            await extractVideoFrames(contents, (frameName, blob) => {
+                                frames.push({ name: frameName, data: blob });
+                                return Promise.resolve();
+                            });
+                            return frames;
+                        }, 'sequential', events).catch(() => {});
                     } else {
                         const wrote = await ingestVideo(contents, events);
                         if (wrote) {
@@ -744,7 +766,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 if (await posesReady()) {
                     const op = events.invoke('dataset.addNode', null, handle.name);
                     const images: BridgeImage[] = await Promise.all(entries.map(async e => ({
-                        name: e.path.split('/').pop(),
+                        name: e.path,
                         data: await e.handle.getFile() as Blob
                     })));
                     bridgePoseIntoOp(op, images, 'exhaustive', events).catch(() => {});
@@ -791,7 +813,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     }
                 }
                 events.fire('sequence.setPlyFrames', files);
-                events.fire('timeline.frame', 0);
+                showFirstFrame(events);
             }
         } catch (error) {
             if (error.name !== 'AbortError') {

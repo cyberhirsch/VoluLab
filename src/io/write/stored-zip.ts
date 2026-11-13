@@ -27,10 +27,26 @@ const CRC_TABLE = (() => {
     return table;
 })();
 
-const crc32 = (data: Uint8Array) => {
-    let c = 0xffffffff;
+// the running register, so a checksum can be taken a chunk at a time
+const crc32Update = (c: number, data: Uint8Array) => {
     for (let i = 0; i < data.length; i++) {
         c = CRC_TABLE[(c ^ data[i]) & 0xff] ^ (c >>> 8);
+    }
+    return c;
+};
+
+const crc32 = (data: Uint8Array) => {
+    return (crc32Update(0xffffffff, data) ^ 0xffffffff) >>> 0;
+};
+
+/** The checksum of a blob, read as a stream: no more than a chunk in memory. */
+const crc32Blob = async (blob: Blob) => {
+    let c = 0xffffffff;
+    const reader = blob.stream().getReader();
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        c = crc32Update(c, value);
     }
     return (c ^ 0xffffffff) >>> 0;
 };
@@ -128,4 +144,79 @@ const storedZip = (files: ZipEntry[]): Uint8Array => {
     return bytes;
 };
 
-export { crc32, storedZip, type ZipEntry };
+/** a little-endian record of 32- and 16-bit fields, then raw bytes */
+const record = (fields: [number, 2 | 4][], tail?: Uint8Array) => {
+    const size = fields.reduce((sum, [, n]) => sum + n, 0);
+    const bytes = new Uint8Array(size + (tail?.length ?? 0));
+    const view = new DataView(bytes.buffer);
+    let at = 0;
+    for (const [value, n] of fields) {
+        if (n === 4) view.setUint32(at, value, true);
+        else view.setUint16(at, value, true);
+        at += n;
+    }
+    if (tail) bytes.set(tail, at);
+    return bytes;
+};
+
+/** The local header of a stored entry, as storedZip writes it. */
+const localHeader = (name: Uint8Array, crc: number, size: number) => record([
+    [0x04034b50, 4], [20, 2], [0, 2], [0, 2], [0, 2], [0x21, 2],
+    [crc, 4], [size, 4], [size, 4], [name.length, 2], [0, 2]
+], name);
+
+/** The central directory record of a stored entry at `offset`. */
+const centralHeader = (name: Uint8Array, crc: number, size: number, offset: number) => record([
+    [0x02014b50, 4], [20, 2], [20, 2], [0, 2], [0, 2], [0, 2], [0x21, 2],
+    [crc, 4], [size, 4], [size, 4], [name.length, 2], [0, 2], [0, 2], [0, 2], [0, 2], [0, 4], [offset, 4]
+], name);
+
+/** The end of central directory record. */
+const endRecord = (count: number, centralSize: number, centralOffset: number) => record([
+    [0x06054b50, 4], [0, 2], [0, 2], [count, 2], [count, 2], [centralSize, 4], [centralOffset, 4], [0, 2]
+]);
+
+type BlobZipEntry = {
+    name: string;
+    data: Blob;
+};
+
+/**
+ * The same archive as storedZip, as a Blob built from parts: the headers
+ * are small arrays and every payload is the entry's own blob, referenced
+ * rather than copied. A file picked from disk stays on disk; a blob the
+ * browser holds is not duplicated, and the browser may page it out.
+ *
+ * Each entry is read once, as a stream, for its checksum - so every
+ * local header is still complete and no data descriptor is needed.
+ */
+const storedZipBlob = async (files: BlobZipEntry[], signal?: AbortSignal): Promise<Blob> => {
+    const encoder = new TextEncoder();
+    const parts: BlobPart[] = [];
+    const central: Uint8Array<ArrayBuffer>[] = [];
+
+    let size = 0;
+    for (const file of files) {
+        signal?.throwIfAborted();
+        const name = encoder.encode(file.name);
+        const crc = await crc32Blob(file.data);
+        const header = localHeader(name, crc, file.data.size);
+        central.push(centralHeader(name, crc, file.data.size, size));
+        parts.push(header, file.data);
+        size += header.length + file.data.size;
+    }
+
+    const centralOffset = size;
+    const centralSize = central.reduce((sum, c) => sum + c.length, 0);
+    size += centralSize + 22;
+
+    // no zip64: past these, the offsets and counts no longer fit
+    if (size > 0xffffffff || files.length >= 0xffff) {
+        throw new Error('archive too large: more than 4 GB or 65535 entries');
+    }
+
+    parts.push(...central, endRecord(files.length, centralSize, centralOffset));
+    return new Blob(parts, { type: 'application/zip' });
+};
+
+export { centralHeader, crc32, endRecord, localHeader, storedZip, storedZipBlob, type BlobZipEntry, type ZipEntry };

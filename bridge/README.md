@@ -18,3 +18,7 @@ COLMAP yourself (`brew install colmap` / `sudo apt install colmap`).
 The bridge listens on `127.0.0.1:39733` only — nothing is reachable from
 outside the machine. Without the bridge running, VoluLab falls back to
 writing a `run-colmap` script kit next to your images for a manual run.
+
+Only VoluLab itself may use it: requests from `localhost`/`127.0.0.1`
+pages and from the deployed app are accepted, every other website is
+refused. Add origins with `VOLULAB_ORIGINS=https://a.example,https://b.example`.

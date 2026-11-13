@@ -15,6 +15,7 @@
  */
 
 import { spawn, execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
@@ -28,6 +29,29 @@ const PORT = Number(process.env.PORT ?? 39733);
 const HOST = '127.0.0.1';
 const BRIDGE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_COLMAP_DIR = path.join(BRIDGE_DIR, '.colmap');
+const TEMP_PREFIX = 'volulab-bridge-';
+
+// one image may be large (a raw-ish 100 MP jpeg), a job may not be endless
+const MAX_IMAGE_BYTES = 256 * 1024 * 1024;
+const MAX_JOB_BYTES = 16 * 1024 * 1024 * 1024;
+const MAX_JOB_IMAGES = 5000;
+// a job nobody has asked about for this long was abandoned by its tab
+const JOB_IDLE_MS = 60 * 60 * 1000;
+
+/**
+ * Who may talk to the bridge: VoluLab served locally (dev server, any
+ * port) and the deployed app. VOLULAB_ORIGINS adds more, comma-separated.
+ * Every other website is refused - the bridge runs a native program on
+ * this machine and holds the user's photos.
+ */
+const DEPLOYED_ORIGINS = ['https://cyberhirsch.github.io'];
+const extraOrigins = (process.env.VOLULAB_ORIGINS ?? '').split(',').map(s => s.trim()).filter(Boolean);
+const LOCAL_ORIGIN_RE = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/;
+const originAllowed = origin => LOCAL_ORIGIN_RE.test(origin) || DEPLOYED_ORIGINS.includes(origin) || extraOrigins.includes(origin);
+
+// the Host header must name this machine: a rebound DNS name pointing at
+// 127.0.0.1 makes a hostile page same-origin with us, but not same-host
+const LOCAL_HOST_RE = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/;
 
 // ---------------------------------------------------------------- colmap
 
@@ -206,27 +230,58 @@ class Tail {
 }
 
 const jobs = new Map();
-let nextJob = 1;
 
 const createJob = async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), 'volulab-bridge-'));
+    const dir = await mkdtemp(path.join(tmpdir(), TEMP_PREFIX));
     await mkdir(path.join(dir, 'images'), { recursive: true });
     const job = {
-        id: String(nextJob++),
+        // unguessable: the id is all that stands between a job's photos and
+        // anything else that can reach this port
+        id: randomUUID(),
         dir,
         stage: 'idle',       // idle | features | matching | mapping | convert | done | error
         detail: '',
         error: null,
-        tail: new Tail()
+        tail: new Tail(),
+        child: null,         // the colmap process of the running stage
+        cancelled: false,
+        names: new Set(),    // stored image names, kept unique
+        bytes: 0,
+        touched: Date.now()
     };
     jobs.set(job.id, job);
     return job;
 };
 
+const removeDir = dir => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+
+/** Forget a job: kill its colmap, then delete its folder. */
+const deleteJob = async (job) => {
+    jobs.delete(job.id);
+    job.cancelled = true;
+    const child = job.child;
+    if (child && child.exitCode === null && child.signalCode === null) {
+        // windows keeps the files open until the process is really gone
+        const closed = new Promise((resolve) => {
+            child.once('close', resolve);
+        });
+        child.kill();
+        await Promise.race([closed, new Promise((resolve) => {
+            setTimeout(resolve, 5000);
+        })]);
+    }
+    await removeDir(job.dir);
+};
+
 const runStage = (job, stage, command, args, cwd) => new Promise((resolve, reject) => {
+    if (job.cancelled) {
+        reject(new Error('cancelled'));
+        return;
+    }
     job.stage = stage;
     job.detail = '';
     const child = spawn(command[0], [...command.slice(1), ...args], { cwd });
+    job.child = child;
     const onData = (chunk) => {
         job.tail.push(chunk);
         // colmap reports "Processed file [x/y]" and similar - surface it
@@ -269,6 +324,12 @@ const runJob = async (job, matcher) => {
     } catch (error) {
         job.stage = 'error';
         job.error = String(error.message ?? error);
+        // a failed job's photos and database are of no further use; the
+        // job itself stays so its error can still be read
+        if (!job.cancelled) await removeDir(job.dir);
+    } finally {
+        job.child = null;
+        job.touched = Date.now();
     }
 };
 
@@ -294,22 +355,40 @@ const listResults = async (job) => {
 
 // ---------------------------------------------------------------- server
 
-const CORS = {
-    'Access-Control-Allow-Origin': '*',
+/** CORS for an allowed origin: echoed back, never '*' */
+const corsFor = origin => ({
+    ...(origin ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}),
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     // chrome's private-network-access preflight for https -> localhost
     'Access-Control-Allow-Private-Network': 'true'
-};
+});
 
 const json = (res, code, body) => {
-    res.writeHead(code, { ...CORS, 'Content-Type': 'application/json' });
+    res.writeHead(code, { ...(res.cors ?? {}), 'Content-Type': 'application/json' });
     res.end(JSON.stringify(body));
 };
 
-const readBody = req => new Promise((resolve, reject) => {
+class TooLarge extends Error {}
+
+/** the request body, refused once it grows past `limit` bytes */
+const readBody = (req, limit) => new Promise((resolve, reject) => {
+    const declared = Number(req.headers['content-length']);
+    if (declared > limit) {
+        reject(new TooLarge('image too large'));
+        return;
+    }
     const chunks = [];
-    req.on('data', c => chunks.push(c));
+    let size = 0;
+    req.on('data', (c) => {
+        size += c.length;
+        if (size > limit) {
+            req.destroy();
+            reject(new TooLarge('image too large'));
+            return;
+        }
+        chunks.push(c);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
 });
@@ -317,10 +396,43 @@ const readBody = req => new Promise((resolve, reject) => {
 /** keep a filename a filename - no separators, no traversal */
 const safeName = name => path.basename(name).replace(/[^\w.\- ]/g, '_');
 
+/**
+ * The name an image is stored under: safe, and unique within the job -
+ * two names that sanitize alike ("ä.jpg", "ö.jpg") must not overwrite
+ * each other. The client is told, so its dataset uses the same names
+ * COLMAP's images.txt will.
+ */
+const storedName = (job, name) => {
+    const safe = safeName(name) || 'image';
+    if (!job.names.has(safe)) return safe;
+    const ext = path.extname(safe);
+    const stem = safe.slice(0, safe.length - ext.length);
+    for (let i = 1; ; i++) {
+        const candidate = `${stem}_${i}${ext}`;
+        if (!job.names.has(candidate)) return candidate;
+    }
+};
+
 const server = http.createServer(async (req, res) => {
     try {
+        // a rebound dns name reaches us with a foreign Host
+        if (!LOCAL_HOST_RE.test(req.headers.host ?? '')) {
+            res.writeHead(403);
+            res.end();
+            return;
+        }
+        // browsers always name the page a cross-origin request comes from;
+        // requests from tools (no Origin) are as local as the bridge itself
+        const origin = req.headers.origin;
+        if (origin !== undefined && !originAllowed(origin)) {
+            res.writeHead(403);
+            res.end();
+            return;
+        }
+        res.cors = corsFor(origin);
+
         if (req.method === 'OPTIONS') {
-            res.writeHead(204, CORS);
+            res.writeHead(204, res.cors);
             res.end();
             return;
         }
@@ -345,16 +457,34 @@ const server = http.createServer(async (req, res) => {
             json(res, 404, { error: 'no such job' });
             return;
         }
+        if (job) job.touched = Date.now();
 
         if (req.method === 'PUT' && parts[0] === 'jobs' && parts[2] === 'images' && parts[3]) {
-            const body = await readBody(req);
-            await writeFile(path.join(job.dir, 'images', safeName(decodeURIComponent(parts[3]))), body);
-            json(res, 200, { ok: true });
+            if (job.stage !== 'idle') {
+                json(res, 409, { error: 'job already running' });
+                return;
+            }
+            if (job.names.size >= MAX_JOB_IMAGES) {
+                json(res, 413, { error: `at most ${MAX_JOB_IMAGES} images per job` });
+                return;
+            }
+            const body = await readBody(req, Math.min(MAX_IMAGE_BYTES, MAX_JOB_BYTES - job.bytes));
+            const name = storedName(job, decodeURIComponent(parts[3]));
+            job.names.add(name);
+            job.bytes += body.length;
+            await writeFile(path.join(job.dir, 'images', name), body);
+            json(res, 200, { ok: true, name });
             return;
         }
 
         if (req.method === 'POST' && parts[0] === 'jobs' && parts[2] === 'run') {
+            if (job.stage !== 'idle') {
+                json(res, 409, { error: 'job already running' });
+                return;
+            }
             const matcher = url.searchParams.get('matcher') === 'exhaustive' ? 'exhaustive' : 'sequential';
+            // taken synchronously, so a second run request is refused
+            job.stage = 'features';
             runJob(job, matcher).catch(() => {});
             json(res, 200, { ok: true });
             return;
@@ -366,34 +496,65 @@ const server = http.createServer(async (req, res) => {
         }
 
         if (req.method === 'GET' && parts[0] === 'jobs' && parts[2] === 'files' && parts.length === 3) {
-            json(res, 200, { files: await listResults(job) });
+            json(res, 200, { files: job.stage === 'done' ? await listResults(job) : [] });
             return;
         }
 
         if (req.method === 'GET' && parts[0] === 'jobs' && parts[2] === 'files') {
+            // only the reconstruction is served - never the photos or the database
             const rel = parts.slice(3).map(decodeURIComponent).join('/');
-            if (rel.includes('..')) {
+            const sparse = path.join(job.dir, 'sparse');
+            const file = path.resolve(job.dir, rel);
+            if (job.stage !== 'done' || !rel.startsWith('sparse/') || !file.startsWith(sparse + path.sep)) {
                 json(res, 400, { error: 'bad path' });
                 return;
             }
-            const data = await readFile(path.join(job.dir, rel));
-            res.writeHead(200, { ...CORS, 'Content-Type': 'application/octet-stream' });
+            const data = await readFile(file);
+            res.writeHead(200, { ...res.cors, 'Content-Type': 'application/octet-stream' });
             res.end(data);
             return;
         }
 
         if (req.method === 'DELETE' && parts[0] === 'jobs' && parts.length === 2) {
-            jobs.delete(job.id);
-            await rm(job.dir, { recursive: true, force: true });
+            await deleteJob(job);
             json(res, 200, { ok: true });
             return;
         }
 
         json(res, 404, { error: 'unknown route' });
     } catch (error) {
-        json(res, 500, { error: String(error.message ?? error) });
+        if (!res.headersSent) {
+            json(res, error instanceof TooLarge ? 413 : 500, { error: String(error.message ?? error) });
+        }
     }
 });
+
+/** Jobs whose tab went away without a DELETE: dropped after an idle hour. */
+const sweepIdleJobs = () => {
+    const now = Date.now();
+    for (const job of jobs.values()) {
+        if (!job.child && now - job.touched > JOB_IDLE_MS) {
+            deleteJob(job).catch(() => {});
+        }
+    }
+};
+
+/** Folders left by an earlier bridge that was closed mid-job. */
+const sweepStaleDirs = async () => {
+    let entries;
+    try {
+        entries = await readdir(tmpdir(), { withFileTypes: true });
+    } catch (e) {
+        return;
+    }
+    const live = new Set([...jobs.values()].map(j => j.dir));
+    for (const entry of entries) {
+        const dir = path.join(tmpdir(), entry.name);
+        if (entry.isDirectory() && entry.name.startsWith(TEMP_PREFIX) && !live.has(dir)) {
+            await removeDir(dir);
+        }
+    }
+};
 
 const start = async () => {
     console.log('VoluLab COLMAP bridge');
@@ -405,6 +566,10 @@ const start = async () => {
     }
     server.listen(PORT, HOST, () => {
         console.log(`listening on http://${HOST}:${PORT} - leave this window open and import photos or a video in VoluLab`);
+        // only once the port is ours: a second bridge that fails to listen
+        // must not delete the first one's jobs
+        sweepStaleDirs().catch(() => {});
+        setInterval(sweepIdleJobs, 5 * 60 * 1000).unref();
     });
 };
 

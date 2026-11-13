@@ -41,13 +41,41 @@ const browserPosesReady = async (): Promise<boolean> => {
 };
 
 /**
+ * Every image the same size, as decoded - the one shared camera needs
+ * it. Checked up front: the package only finds out after extracting
+ * features from every image, minutes in. Decoded the way the package
+ * decodes (EXIF orientation applied), a few at a time.
+ */
+const checkSameSize = async (images: BridgeImage[], signal?: AbortSignal) => {
+    let size: string | null = null;
+    for (let i = 0; i < images.length; i += 4) {
+        signal?.throwIfAborted();
+        const sizes = await Promise.all(images.slice(i, i + 4).map(async (image) => {
+            const bmp = await createImageBitmap(image.data);
+            const s = `${bmp.width}x${bmp.height}`;
+            bmp.close();
+            return s;
+        }));
+        for (const s of sizes) {
+            size ??= s;
+            if (s !== size) {
+                throw new Error(`the images differ in size (${size}, ${s}); in-browser poses need one size`);
+            }
+        }
+    }
+};
+
+/**
  * Estimate poses for the images and return the sparse model files
  * (sparse/0/cameras.bin, images.bin, points3D.bin). Throws when the
- * reconstruction registers fewer than two images.
+ * images differ in size, or when the reconstruction registers fewer
+ * than two images. Aborting `signal` stops the run.
  */
-const estimatePosesInBrowser = async (images: BridgeImage[], matcher: 'sequential' | 'exhaustive', onStage: StageFn): Promise<{ path: string, data: Uint8Array }[]> => {
+const estimatePosesInBrowser = async (images: BridgeImage[], matcher: 'sequential' | 'exhaustive', onStage: StageFn, signal?: AbortSignal): Promise<{ path: string, data: Uint8Array }[]> => {
     onStage('features', '');
+    await checkSameSize(images, signal);
     const colmap = await loadPackage();
+    signal?.throwIfAborted();
 
     const pairs = matcher === 'sequential' ?
         colmap.sequentialPairs(images.length, { window: 10 }) :
@@ -55,6 +83,7 @@ const estimatePosesInBrowser = async (images: BridgeImage[], matcher: 'sequentia
 
     const { reconstruction, features } = await colmap.estimatePoses(images, {
         pairs,
+        signal,
         onProgress: ({ stage, done, total }) => onStage(stage, total > 0 ? `${done}/${total}` : '')
     });
 

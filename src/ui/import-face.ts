@@ -5,8 +5,8 @@ import { resolveDropPayload } from '../drop-handler';
 import { DatasetOp } from '../edit-ops';
 import { Events } from '../events';
 import { BridgeImage } from '../training/bridge-client';
-import { bridgePoseIntoOp, posesReady } from '../training/bridge-ingest';
-import { isImageSet, listDirectory, looksLikeDataset, packDataset } from '../training/dataset';
+import { bridgePoseIntoOp, cancelPoseJob, posesReady } from '../training/bridge-ingest';
+import { isIgnoredFile, isImageSet, listDirectory, looksLikeDataset, packDataset } from '../training/dataset';
 import { ensureWrite, extractVideoFrames, ingestImages, ingestImagesInPlace, ingestVideo } from '../training/video-ingest';
 
 /**
@@ -140,7 +140,7 @@ class ImportFace extends Container {
             // both the COLMAP kit lands next to them for a manual run
             if (await posesReady()) {
                 const images: BridgeImage[] = await Promise.all(entries.map(async e => ({
-                    name: e.path.split('/').pop(),
+                    name: e.path,
                     data: await e.handle.getFile() as Blob
                 })));
                 this.runBridge(images, 'exhaustive', handle.name);
@@ -162,8 +162,12 @@ class ImportFace extends Container {
     }
 
     /** File and file-list mode: route whatever was picked or dropped. */
-    private async acceptFiles(files: File[], names?: string[]) {
-        const filenames = names ?? files.map(f => f.name);
+    private async acceptFiles(allFiles: File[], names?: string[]) {
+        // Thumbs.db, desktop.ini and the like ride along in dropped folders
+        const allNames = names ?? allFiles.map(f => f.name);
+        const keep = allNames.map(n => !isIgnoredFile(n));
+        const files = allFiles.filter((_, i) => keep[i]);
+        const filenames = allNames.filter((_, i) => keep[i]);
         const lower = filenames.map(f => f.toLowerCase());
 
         if (files.length === 1) {
@@ -171,20 +175,23 @@ class ImportFace extends Container {
             const name = lower[0];
             if (file.type.startsWith('video/') || ['.mp4', '.mov', '.webm', '.mkv'].some(ext => name.endsWith(ext))) {
                 if (await posesReady()) {
-                    // frames go straight to pose estimation - nothing touches disk
-                    const frames: BridgeImage[] = [];
-                    this.notice(i18n.t('bridge.stage-frames'));
-                    await extractVideoFrames(file, (frameName, blob) => {
-                        frames.push({ name: frameName, data: blob });
-                        return Promise.resolve();
-                    });
-                    this.runBridge(frames, 'sequential', file.name);
+                    // frames go straight to pose estimation - nothing touches
+                    // disk; extracted inside the job, so a failure lands on
+                    // the node's status line
+                    this.runBridge(async () => {
+                        const frames: BridgeImage[] = [];
+                        await extractVideoFrames(file, (frameName, blob) => {
+                            frames.push({ name: frameName, data: blob });
+                            return Promise.resolve();
+                        });
+                        return frames;
+                    }, 'sequential', file.name);
                 } else if (await ingestVideo(file, this.events)) {
                     this.markAwaiting();
                 }
             } else if (name.endsWith('.zip') || name.endsWith('.ply')) {
-                const bytes = new Uint8Array(await file.arrayBuffer());
-                this.setSource({ kind: 'bytes', bytes, name: file.name }, file.name);
+                // kept as the file it is: read when training starts
+                this.setSource({ kind: 'bytes', bytes: file, name: file.name }, file.name);
             } else if (isImageSet([name])) {
                 this.notice(i18n.t('import.single-image'));
             } else {
@@ -197,8 +204,8 @@ class ImportFace extends Container {
             // several files forming one dataset: pack them into a zip
             this.events.fire('startSpinner');
             try {
-                const { bytes, name } = await packDataset(files.map((f, i) => ({ filename: filenames[i], contents: f })));
-                this.setSource({ kind: 'bytes', bytes, name: `${name}.zip` }, name);
+                const { zip, name } = await packDataset(files.map((f, i) => ({ filename: filenames[i], contents: f })));
+                this.setSource({ kind: 'bytes', bytes: zip, name: `${name}.zip` }, name);
             } finally {
                 this.events.fire('stopSpinner');
             }
@@ -209,7 +216,7 @@ class ImportFace extends Container {
             // bare photos are posed in place (browser or bridge); failing
             // both they are copied out with the COLMAP kit for a manual run
             if (await posesReady()) {
-                this.runBridge(files.map((f, i) => ({ name: filenames[i].split('/').pop(), data: f as Blob })), 'exhaustive', 'photos');
+                this.runBridge(files.map((f, i) => ({ name: filenames[i], data: f as Blob })), 'exhaustive', 'photos');
             } else if (await ingestImages(files, this.events)) {
                 this.markAwaiting();
             }
@@ -220,7 +227,7 @@ class ImportFace extends Container {
     }
 
     /** Estimate poses for the images; progress lands on the node's status line. */
-    private runBridge(images: BridgeImage[], matcher: 'sequential' | 'exhaustive', label: string) {
+    private runBridge(images: BridgeImage[] | (() => Promise<BridgeImage[]>), matcher: 'sequential' | 'exhaustive', label: string) {
         const op = this.op;
         if (!op) return;
         op.sourceName = label;
@@ -231,6 +238,10 @@ class ImportFace extends Container {
 
     private setSource(source: unknown, name: string) {
         if (!this.op) return;
+        // a pose job still running for the previous dataset must not land
+        // on top of this one
+        cancelPoseJob(this.op);
+        this.op.status = undefined;
         this.op.setSource(source, name);
         this.events.fire('edit.changed');
         this.refresh();
@@ -239,6 +250,8 @@ class ImportFace extends Container {
     /** The dataset is out being posed; the node waits for its return. */
     private markAwaiting() {
         if (this.op) {
+            cancelPoseJob(this.op);
+            this.op.status = undefined;
             this.op.markAwaiting(i18n.t('training.awaiting-poses'));
             this.events.fire('edit.changed');
         }

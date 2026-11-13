@@ -13,16 +13,21 @@
  * until done, paused by not pumping, and cancelled by dropping it.
  */
 
-import { listDirectory } from './dataset';
+import { datasetSize, listDirectory } from './dataset';
 
 type BrushPkg = typeof import('brush-pkg');
 type BrushApp = import('brush-pkg').BrushApp;
 type Training = import('brush-pkg').Training;
 type BrushMessage = import('brush-pkg').BrushMessage;
 
+/**
+ * A packed dataset is normally a Blob (see packDataset): it is read into
+ * memory only here, when a run starts, and handed to the trainer, which
+ * copies it into its own heap - the read is dropped right after.
+ */
 type TrainSource =
     | { kind: 'directory'; handle: FileSystemDirectoryHandle }
-    | { kind: 'bytes'; bytes: Uint8Array; name: string }
+    | { kind: 'bytes'; bytes: Uint8Array | Blob; name: string }
     | { kind: 'url'; url: string };
 
 // the kebab-case TrainStreamConfig, passed through mostly untouched
@@ -278,6 +283,7 @@ class BrushEngine {
     private aborted: Promise<never> | null = null;
     private abortFn: ((error: Error) => void) | null = null;
     private _starting = false;
+    private failuresHooked = false;
 
     private load: TrainLoad | null = null;
     private loadTimer: number | null = null;
@@ -377,8 +383,21 @@ class BrushEngine {
         device.addEventListener('uncapturederror', (event: any) => {
             this.write('warn', `webgpu: ${event?.error?.message ?? 'unknown error'}`);
         });
+        // A lost device never comes back: the run on it is over, and so is
+        // the app built on it. Dropping both lets the next run bring up a
+        // fresh device instead of failing on the dead one forever.
+        let lost = false;
         device.lost.then((info) => {
-            this.write('error', `webgpu device lost: ${info.reason ?? ''} ${info.message ?? ''}`.trim());
+            lost = true;
+            const text = `webgpu device lost: ${info.reason ?? ''} ${info.message ?? ''}`.trim();
+            if (!this.fail(text)) {
+                this.write('error', text);
+            }
+            if (this._device === device) {
+                this.app = null;
+                this._device = null;
+                this.setPhase('error');
+            }
         }).catch(() => {});
 
         const info = (adapter as any).info;
@@ -393,17 +412,26 @@ class BrushEngine {
         const app = new pkg.BrushApp();
         app.initExisting(adapter, device, device.queue);
 
-        captureWasmFailures((text) => {
-            const summary = summarise(text);
-            // Only the first panic ends the run, but the rest still belong
-            // in the log: the one that surfaces first is often the least
-            // informative - a bare "Unexpected error" - while the one that
-            // names the cause arrives after the run is already over, when
-            // there is nothing left to fail.
-            if (!this.fail(summary)) {
-                this.write('error', summary);
-            }
-        });
+        // once per engine: a re-init after a lost device must not add a
+        // second listener that logs every panic twice
+        if (!this.failuresHooked) {
+            this.failuresHooked = true;
+            captureWasmFailures((text) => {
+                const summary = summarise(text);
+                // Only the first panic ends the run, but the rest still belong
+                // in the log: the one that surfaces first is often the least
+                // informative - a bare "Unexpected error" - while the one that
+                // names the cause arrives after the run is already over, when
+                // there is nothing left to fail.
+                if (!this.fail(summary)) {
+                    this.write('error', summary);
+                }
+            });
+        }
+
+        if (lost) {
+            throw new Error('webgpu device lost while the trainer was starting');
+        }
 
         this.pkg = pkg;
         this.app = app;
@@ -439,6 +467,18 @@ class BrushEngine {
                 this.setPhase('error');
                 throw error;
             }
+            // read before the old run is stopped: a failed read (a picked
+            // file changed on disk) leaves it be
+            let bytes: Uint8Array | null = null;
+            if (source.kind === 'bytes') {
+                try {
+                    bytes = source.bytes instanceof Blob ? new Uint8Array(await source.bytes.arrayBuffer()) : source.bytes;
+                } catch (error) {
+                    this.write('error', `could not read the dataset: ${String(error?.message ?? error)}`);
+                    this.setPhase('error');
+                    throw error;
+                }
+            }
             this.stop();
 
             this.progress = {
@@ -460,7 +500,10 @@ class BrushEngine {
                     training = this.app.startTrainingFromDirectory(source.handle, configFn);
                     break;
                 case 'bytes':
-                    training = this.app.startTrainingFromBytes(source.bytes, source.name, configFn);
+                    training = this.app.startTrainingFromBytes(bytes, source.name, configFn);
+                    // the trainer has its own copy now; this one need not
+                    // live as long as the run
+                    bytes = null;
                     break;
                 case 'url':
                     training = this.app.startTrainingFromUrl(source.url, configFn);
@@ -688,7 +731,7 @@ class BrushEngine {
 
         this.load = {
             name: sourceName(source),
-            sizeBytes: source.kind === 'bytes' ? source.bytes.length : 0,
+            sizeBytes: source.kind === 'bytes' ? datasetSize(source.bytes) : 0,
             fileCount: 0,
             filesOpened: 0,
             elapsedMs: 0,

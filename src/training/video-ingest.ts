@@ -36,6 +36,8 @@ The training pane reads the COLMAP output (sparse/0) directly.
 // does not become ten thousand images
 const DEFAULT_FPS = 2;
 const MAX_FRAMES = 600;
+// how long one seek may take before the video counts as unreadable
+const SEEK_TIMEOUT_MS = 15000;
 
 const writeFile = async (dir: FileSystemDirectoryHandle, name: string, data: Blob | string) => {
     const handle = await dir.getFileHandle(name, { create: true });
@@ -141,33 +143,59 @@ const extractVideoFrames = async (file: File, onFrame: (name: string, blob: Blob
     const video = document.createElement('video');
     video.muted = true;
     video.playsInline = true;
-    video.src = URL.createObjectURL(file);
-    await new Promise<void>((resolve, reject) => {
-        video.onloadedmetadata = () => resolve();
-        video.onerror = () => reject(new Error(i18n.t('training.video-unreadable')));
+    const url = URL.createObjectURL(file);
+    video.src = url;
+
+    // a video the browser cannot decode may never answer a seek: every wait
+    // ends in an error or a timeout rather than hanging the import
+    const waitFor = (event: 'loadedmetadata' | 'seeked') => new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+            reject(new Error(i18n.t('training.video-unreadable')));
+        }, SEEK_TIMEOUT_MS);
+        const done = () => {
+            clearTimeout(timer);
+            resolve();
+        };
+        if (event === 'seeked') {
+            video.onseeked = done;
+        } else {
+            video.onloadedmetadata = done;
+        }
+        video.onerror = () => {
+            clearTimeout(timer);
+            reject(new Error(i18n.t('training.video-unreadable')));
+        };
     });
 
-    const step = 1 / DEFAULT_FPS;
-    const count = Math.min(Math.floor(video.duration * DEFAULT_FPS), MAX_FRAMES);
+    try {
+        await waitFor('loadedmetadata');
 
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
+        const step = 1 / DEFAULT_FPS;
+        const count = Math.min(Math.floor(video.duration * DEFAULT_FPS), MAX_FRAMES);
+        if (!(count > 0) || !video.videoWidth || !video.videoHeight) {
+            throw new Error(i18n.t('training.video-unreadable'));
+        }
 
-    for (let i = 0; i < count; i++) {
-        video.currentTime = Math.min(i * step, Math.max(video.duration - 0.05, 0));
-        await new Promise<void>((resolve) => {
-            video.onseeked = () => resolve();
-        });
-        ctx.drawImage(video, 0, 0);
-        const blob = await new Promise<Blob>((resolve) => {
-            canvas.toBlob(b => resolve(b), 'image/jpeg', 0.95);
-        });
-        await onFrame(`frame_${String(i).padStart(5, '0')}.jpg`, blob);
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+
+        for (let i = 0; i < count; i++) {
+            const seeked = waitFor('seeked');
+            video.currentTime = Math.min(i * step, Math.max(video.duration - 0.05, 0));
+            await seeked;
+            ctx.drawImage(video, 0, 0);
+            const blob = await new Promise<Blob>((resolve, reject) => {
+                canvas.toBlob(b => (b ? resolve(b) : reject(new Error(i18n.t('training.video-unreadable')))), 'image/jpeg', 0.95);
+            });
+            await onFrame(`frame_${String(i).padStart(5, '0')}.jpg`, blob);
+        }
+    } finally {
+        video.removeAttribute('src');
+        video.load();
+        URL.revokeObjectURL(url);
     }
-
-    URL.revokeObjectURL(video.src);
 };
 
 /**

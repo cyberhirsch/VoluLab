@@ -419,6 +419,8 @@
     "bridge.stage-convert": "COLMAP: конвертация модели",
     "bridge.stage-packing": "упаковка датасета…",
     "bridge.failed": "оценка поз не удалась",
+    "bridge.stage-queued": "ожидание предыдущей задачи оценки поз…",
+    "bridge.offer-kit": "Мост COLMAP не запущен. Записать фото и скрипт COLMAP в папку для ручного запуска?",
     "import.vox-large-warning": "Эта воксельная модель большая; отрисовка может быть медленной.",
     "tooltip.right-toolbar.splat-mode": "Режим Splat",
     "tooltip.right-toolbar.show-hide": "Показать/Скрыть сплаты",

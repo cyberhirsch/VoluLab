@@ -1,18 +1,20 @@
-import { crc32, storedZip } from '../io/write/stored-zip';
+import { BlobZipEntry, centralHeader, crc32, endRecord, localHeader, storedZipBlob } from '../io/write/stored-zip';
 
 /**
  * Recognising and packaging capture datasets on their way to a train node.
  *
  * A dataset is a set of files - posed cameras plus images - and the
- * trainer wants it as one thing. Dropped sets are packed into an
- * in-memory zip (Brush detects zips on its own), so a nerfstudio folder,
- * a COLMAP export or a RealityCapture csv with its photos all arrive the
- * same way: bytes with a name.
+ * trainer wants it as one thing. Dropped sets are packed into a zip
+ * (Brush detects zips on its own), so a nerfstudio folder, a COLMAP
+ * export or a RealityCapture csv with its photos all arrive the same way:
+ * a blob with a name. The blob is built from the files' own blobs, so
+ * packing does not copy the images; they are read into memory only when
+ * training starts.
  */
 
 type DatasetFile = {
     filename: string;
-    contents?: File;
+    contents?: Blob;
     url?: string;
 };
 
@@ -28,6 +30,20 @@ type DirEntry = {
     handle: FileSystemFileHandle;
 };
 
+// what operating systems leave in folders, and what the COLMAP script kit
+// writes beside the photos: none of it is part of a dataset, and a single
+// one would stop a folder of photos from reading as a set of photos
+const IGNORED_FILES = new Set([
+    '.ds_store', 'thumbs.db', 'desktop.ini',
+    'run-colmap.sh', 'run-colmap.bat', 'readme.txt', 'colmap.db', 'colmap.db-shm', 'colmap.db-wal'
+]);
+
+/** Is this file (a name or a folder-relative path) noise rather than data? */
+const isIgnoredFile = (path: string): boolean => {
+    const name = path.split('/').pop().toLowerCase();
+    return IGNORED_FILES.has(name) || name.startsWith('._');
+};
+
 /**
  * Flatten a picked directory into file handles with folder-relative paths,
  * the same shape a folder drop produces - so folder mode and drop mode
@@ -36,7 +52,7 @@ type DirEntry = {
 const listDirectory = async (dir: FileSystemDirectoryHandle, prefix = ''): Promise<DirEntry[]> => {
     const out: DirEntry[] = [];
     for await (const value of dir.values()) {
-        if (value.name === '.DS_Store') {
+        if (value.kind === 'file' && isIgnoredFile(value.name)) {
             continue;
         }
         if (value.kind === 'file') {
@@ -72,24 +88,29 @@ const looksLikeDataset = (filenames: string[]): boolean => {
 };
 
 /**
- * Pack a dropped dataset into an in-memory zip, preserving relative paths
- * so the trainer sees the same folder shape the tools wrote.
+ * Pack a dropped dataset into a zip, preserving relative paths so the
+ * trainer sees the same folder shape the tools wrote.
  *
- * Written whole, with no data descriptors (see storedZip): the trainer
- * reads the archive as a stream and rejects entries whose sizes arrive
- * after the data. Every dataset packed by a streaming zip writer failed to
- * load with "stream reading entries with data descriptors & Stored
- * compression mode", which is why training could never start from a
- * dropped set.
+ * Every local header is complete, with no data descriptors (see
+ * storedZip): the trainer reads the archive as a stream and rejects
+ * entries whose sizes arrive after the data. Every dataset packed by a
+ * streaming zip writer failed to load with "stream reading entries with
+ * data descriptors & Stored compression mode", which is why training
+ * could never start from a dropped set.
+ *
+ * The archive is a Blob over the files' own blobs (storedZipBlob): the
+ * image bytes are not copied, and are read once each for a checksum.
  */
-const packDataset = async (files: DatasetFile[]): Promise<{ bytes: Uint8Array, name: string }> => {
-    const entries = await Promise.all(files.map(async file => ({
-        name: file.filename,
-        data: file.contents ?
-            new Uint8Array(await file.contents.arrayBuffer()) :
-            new Uint8Array(await (await fetch(file.url)).arrayBuffer())
-    })));
-    const bytes = storedZip(entries);
+const packDataset = async (files: DatasetFile[], signal?: AbortSignal): Promise<{ zip: Blob, name: string }> => {
+    const entries: BlobZipEntry[] = [];
+    for (const file of files) {
+        signal?.throwIfAborted();
+        entries.push({
+            name: file.filename,
+            data: file.contents ?? await (await fetch(file.url, { signal })).blob()
+        });
+    }
+    const zip = await storedZipBlob(entries, signal);
 
     // name the dataset after the pose file that defines it
     const poseFile = files.find((f) => {
@@ -101,8 +122,11 @@ const packDataset = async (files: DatasetFile[]): Promise<{ bytes: Uint8Array, n
         (poseFile.filename.split('/')[0] || 'dataset') :
         'dataset';
 
-    return { bytes, name: name === poseFile?.filename ? 'dataset' : name };
+    return { zip, name: name === poseFile?.filename ? 'dataset' : name };
 };
+
+/** The size of a dataset held as bytes or as a blob. */
+const datasetSize = (data: Uint8Array | Blob) => (data instanceof Blob ? data.size : data.length);
 
 /**
  * Add one stored file to an existing zip, without unpacking it.
@@ -112,13 +136,19 @@ const packDataset = async (files: DatasetFile[]): Promise<{ bytes: Uint8Array, n
  * copied through as it is - whatever compression it used. Only the end
  * record changes. Used to put a seed `init.ply` into a dataset that is
  * already packed.
+ *
+ * Only the end of the archive is read; the result is a Blob over slices
+ * of the original, so the entries already in it are not copied.
  */
-const addToZip = (zip: Uint8Array, filename: string, data: Uint8Array): Uint8Array => {
-    const src = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+const addToZip = async (zip: Uint8Array | Blob, filename: string, data: Uint8Array): Promise<Blob> => {
+    const blob = zip instanceof Blob ? zip : new Blob([zip as BlobPart]);
 
     // the end record sits at the very end, unless a comment follows it
+    const tailStart = Math.max(0, blob.size - 22 - 0xffff);
+    const tail = new Uint8Array(await blob.slice(tailStart).arrayBuffer());
+    const src = new DataView(tail.buffer);
     let eocd = -1;
-    for (let i = zip.length - 22; i >= Math.max(0, zip.length - 22 - 0xffff); i--) {
+    for (let i = tail.length - 22; i >= 0; i--) {
         if (src.getUint32(i, true) === 0x06054b50) {
             eocd = i;
             break;
@@ -137,73 +167,20 @@ const addToZip = (zip: Uint8Array, filename: string, data: Uint8Array): Uint8Arr
 
     const name = new TextEncoder().encode(filename);
     const crc = crc32(data);
-    const localSize = 30 + name.length + data.length;
-    const size = centralOffset + localSize + centralSize + 46 + name.length + 22;
+    const header = localHeader(name, crc, data.length);
+    const localSize = header.length + data.length;
+    if (centralOffset + localSize + centralSize + 46 + name.length + 22 > 0xffffffff) {
+        throw new Error('archive too large: more than 4 GB');
+    }
 
-    const bytes = new Uint8Array(size);
-    const view = new DataView(bytes.buffer);
-    let at = 0;
-
-    const u32 = (value: number) => {
-        view.setUint32(at, value, true);
-        at += 4;
-    };
-    const u16 = (value: number) => {
-        view.setUint16(at, value, true);
-        at += 2;
-    };
-    const raw = (value: Uint8Array) => {
-        bytes.set(value, at);
-        at += value.length;
-    };
-
-    raw(zip.subarray(0, centralOffset));
-
-    u32(0x04034b50);                // local file header, as packDataset writes it
-    u16(20);
-    u16(0);
-    u16(0);
-    u16(0);
-    u16(0x21);
-    u32(crc);
-    u32(data.length);
-    u32(data.length);
-    u16(name.length);
-    u16(0);
-    raw(name);
-    raw(data);
-
-    raw(zip.subarray(centralOffset, centralOffset + centralSize));
-
-    u32(0x02014b50);                // its central record
-    u16(20);
-    u16(20);
-    u16(0);
-    u16(0);
-    u16(0);
-    u16(0x21);
-    u32(crc);
-    u32(data.length);
-    u32(data.length);
-    u16(name.length);
-    u16(0);
-    u16(0);
-    u16(0);
-    u16(0);
-    u32(0);
-    u32(centralOffset);
-    raw(name);
-
-    u32(0x06054b50);                // end of central directory, one entry more
-    u16(0);
-    u16(0);
-    u16(count + 1);
-    u16(count + 1);
-    u32(centralSize + 46 + name.length);
-    u32(centralOffset + localSize);
-    u16(0);
-
-    return bytes;
+    return new Blob([
+        blob.slice(0, centralOffset),
+        header,
+        data as BlobPart,
+        blob.slice(centralOffset, centralOffset + centralSize),
+        centralHeader(name, crc, data.length, centralOffset),
+        endRecord(count + 1, centralSize + 46 + name.length, centralOffset + localSize)
+    ], { type: 'application/zip' });
 };
 
-export { addToZip, isImageSet, listDirectory, looksLikeDataset, packDataset, type DatasetFile, type DirEntry };
+export { addToZip, datasetSize, isIgnoredFile, isImageSet, listDirectory, looksLikeDataset, packDataset, type DatasetFile, type DirEntry };

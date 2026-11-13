@@ -419,6 +419,8 @@
     "bridge.stage-convert": "COLMAP: 모델 변환 중",
     "bridge.stage-packing": "데이터셋 포장 중…",
     "bridge.failed": "포즈 추정 실패",
+    "bridge.stage-queued": "이전 포즈 작업을 기다리는 중…",
+    "bridge.offer-kit": "COLMAP 브리지가 실행되고 있지 않습니다. 수동 실행을 위해 사진과 COLMAP 스크립트를 폴더에 저장할까요?",
     "import.vox-large-warning": "이 복셀 모델은 큽니다. 렌더링이 느릴 수 있습니다.",
     "tooltip.right-toolbar.splat-mode": "Splat 모드",
     "tooltip.right-toolbar.show-hide": "스플래츠 표시/숨기기",

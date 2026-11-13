@@ -419,6 +419,8 @@
     "bridge.stage-convert": "COLMAP: モデルを変換中",
     "bridge.stage-packing": "データセットを梱包中…",
     "bridge.failed": "姿勢推定に失敗しました",
+    "bridge.stage-queued": "前の姿勢推定ジョブを待っています…",
+    "bridge.offer-kit": "COLMAP ブリッジが起動していません。写真と COLMAP スクリプトをフォルダーに書き出して手動で実行しますか？",
     "import.vox-large-warning": "このボクセルモデルは大きいため、描画が遅くなる場合があります。",
     "tooltip.right-toolbar.splat-mode": "スプラットモード",
     "tooltip.right-toolbar.show-hide": "スプラットの表示/非表示",

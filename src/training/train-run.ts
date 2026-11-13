@@ -67,17 +67,17 @@ const seedSource = async (source: TrainSource, seed: Splat): Promise<{ source: T
 
     switch (source.kind) {
         case 'bytes':
-            return { source: { ...source, bytes: addToZip(source.bytes, 'init.ply', ply) }, bytes: ply.length };
+            return { source: { ...source, bytes: await addToZip(source.bytes, 'init.ply', ply) }, bytes: ply.length };
         case 'directory': {
             const entries = await listDirectory(source.handle);
             const files = await Promise.all(entries.map(async e => ({ filename: e.path, contents: await e.handle.getFile() })));
-            const { bytes } = await packDataset(files);
-            return { source: { kind: 'bytes', bytes: addToZip(bytes, 'init.ply', ply), name: `${source.handle.name}.zip` }, bytes: ply.length };
+            const { zip } = await packDataset(files);
+            return { source: { kind: 'bytes', bytes: await addToZip(zip, 'init.ply', ply), name: `${source.handle.name}.zip` }, bytes: ply.length };
         }
         case 'url': {
-            const bytes = new Uint8Array(await (await fetch(source.url)).arrayBuffer());
+            const blob = await (await fetch(source.url)).blob();
             const name = source.url.split('/').pop() || 'dataset.zip';
-            return { source: { kind: 'bytes', bytes: addToZip(bytes, 'init.ply', ply), name }, bytes: ply.length };
+            return { source: { kind: 'bytes', bytes: await addToZip(blob, 'init.ply', ply), name }, bytes: ply.length };
         }
     }
 };
@@ -99,6 +99,8 @@ const registerTraining = (events: Events, scene: Scene) => {
     let snapshotBusy: Promise<void> | null = null;
     let snapshotDirty = false;
     let lastSnapshotAt = 0;
+    // a start is between its click and engine.start (seeding the dataset)
+    let preparing = false;
 
     // the log belongs to the node, not to the engine: it outlives the run
     // that wrote it, so an error is still readable after the run has ended
@@ -238,8 +240,11 @@ const registerTraining = (events: Events, scene: Scene) => {
     events.on('training.start', async (op: TrainOp) => {
         if (!op?.dataset) return;
         // a run already coming up owns the engine until it has its Training;
-        // a second one started inside that window frees the first one's
-        if (engine.starting) {
+        // a second one started inside that window frees the first one's.
+        // The window opens at the click, not at engine.start: seeding comes
+        // first, and a second start during it used to clear runOp under the
+        // first run, which then trained on with nothing receiving it
+        if (engine.starting || preparing) {
             note(op, { at: performance.now(), level: 'warn', text: 'a run is already starting' });
             changed();
             return;
@@ -261,6 +266,7 @@ const registerTraining = (events: Events, scene: Scene) => {
         // retrain has replaced data under applied history and it must re-run
         const hadOutput = !!op.output;
 
+        preparing = true;
         try {
             let source = op.dataset as TrainSource;
 
@@ -273,6 +279,9 @@ const registerTraining = (events: Events, scene: Scene) => {
                 note(op, { at: performance.now(), level: 'info', text: `seeded from ${seed.name} (${Math.round(seeded.bytes / 1e6)} MB init.ply)` });
                 changed();
             }
+
+            // engine.starting takes over from here, synchronously
+            preparing = false;
 
             await engine.start(source, (defaults) => {
                 const config = { ...defaults, ...op.settings.config };
@@ -307,6 +316,7 @@ const registerTraining = (events: Events, scene: Scene) => {
             events.fire('training.warning', text);
             phase = 'error';
         } finally {
+            preparing = false;
             // a finished or failed run stays the node's run until another
             // begins: its phase, its numbers and its log are the account of
             // what happened, and they are worth more than a blank node

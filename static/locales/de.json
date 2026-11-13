@@ -419,6 +419,8 @@
     "bridge.stage-convert": "COLMAP: Modell wird konvertiert",
     "bridge.stage-packing": "Datensatz wird gepackt…",
     "bridge.failed": "Posenschätzung fehlgeschlagen",
+    "bridge.stage-queued": "wartet auf den vorherigen Posen-Job…",
+    "bridge.offer-kit": "Es läuft keine COLMAP-Bridge. Fotos und ein COLMAP-Skript für einen manuellen Lauf in einen Ordner schreiben?",
     "import.vox-large-warning": "Dieses Voxelmodell ist groß; die Darstellung kann langsam sein.",
     "tooltip.right-toolbar.splat-mode": "Splat Modus",
     "tooltip.right-toolbar.show-hide": "Anzeigen/Ausblenden Splats",
