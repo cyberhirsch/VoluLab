@@ -278,13 +278,13 @@ class Camera extends Element {
         this.ortho = false;
     }
 
-    setDistance(distance: number, dampingFactorFactor: number = 1) {
+    setDistance(distance: number, dampingFactorFactor: number = 1, limitMax = true) {
         this.lookCameraPos = null;
 
         const controls = this.scene.config.controls;
 
         // clamp
-        distance = Math.max(controls.minZoom, Math.min(controls.maxZoom, distance));
+        distance = Math.max(controls.minZoom, limitMax ? Math.min(controls.maxZoom, distance) : distance);
 
         const t = this.distanceTween;
         t.goto({ distance }, dampingFactorFactor * controls.dampingFactor);
@@ -293,11 +293,16 @@ class Camera extends Element {
     setPose(position: Vec3, target: Vec3, dampingFactorFactor: number = 1) {
         vec.sub2(target, position);
         const l = vec.length();
-        const azim = Math.atan2(-vec.x / l, -vec.z / l) * math.RAD_TO_DEG;
-        const elev = Math.asin(vec.y / l) * math.RAD_TO_DEG;
         this.setFocalPoint(target, dampingFactorFactor);
-        this.setAzimElev(azim, elev, dampingFactorFactor);
-        this.setDistance(l / this.sceneRadius * this.fovFactor, dampingFactorFactor);
+        // a position on its target gives no direction: keep the current one
+        if (l > 0) {
+            const azim = Math.atan2(-vec.x / l, -vec.z / l) * math.RAD_TO_DEG;
+            const elev = Math.asin(vec.y / l) * math.RAD_TO_DEG;
+            this.setAzimElev(azim, elev, dampingFactorFactor);
+        }
+        // a pose (animated or stored) is taken as it is, even beyond the
+        // max zoom the controls keep to
+        this.setDistance(l / this.sceneRadius * this.fovFactor, dampingFactorFactor, false);
     }
 
     // set or clear the pose override and apply it immediately so subsequent
@@ -529,7 +534,9 @@ class Camera extends Element {
             srcTexture: this.lensTarget.colorBuffer,
             texSize: [width, height],
             lensParams: s ? [s.k1, s.k2, s.chromatic, s.vignette] : [0, 0, 0, 0],
-            lensParams2: [s?.vignetteSoftness ?? 0, 0, 0, 0]
+            lensParams2: [s?.vignetteSoftness ?? 0, 0, 0, 0],
+            // the frame target is not sRGB, so the clear value is as written
+            lensFill: this.clearPass.colorOps.clearValue.toArray()
         };
     }
 

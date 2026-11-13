@@ -32,6 +32,9 @@ const fragmentShader = /* glsl */ `
     uniform vec4 lensParams;
     // x: vignette softness
     uniform vec4 lensParams2;
+    // what the frame was cleared to: transparent in the viewport and on a
+    // transparent export, the background on an opaque one
+    uniform vec4 lensFill;
 
     // radial polynomial: the standard Brown-Conrady even terms. Negative
     // k1 barrels (wide-angle), positive pincushions (telephoto).
@@ -40,12 +43,13 @@ const fragmentShader = /* glsl */ `
         return p * (1.0 + (lensParams.x * r2 + lensParams.y * r2 * r2) * scale);
     }
 
-    // sample in the -1..1 aspect-corrected space, transparent outside the
-    // frame so a barrelled image keeps clean edges instead of smearing
+    // sample in the -1..1 aspect-corrected space, the clear colour outside
+    // the frame so a barrelled image keeps clean edges instead of smearing,
+    // and an opaque export does not get transparent corners
     vec4 sampleAt(vec2 p, float aspect) {
         vec2 uv = vec2(p.x / aspect, p.y) * 0.5 + 0.5;
         if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) {
-            return vec4(0.0);
+            return lensFill;
         }
         // texture2DLod, not texture2D, and the reason is subtle: WGSL
         // forbids implicit-derivative sampling in non-uniform control

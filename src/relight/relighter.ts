@@ -34,7 +34,7 @@ import { ElementType } from '../element';
 import { Events } from '../events';
 import { Scene } from '../scene';
 import { SceneLight } from '../scene-light';
-import { Splat } from '../splat';
+import { Splat, type SplatMotion } from '../splat';
 
 /**
  * Relighting: lights placed in the scene, shadows cast by the scene itself.
@@ -680,6 +680,18 @@ class SplatLighting {
     seenPositions = -1;
     seenMatrix = new Float32Array(16);
 
+    // whether the lighting pass has filled the light textures yet: until it
+    // has they hold nothing, and the material is not bound to them
+    lit = false;
+
+    // a GPU-played 4D model: its gaussians packed at rest, and the time and
+    // active set the buffer was last moved to
+    rest: Float32Array = null;
+    moved: Float32Array = null;
+    motionTime = NaN;
+    motionActive: Uint32Array | null = null;
+    motionSource: SplatMotion | null = null;
+
     // De-light's view of this object: the object alone, as its capture saw
     // it, in a grid of its own; how open each side of each gaussian was
     // there; and what the de-light pass made of that and the matched lights,
@@ -713,6 +725,9 @@ class SplatLighting {
         this.gaussians = new StorageBuffer(device, Math.max(1, this.count) * 48, BUFFERUSAGE_COPY_DST);
         const packed = packGaussians(splat.splatData, this.count);
         this.gaussians.write(0, packed, 0, packed.length);
+        if (splat.motion) {
+            this.rest = packed;
+        }
 
         const lightTexture = (name: string) => perGaussianTexture(device, name, this.width, this.height);
         this.lightPlus = lightTexture('splatLightPlus');
@@ -720,6 +735,55 @@ class SplatLighting {
 
         this.deposit = new Compute(device, kernels.deposit, 'RelightDeposit');
         this.lighting = new Compute(device, kernels.lighting, 'RelightLighting');
+    }
+
+    /** a GPU-played 4D model whose buffer is not at the time it shows */
+    get motionStale() {
+        const { splat } = this;
+        return !!splat.motion && (splat.motion !== this.motionSource || splat.motionTime !== this.motionTime || splat.motionActive !== this.motionActive);
+    }
+
+    /**
+     * Move a GPU-played 4D model's gaussians to the time it shows, as its
+     * shader does: along their velocity, faded by their temporal falloff,
+     * and only those of the active set.
+     */
+    applyMotion() {
+        const { splat, count } = this;
+        const { velocityTime: vt, falloff } = splat.motion;
+        const t = splat.motionTime;
+        const active = splat.motionActive;
+        this.rest ??= packGaussians(splat.splatData, count);
+        this.moved ??= new Float32Array(this.rest.length);
+        const { rest, moved } = this;
+        moved.set(rest);
+
+        let alive: Uint8Array = null;
+        if (active) {
+            alive = new Uint8Array(count);
+            for (let i = 0; i < active.length; ++i) {
+                alive[active[i]] = 1;
+            }
+        }
+
+        for (let i = 0; i < count; ++i) {
+            const o = i * 12;
+            if (alive && !alive[i]) {
+                moved[o + 3] = 0;
+                continue;
+            }
+            const dt = t - vt[i * 4 + 3];
+            moved[o] += vt[i * 4] * dt;
+            moved[o + 1] += vt[i * 4 + 1] * dt;
+            moved[o + 2] += vt[i * 4 + 2] * dt;
+            const alpha = (1 - Math.exp(-rest[o + 3])) * Math.exp(-dt * dt * falloff[i]);
+            moved[o + 3] = alpha < 1 / 255 ? 0 : -Math.log(1 - Math.min(alpha, 0.995));
+        }
+        this.gaussians.write(0, moved, 0, moved.length);
+
+        this.motionSource = splat.motion;
+        this.motionTime = t;
+        this.motionActive = active;
     }
 
     /** true when the textures had to be made, and so hold nothing yet */
@@ -906,7 +970,7 @@ type EmitterCursor = { next: number };
  * light's emitters go after the ambient coefficients, from the cursor on.
  * Returns how many records were written.
  */
-const packLights = (lights: SceneLight[], out: Float32Array, first: number, cursor: EmitterCursor) => {
+const packLights = (lights: SceneLight[], out: Float32Array, first: number, cursor: EmitterCursor, packed?: SceneLight[]) => {
     let n = 0;
     for (const light of lights) {
         if (first + n >= MAX_LIGHTS) break;
@@ -1031,6 +1095,7 @@ const packLights = (lights: SceneLight[], out: Float32Array, first: number, curs
             out[o + 13] = dist * dist;
         }
 
+        packed?.push(light);
         n++;
     }
     return n;
@@ -1258,6 +1323,12 @@ class Relighter {
                 this.gridDirty = true;
             }
 
+            // a GPU-played 4D model moved on in time: its gaussians are
+            // somewhere else, which the grid and the lighting both read
+            if (entry.motionStale) {
+                this.gridDirty = true;
+            }
+
             // The object's relight node, if it has one. Without one, lights
             // only add to its captured light: no shadows, no occlusion and no
             // de-light, since those are what the node asks for.
@@ -1316,9 +1387,12 @@ class Relighter {
         const cursor = { next: 0 };
         const count = packLights(adding, this.lightData, 0, cursor);
         const firstMatchedEmitter = cursor.next;
-        const matchedCount = packLights(matched, this.lightData, count, cursor);
+        // de-light scales by the matched lights that were packed - one that
+        // lights nothing is skipped, so the first matchedCount are not them
+        const packedMatched: SceneLight[] = [];
+        const matchedCount = packLights(matched, this.lightData, count, cursor, packedMatched);
         const ambient = packAmbient(lights, this.lightData);
-        this.delightScale = delightScaleOf(matched.slice(0, matchedCount));
+        this.delightScale = delightScaleOf(packedMatched);
 
         const seen = this.seenLights;
         const head = [count, ambient ? 1 : 0];
@@ -1394,11 +1468,35 @@ class Relighter {
             this.grid.release();
         }
 
-        // grids are rebuilt together, and no more often than the interval
+        // GPU-played 4D models are moved to the time they show just before
+        // anything reads their gaussians
+        const moveToTime = () => {
+            for (const entry of entries) {
+                if (entry.motionStale) entry.applyMotion();
+            }
+        };
+
+        // grids are rebuilt together, and no more often than the interval -
+        // except in a locked render (an export), where each frame must be lit
+        // before it is captured
+        const now = performance.now();
+        const due = this.scene.lockedRenderMode || now - this.lastGridBuild >= GRID_MIN_INTERVAL_MS;
+
+        // Without a grid nothing else takes what made it stale, yet the
+        // lighting still reads where every object is: an object without a
+        // relight node that moved or was edited is lit again here, as often
+        // as a grid would be rebuilt.
+        if (!needGrid && this.gridDirty && due) {
+            entries.forEach(entry => this.markSeen(entry));
+            this.gridDirty = false;
+            this.lightingDirty = true;
+            this.lastGridBuild = now;
+        }
+
         const stale = entries.filter(entry => entry.captured && entry.capturedDirty);
         if ((needGrid && this.gridDirty) || stale.length > 0) {
-            const now = performance.now();
-            if (now - this.lastGridBuild >= GRID_MIN_INTERVAL_MS) {
+            if (due) {
+                moveToTime();
                 if (needGrid && this.gridDirty) {
                     this.buildGrid(entries, resolution);
                     this.gridDirty = false;
@@ -1438,13 +1536,18 @@ class Relighter {
         // lighting waits for everything it reads
         const ready = (!needGrid || !this.gridDirty) && entries.every(entry => !entry.captured || !entry.capturedDirty);
         if (this.lightingDirty && ready) {
+            moveToTime();
             this.light(entries, count, ambient);
             this.lightingDirty = false;
             this.scene.forceRender = true;
         }
 
+        // an object's material reads its light textures only once the
+        // lighting pass has filled them - before that it shows its captured
+        // colour rather than black
         for (const splat of splats) {
-            this.bindMaterial(splat, this.entries.get(splat));
+            const entry = this.entries.get(splat);
+            this.bindMaterial(splat, entry.lit ? entry : null);
         }
 
         const used = splats.map(splat => this.usedResolution(splat)).join();
@@ -1497,16 +1600,22 @@ class Relighter {
             device.computeDispatch([deposit], 'RelightDeposit');
 
             // remember what this grid was built from
-            entry.seenMatrix.set(splat.entity.getWorldTransform().data);
-            entry.seenDeleted = splat.numDeleted;
-            entry.seenLocked = splat.numLocked;
-            entry.seenPositions = this.positionsVersion.get(splat) ?? 0;
+            this.markSeen(entry);
         }
 
         grid.finish();
 
         this.stats.gridBuilds++;
         this.stats.lastGridMs = performance.now() - start;
+    }
+
+    /** remember what of an object the grid was last built from */
+    private markSeen(entry: SplatLighting) {
+        const { splat } = entry;
+        entry.seenMatrix.set(splat.entity.getWorldTransform().data);
+        entry.seenDeleted = splat.numDeleted;
+        entry.seenLocked = splat.numLocked;
+        entry.seenPositions = this.positionsVersion.get(splat) ?? 0;
     }
 
     /**
@@ -1672,10 +1781,25 @@ class Relighter {
             lighting.setParameter('ambient', [ambient ? 1 : 0, settings?.occlusionStrength ?? 0, entry.delightPlus ? 1 : 0, entry.occlusion ? 1 : 0]);
             dispatchFor(device, lighting, entry.count);
             device.computeDispatch([lighting], 'RelightLighting');
+            entry.lit = true;
         }
 
         this.stats.lightingPasses++;
         this.stats.lastLightingMs = performance.now() - start;
+    }
+
+    /**
+     * Whether what is drawn is lit as the scene stands: false while a pass
+     * the lighting waits for is still to come, e.g. a grid held back by the
+     * interval or laid out again after running out of memory.
+     */
+    get settled() {
+        if (!this.active) return true;
+        if (this.lightingDirty) return false;
+        for (const entry of this.entries.values()) {
+            if (!entry.lit) return false;
+        }
+        return true;
     }
 
     /** grid and per-object state, for tests and debugging */
@@ -1728,6 +1852,7 @@ const registerRelighting = (events: Events, scene: Scene) => {
 
     events.function('relight.supported', () => relighter.supported);
     events.function('relight.debug', () => relighter.debugState());
+    events.function('relight.settled', () => relighter.settled);
     events.function('relight.resolutionUsed', (splat: Splat) => relighter.usedResolution(splat));
 
     return relighter;

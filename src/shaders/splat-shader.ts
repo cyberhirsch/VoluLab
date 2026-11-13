@@ -18,6 +18,10 @@ uniform vec4 camDof;
 // the splat's view depth, written by our gsplatCenterVS override
 float camViewDepth = 0.0;
 
+// how much the model (and palette) transform scales the splat, written
+// there too: the scale grown below is in model space, the blur in world
+float camModelScale = 1.0;
+
 // energy conservation for the defocus, read by the vertex shader: a
 // spread-out gaussian must lose the amplitude it gained in area
 float camDofAlpha = 1.0;
@@ -69,7 +73,7 @@ void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout ve
 
             // the pixel clamp, carried to a world radius at this depth
             float maxSigma = camDof.z * z / max(camDof.w, 1e-4);
-            sigma = min(sigma, maxSigma);
+            sigma = min(sigma, maxSigma) / max(camModelScale, 1e-6);
 
             if (sigma > 0.0) {
                 vec3 s = scale;
@@ -462,6 +466,7 @@ bool initCenter(vec3 modelCenter, inout SplatCenter center) {
     // hand the depth to the depth of field, which is asked for it later
     // (initCorner) but declared earlier (gsplatModifyVS)
     camViewDepth = -centerView.z / max(centerView.w, 1e-6);
+    camModelScale = pow(abs(determinant(mat3(modelView))), 1.0 / 3.0);
 
     #ifndef GSPLAT_CENTER_NOPROJ
 
@@ -510,6 +515,10 @@ uniform camDof: vec4f;
 // the splat's view depth, written by our gsplatCenterVS override
 var<private> camViewDepth: f32 = 0.0;
 
+// how much the model (and palette) transform scales the splat - see the
+// GLSL twin
+var<private> camModelScale: f32 = 1.0;
+
 // energy conservation for the defocus, read by the vertex shader
 var<private> camDofAlpha: f32 = 1.0;
 
@@ -554,7 +563,7 @@ fn modifySplatRotationScale(originalCenter: vec3f, modifiedCenter: vec3f, rotati
             let focus = max(uniform.camDof.y, 1e-4);
             var sigma = 0.5 * aperture * abs(z - focus) / focus;
             let maxSigma = uniform.camDof.z * z / max(uniform.camDof.w, 1e-4);
-            sigma = min(sigma, maxSigma);
+            sigma = min(sigma, maxSigma) / max(camModelScale, 1e-6);
 
             if (sigma > 0.0) {
                 let s = *scale;
@@ -917,6 +926,7 @@ fn initCenter(modelCenter: vec3f, center: ptr<function, SplatCenter>) -> bool {
     // hand the depth to the depth of field (declared in gsplatModifyVS,
     // which is included before this chunk but runs after it)
     camViewDepth = -centerView.z / max(centerView.w, 1e-6);
+    camModelScale = pow(abs(determinant(mat3x3f(modelView[0].xyz, modelView[1].xyz, modelView[2].xyz))), 1.0 / 3.0);
 
     #ifndef GSPLAT_CENTER_NOPROJ
         // early out if splat is behind the camera (perspective only)

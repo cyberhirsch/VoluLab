@@ -500,10 +500,35 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                     // Fire timeline.time for camera animation interpolation
                     events.fire('timeline.time', frameTime);
 
-                    // Wait for PLY sequence to load the frame if present
-                    const newSplat = await events.invoke('plysequence.setFrameAsync', Math.floor(frameTime)) as Splat | null;
-
                     // manually update the camera so position and rotation are correct
+                    scene.camera.onUpdate(0);
+
+                    // A GPU-played model posts its new centres to its sort
+                    // worker on the frame change, and the worker sorts them
+                    // with the camera it holds then - so it gets this frame's
+                    // camera first, or the sort that lands is of the previous
+                    // frame's view
+                    let moved = false;
+                    if (!skipSort) {
+                        const pos = scene.camera.position;
+                        const forward = scene.camera.forward;
+                        if (!last_pos.equals(pos) || !last_forward.equals(forward)) {
+                            last_pos.copy(pos);
+                            last_forward.copy(forward);
+                            moved = true;
+                        }
+                    }
+                    const visible = () => (scene.getElementsByType(ElementType.splat) as Splat[]).filter(splat => splat.visible);
+                    if (moved) {
+                        await sortAndWait(visible().filter(splat => splat.motion));
+                    }
+
+                    // Wait for PLY sequence to load the frame if present. The
+                    // epsilon keeps a frame time that came out a hair low from
+                    // flooring to the frame before
+                    const newSplat = await events.invoke('plysequence.setFrameAsync', Math.floor(frameTime + 1e-4)) as Splat | null;
+
+                    // and again after the frame change, where it always ran
                     scene.camera.onUpdate(0);
 
                     // 360 capture re-sorts per cube face, so skip sorting here
@@ -511,23 +536,24 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                         return newSplat;
                     }
 
-                    // If a new PLY was loaded, sort and wait for completion
-                    if (newSplat) {
-                        await sortAndWait([newSplat]);
-                    } else {
-                        // No new PLY - sort existing splats if camera moved
-                        const pos = scene.camera.position;
-                        const forward = scene.camera.forward;
-                        if (!last_pos.equals(pos) || !last_forward.equals(forward)) {
-                            last_pos.copy(pos);
-                            last_forward.copy(forward);
-
-                            const splats = (scene.getElementsByType(ElementType.splat) as Splat[]).filter(splat => splat.visible);
-                            await sortAndWait(splats);
-                        }
-                    }
+                    // sort a newly loaded frame, and the rest if the camera
+                    // moved (GPU-played models were sorted above)
+                    const rest = moved ? visible().filter(splat => !splat.motion && splat !== newSplat) : [];
+                    await sortAndWait(newSplat ? [newSplat, ...rest] : rest);
 
                     return newSplat;
+                };
+
+                // render a frame and wait for it. A frame change can leave
+                // the relighting a pass behind; render again until it has
+                // caught up, so the frame is not captured unlit
+                const renderSettled = async () => {
+                    scene.lockedRender = true;
+                    await postRender();
+                    for (let i = 0; i < 4 && events.invoke('relight.settled') === false; i++) {
+                        scene.lockedRender = true;
+                        await postRender();
+                    }
                 };
 
                 // flip, wrap and submit the pixels currently in the data buffer
@@ -590,7 +616,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
 
                 const animFrameRate = events.invoke('timeline.frameRate');
                 const duration = (endFrame - startFrame) / animFrameRate;
-                const totalFrames = Math.floor(duration * frameRate) + 1;
+                const totalFrames = Math.floor(duration * frameRate + 1e-6) + 1;
 
                 // work objects for 360 capture
                 const camPos = new Vec3();
@@ -632,11 +658,8 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                         // wait for its own sort
                         await sortAndWait(splats);
 
-                        // render a frame
-                        scene.lockedRender = true;
-
-                        // wait for render to finish
-                        await postRender();
+                        // render a frame and wait for it to finish
+                        await renderSettled();
 
                         scene.dataProcessor.copyRt(scene.camera.mainTarget, equirect.faceTargets[face]);
 
@@ -653,9 +676,14 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                     await encodeFrame(frameTime);
                 };
 
-                for (let frameTime = 0; frameTime <= duration; frameTime += 1.0 / frameRate) {
+                // an integer frame index: a time summed frame by frame drifts,
+                // landing on the wrong sequence frame and dropping the last
+                for (let i = 0; i < totalFrames; i++) {
                     // check for cancellation
                     if (cancelled) break;
+
+                    const frameTime = i / frameRate;
+                    const animTime = startFrame + i * animFrameRate / frameRate;
 
                     if (is360) {
                         // restore animated-pose evaluation before the timeline
@@ -664,25 +692,32 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                         scene.camera.fov = savedFov;
 
                         // prepare the frame (loads PLY if needed, updates camera)
-                        await prepareFrame(startFrame + frameTime * animFrameRate, true);
+                        const newSplat = await prepareFrame(animTime, true);
+
+                        // a GPU-played model sorts its new centres with the
+                        // previous view; let that result land before the first
+                        // face waits for its own
+                        if (newSplat?.motion) {
+                            await new Promise<void>((resolve) => {
+                                newSplat.entity.gsplat.instance.sorter.once('updated', resolve);
+                                setTimeout(resolve, 1000);
+                            });
+                        }
 
                         await capture360(frameTime);
                     } else {
                         // prepare the frame (loads PLY if needed, updates camera, sorts)
-                        await prepareFrame(startFrame + frameTime * animFrameRate);
+                        await prepareFrame(animTime);
 
-                        // render a frame
-                        scene.lockedRender = true;
-
-                        // wait for render to finish
-                        await postRender();
+                        // render a frame and wait for it to finish
+                        await renderSettled();
 
                         // wait for capture
                         await captureFrame(frameTime);
 
                         events.fire('progressUpdate', {
                             text: i18n.t('panel.render.rendering', { ellipsis: true }),
-                            progress: 100 * frameTime / duration
+                            progress: 100 * (i + 1) / totalFrames
                         });
                     }
                 }
@@ -772,6 +807,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                     scene.camera.setPoseOverride(null);
                     scene.camera.fov = savedFov;
                     scene.camera.ortho = savedOrtho;
+                    scene.camera.setLensSuspended(false);
                     equirect.destroy();
                     equirect = null;
                 }

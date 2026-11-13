@@ -443,8 +443,11 @@ class PointerController {
                 fn(event);
             };
             target.addEventListener(name, callback, options);
+            // chain to the previous destroy, not to `destroy` itself, which
+            // by then is this function
+            const prev = destroy;
             destroy = () => {
-                destroy?.();
+                prev?.();
                 target.removeEventListener(name, callback);
             };
         };
