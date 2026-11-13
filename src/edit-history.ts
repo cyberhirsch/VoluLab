@@ -1,7 +1,35 @@
 import { CommandQueue } from './command-queue';
-import { EditOp, MultiOp, SelectOp, SelectStep, StateOp } from './edit-ops';
+import { AddSplatOp, EditOp, MultiOp, SelectOp, SelectStep, StateOp } from './edit-ops';
 import { Events } from './events';
 import { Splat } from './splat';
+
+/**
+ * What an op brings into the scene: a producer's output, an added object.
+ */
+const produces = (op: EditOp): object[] => {
+    if (op instanceof MultiOp) return op.ops.flatMap(produces);
+    const o = op as any;
+    return [o.output, op instanceof AddSplatOp ? o.splat : null].filter(Boolean);
+};
+
+/**
+ * An op whose object is not in the scene: its producer is bypassed or gone,
+ * so there is nothing for it to act on. Applying it anyway would throw
+ * partway through a replay. An op that adds its object is not orphaned by
+ * the object being absent - that is what it is for.
+ */
+const orphaned = (op: EditOp): boolean => {
+    if (op instanceof MultiOp) return op.ops.some(orphaned);
+    if (op instanceof AddSplatOp) return false;
+    const splat = (op as any).splat;
+    return splat instanceof Splat && !splat.scene;
+};
+
+/** Forget what the StateOps in `op` resolved, if `which` says so. */
+const invalidateStates = (op: EditOp, which: (s: StateOp) => boolean = () => true) => {
+    const all = op instanceof MultiOp ? op.ops : [op];
+    all.forEach(inner => inner instanceof StateOp && which(inner) && inner.invalidate());
+};
 
 // Check if an operation references a specific splat
 const opReferencesSplat = (op: EditOp, splat: Splat): boolean => {
@@ -59,6 +87,32 @@ class EditHistory {
     cursor = 0;
     events: Events;
 
+    /**
+     * The lowest the cursor goes by undo. A loaded project's own nodes are
+     * where the session starts, not edits made in it.
+     */
+    floor = 0;
+
+    // how many ops are inside their own do/undo right now. What an op does to
+    // the scene - an undo removing what its do added - is history moving,
+    // not the user deleting something.
+    private applyDepth = 0;
+
+    // ops the cursor is past but that were not applied: orphaned, or they
+    // threw. Their undo is skipped, since nothing was done to reverse.
+    private skipped = new WeakSet<EditOp>();
+
+    // while > 0, the per-step events are held back and fired once at the end
+    private batch = 0;
+
+    // objects whose data was swapped underneath the history since the last
+    // reapplyAll - a sequence frame, a retrained output
+    private replaced = new Set<object>();
+
+    get applying() {
+        return this.applyDepth > 0;
+    }
+
     // shared queue used to serialize every history mutation. the same physical
     // CommandQueue is shared with DataProcessor callers via scene.commandQueue
     // and the 'queue' event, so all async splat work applies in initiation order.
@@ -76,7 +130,9 @@ class EditHistory {
         events.function('edit.reselect', (index: number, steps: SelectStep[]) => this.reselect(index, steps));
         events.function('edit.removeAt', (indices: number[]) => this.removeAt(indices));
         events.function('edit.refresh', (index: number, mutate?: () => void) => this.refresh(index, mutate));
-        events.function('edit.reapplyAll', () => this.reapplyAll());
+        events.function('edit.reapplyAll', (targets?: object[]) => this.reapplyAll(targets));
+        events.function('edit.markLoaded', () => this.markLoaded());
+        events.on('splat.replaced', (splat: Splat) => this.replaced.add(splat));
         events.function('edit.setBypassed', (index: number, bypassed: boolean) => this.setBypassed(index, bypassed));
         events.function('edit.canMove', (from: number, to: number) => this.canMove(from, to));
         events.function('edit.move', (from: number, to: number) => this.move(from, to));
@@ -95,7 +151,7 @@ class EditHistory {
     }
 
     canUndo() {
-        return this.cursor > 0;
+        return this.cursor > this.floor;
     }
 
     canRedo() {
@@ -130,10 +186,11 @@ class EditHistory {
         // only advance the cursor after a successful undo so a thrown editOp leaves
         // history in a consistent state for subsequent undo/redo.
         const editOp = this.history[this.cursor - 1];
-        // a bypassed op was never applied, so there is nothing to reverse
-        if (!editOp.bypassed) {
-            await editOp.undo();
+        // a bypassed or skipped op was never applied, so there is nothing to reverse
+        if (!editOp.bypassed && !this.skipped.has(editOp)) {
+            await this.run(editOp, true);
         }
+        this.skipped.delete(editOp);
         this.cursor--;
         this.events.fire('edit.apply', editOp);
         this.fireEvents();
@@ -144,11 +201,51 @@ class EditHistory {
         // history in a consistent state for subsequent undo/redo.
         const editOp = this.history[this.cursor];
         if (!suppressOp && !editOp.bypassed) {
-            await editOp.do();
+            if (orphaned(editOp)) {
+                this.skipped.add(editOp);
+            } else {
+                await this.run(editOp, false);
+            }
         }
         this.cursor++;
         this.events.fire('edit.apply', editOp);
         this.fireEvents();
+    }
+
+    private async run(op: EditOp, undo: boolean) {
+        this.applyDepth++;
+        try {
+            await (undo ? op.undo() : op.do());
+        } finally {
+            this.applyDepth--;
+        }
+    }
+
+    /**
+     * Redo for a replay: an op that throws is stepped over rather than
+     * stopping the replay with the cursor halfway. Returns false for one
+     * that threw.
+     */
+    private async redoTolerant() {
+        const editOp = this.history[this.cursor];
+        try {
+            await this._redo();
+            return true;
+        } catch (error) {
+            console.error(error);
+            this.skipped.add(editOp);
+            this.cursor++;
+            return false;
+        }
+    }
+
+    private reportFailed(failed: number) {
+        if (!failed) return;
+        this.events.invoke('showPopup', {
+            type: 'error',
+            header: 'Replay',
+            message: `${failed} node${failed === 1 ? '' : 's'} could not be applied and ${failed === 1 ? 'was' : 'were'} skipped. See the console for details.`
+        });
     }
 
     /**
@@ -161,20 +258,27 @@ class EditHistory {
      */
     private async replayAround(index: number, mutate: () => void, cursorAfter: (resume: number) => number, changed: EditOp[]) {
         const resume = this.cursor;
+        let failed = 0;
 
-        while (this.cursor > index) {
-            await this._undo();
+        this.batch++;
+        try {
+            while (this.cursor > index) {
+                await this._undo();
+            }
+
+            mutate();
+
+            this.invalidateReached(index, changed);
+
+            const target = Math.max(0, Math.min(this.history.length, cursorAfter(resume)));
+            while (this.cursor < target) {
+                if (!await this.redoTolerant()) failed++;
+            }
+        } finally {
+            this.batch--;
+            this.fireEvents();
         }
-
-        mutate();
-
-        this.invalidateReached(index, changed);
-
-        const target = Math.max(0, Math.min(this.history.length, cursorAfter(resume)));
-        while (this.cursor < target) {
-            await this._redo();
-        }
-        this.fireEvents();
+        this.reportFailed(failed);
     }
 
     /**
@@ -230,6 +334,7 @@ class EditHistory {
         return this.queue(() => this.replayAround(
             sorted[0],
             () => {
+                this.floor -= sorted.filter(i => i < this.floor).length;
                 // back to front, so the earlier indices stay valid as we splice
                 [...sorted].reverse().forEach((i) => {
                     this.history.splice(i, 1)[0].destroy?.();
@@ -260,14 +365,22 @@ class EditHistory {
     }
 
     /**
-     * Re-run the whole history against data that has been replaced underneath
-     * it - the next frame of a sequence.
+     * Re-run the history that stands on data replaced underneath it - the
+     * next frame of a sequence, a retrained output.
      *
-     * Deliberately does not undo first. Undo reverses an op using what it
-     * resolved against the *old* data, and that data is gone: the indices it
-     * holds now point at different gaussians, or at none. So the cursor is
-     * reset without reversing anything, every op forgets what it resolved, and
-     * the history is applied forward onto the new frame from a clean state.
+     * Which objects were replaced is handed in, or else taken from the
+     * `splat.replaced` events since the last call; with neither, every
+     * object in the scene is assumed replaced.
+     *
+     * Only the ops that reach a replaced object are re-run - an edit on
+     * another object is still applied and still right, and re-applying it
+     * without reversing it would apply it twice. The ops that are re-run are
+     * reversed first, newest first, because most of what they did outlives
+     * the swap: an object transform, a palette slot, a merge hiding its
+     * inputs. What does not outlive it is per-gaussian state - the new data
+     * comes with its own - so a state op on a replaced object forgets what it
+     * resolved before the reversal and has nothing to undo. Then they are
+     * applied forward again and resolve against the new data.
      *
      * This is what "one edit, all frames" means in practice. A sphere
      * selection catches whatever is inside it on this frame; a grade follows.
@@ -275,18 +388,82 @@ class EditHistory {
      * frame it was taken on - and resolves to nothing rather than to the wrong
      * gaussians. See the numSplats check in select-query.ts.
      */
-    reapplyAll() {
+    reapplyAll(targets?: object[]) {
         return this.queue(async () => {
-            const resume = this.cursor;
-            this.cursor = 0;
+            let replaced: Set<object>;
+            if (targets?.length) {
+                replaced = new Set(targets);
+                targets.forEach(t => this.replaced.delete(t));
+            } else if (this.replaced.size) {
+                replaced = this.replaced;
+                this.replaced = new Set();
+            } else {
+                replaced = new Set((this.events.invoke('scene.allSplats') ?? []) as object[]);
+            }
+            if (!replaced.size) return;
 
-            this.history.forEach((op) => {
-                if (op instanceof StateOp) op.invalidate();
+            // what stands on the replaced data, followed forward the same way
+            // invalidateReached does. The op that makes a replaced object is
+            // not among them: its object is the thing that changed.
+            const reached = new Set<object>(replaced);
+            const hit: number[] = [];
+            this.history.forEach((op, i) => {
+                if (produces(op).some(o => replaced.has(o))) return;
+                const fp = footprint(op);
+                if (!fp || !(fp.reads.some(r => reached.has(r)) || fp.writes.some(w => reached.has(w)))) return;
+                hit.push(i);
+                reached.add(op);
+                fp.writes.forEach(w => reached.add(w));
             });
 
-            while (this.cursor < resume) {
-                await this._redo();
+            const onReplaced = (s: StateOp) => replaced.has(s.splat);
+            hit.forEach(i => invalidateStates(this.history[i], onReplaced));
+
+            const applied = hit.filter(i => i < this.cursor);
+
+            this.batch++;
+            try {
+                for (let k = applied.length - 1; k >= 0; --k) {
+                    const op = this.history[applied[k]];
+                    if (!op.bypassed && !this.skipped.has(op)) {
+                        await this.run(op, true);
+                    }
+                    this.skipped.delete(op);
+                }
+
+                hit.forEach(i => invalidateStates(this.history[i]));
+
+                for (const i of applied) {
+                    const op = this.history[i];
+                    if (op.bypassed) continue;
+                    if (orphaned(op)) {
+                        this.skipped.add(op);
+                        continue;
+                    }
+                    // this runs every frame during playback, so a failure is
+                    // logged rather than put in front of the user each time
+                    try {
+                        await this.run(op, false);
+                    } catch (error) {
+                        console.error(error);
+                        this.skipped.add(op);
+                    }
+                    this.events.fire('edit.apply', op);
+                }
+            } finally {
+                this.batch--;
+                this.fireEvents();
             }
+        });
+    }
+
+    /**
+     * What is in the history now is the starting point: undo goes no further
+     * back. Queued, so ops added just before it are counted.
+     */
+    markLoaded() {
+        return this.queue(() => {
+            this.floor = this.cursor;
             this.fireEvents();
         });
     }
@@ -366,12 +543,18 @@ class EditHistory {
      */
     goto(cursor: number) {
         return this.queue(async () => {
-            const target = Math.max(0, Math.min(this.history.length, cursor));
-            while (this.cursor > target) {
-                await this._undo();
-            }
-            while (this.cursor < target) {
-                await this._redo();
+            const target = Math.max(this.floor, Math.min(this.history.length, cursor));
+            this.batch++;
+            try {
+                while (this.cursor > target) {
+                    await this._undo();
+                }
+                while (this.cursor < target) {
+                    await this._redo();
+                }
+            } finally {
+                this.batch--;
+                this.fireEvents();
             }
         });
     }
@@ -406,6 +589,7 @@ class EditHistory {
     }
 
     fireEvents() {
+        if (this.batch > 0) return;
         this.events.fire('edit.canUndo', this.canUndo());
         this.events.fire('edit.canRedo', this.canRedo());
         // anything that reshapes history or moves the cursor lands here, so a
@@ -422,6 +606,8 @@ class EditHistory {
             });
             this.history = [];
             this.cursor = 0;
+            this.floor = 0;
+            this.replaced.clear();
             this.fireEvents();
         });
     }
@@ -433,6 +619,7 @@ class EditHistory {
     removeForShape(shape: unknown) {
         return this.queue(() => {
             let newCursor = 0;
+            let newFloor = 0;
             const newHistory: EditOp[] = [];
 
             for (let i = 0; i < this.history.length; i++) {
@@ -444,11 +631,15 @@ class EditHistory {
                     if (i < this.cursor) {
                         newCursor++;
                     }
+                    if (i < this.floor) {
+                        newFloor++;
+                    }
                 }
             }
 
             this.history = newHistory;
             this.cursor = newCursor;
+            this.floor = newFloor;
             this.fireEvents();
         });
     }
@@ -459,6 +650,7 @@ class EditHistory {
         // (which could leave queued undo/redo pointing at indices that no longer exist).
         return this.queue(() => {
             let newCursor = 0;
+            let newFloor = 0;
             const newHistory: EditOp[] = [];
 
             for (let i = 0; i < this.history.length; i++) {
@@ -471,11 +663,15 @@ class EditHistory {
                     if (i < this.cursor) {
                         newCursor++;
                     }
+                    if (i < this.floor) {
+                        newFloor++;
+                    }
                 }
             }
 
             this.history = newHistory;
             this.cursor = newCursor;
+            this.floor = newFloor;
             this.fireEvents();
         });
     }

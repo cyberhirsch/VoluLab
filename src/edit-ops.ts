@@ -245,8 +245,21 @@ const combineWithState = (splat: Splat, mode: SelectMode, isHit: (i: number) => 
     return IndexRanges.fromPredicate(splatData.numSplats, preds[mode]);
 };
 
-/** One gesture inside a selection: what was drawn, and how it combined. */
-type SelectStep = { mode: SelectMode; query: SelectQuery };
+/**
+ * One gesture inside a selection: what was drawn, and how it combined.
+ *
+ * `time` is the time a 4D model showed when it was drawn. A query means what
+ * it caught then - a lasso over a moving figure catches it where it was - so
+ * a replay resolves it at that time, not at whatever frame is shown now.
+ * Absent (a still model, or a step from before it was kept), the time shown.
+ */
+type SelectStep = { mode: SelectMode; query: SelectQuery; time?: number };
+
+// give the steps of a 4D model's selection that have no time the one shown
+const stampTime = (splat: Splat, steps: SelectStep[]) => {
+    if (!splat.motion) return steps;
+    return steps.map(s => (s.time === undefined ? { ...s, time: splat.motionTime } : s));
+};
 
 /**
  * A primitive wired into a select node's mesh input: the gaussians inside it,
@@ -288,6 +301,8 @@ class SelectOp extends StateOp {
     steps: SelectStep[];
     /** a box, sphere or cylinder wired into the node, taken ahead of the steps */
     mesh: SelectMesh | null = null;
+    /** the time a 4D model showed when the node was made; the mesh input is resolved at it */
+    time: number | undefined;
     /**
      * What is selected once the node has run, for a light that glows with
      * it: a new set each time it runs, so a light can tell it has changed.
@@ -297,7 +312,8 @@ class SelectOp extends StateOp {
     constructor(splat: Splat, steps: SelectStep[]) {
         // TOGGLE, always: the op states the result, not the gesture
         super(splat, null, State.selected, BitOp.TOGGLE);
-        this.steps = steps;
+        this.steps = stampTime(splat, steps);
+        this.time = splat.motion ? splat.motionTime : undefined;
 
         // reads this.steps rather than the constructor argument, so editing the
         // list changes what the next resolve asks
@@ -314,12 +330,12 @@ class SelectOp extends StateOp {
 
             // the wired shape goes first, so the node's own gestures refine
             // what it caught - drawn with shift, a lasso adds to the sphere
-            const steps = this.mesh?.used ? [{ mode: this.mesh.mode, query: this.mesh.used }, ...this.steps] : this.steps;
+            const steps = this.mesh?.used ? [{ mode: this.mesh.mode, query: this.mesh.used, time: this.time }, ...this.steps] : this.steps;
 
             for (const step of steps) {
                 // one pass per step, ascending, which is what a hit predicate
                 // requires - each step gets a fresh one
-                const isHit = await resolveHits(s, step.query);
+                const isHit = await resolveHits(s, step.query, step.time);
                 for (let i = 0; i < numSplats; ++i) {
                     const hit = isHit(i);
                     switch (step.mode) {
@@ -361,12 +377,13 @@ class SelectOp extends StateOp {
      * selection leaves one step, not a pile of them.
      */
     addStep(step: SelectStep) {
+        [step] = stampTime(this.splat, [step]);
         this.steps = step.mode === 'set' ? [step] : [...this.steps, step];
         this.invalidate();
     }
 
     setSteps(steps: SelectStep[]) {
-        this.steps = steps;
+        this.steps = stampTime(this.splat, steps);
         this.invalidate();
     }
 }
@@ -417,6 +434,12 @@ class EntityTransformOp {
     }
 
     do() {
+        // what undo goes back to is whatever this lands on now; the
+        // constructor's value stands only for a first application that the
+        // gizmo already made. After an earlier node is removed or moved the
+        // two differ, and undo has to return to the former.
+        const { entity } = this.splat;
+        this.oldt = new Transform(entity.getLocalPosition(), entity.getLocalRotation(), entity.getLocalScale());
         this.splat.move(this.newt.position, this.newt.rotation, this.newt.scale);
     }
 
@@ -448,9 +471,28 @@ class SplatsTransformOp {
     }
 
     async do() {
-        const { splat, transform, paletteMap } = this;
+        const { splat, transform } = this;
         const state = splat.splatData.getProp('state') as Uint8Array;
         const indices = splat.transformTexture.lock() as Uint16Array;
+        const { transformPalette } = splat;
+
+        // The slots are worked out against the selection as it stands now,
+        // the way ScopedColorOp does it. The map the gizmo built belongs to
+        // the selection and palette of the moment it was made; replayed after
+        // an earlier edit changed either, it would send gaussians to slots
+        // that do not hold their earlier transform.
+        const olds: number[] = [];
+        const seen = new Set<number>();
+        for (let i = 0; i < state.length; ++i) {
+            if (state[i] === State.selected && !seen.has(indices[i])) {
+                seen.add(indices[i]);
+                olds.push(indices[i]);
+            }
+        }
+        const first = transformPalette.alloc(olds.length);
+        const paletteMap = new Map<number, number>();
+        olds.forEach((old, k) => paletteMap.set(old, first + k));
+        this.paletteMap = paletteMap;
 
         // update splat transform palette indices
         for (let i = 0; i < state.length; ++i) {
@@ -461,11 +503,8 @@ class SplatsTransformOp {
 
         splat.transformTexture.unlock();
 
-        splat.transformPalette.alloc(paletteMap.size);
-
         // update transform palette
-        const { transformPalette } = splat;
-        this.paletteMap.forEach((newIdx, oldIdx) => {
+        paletteMap.forEach((newIdx, oldIdx) => {
             transformPalette.getTransform(oldIdx, mat);
             mat.mul2(transform, mat);
             transformPalette.setTransform(newIdx, mat);
@@ -476,7 +515,6 @@ class SplatsTransformOp {
 
     async undo() {
         const { splat, paletteMap } = this;
-        const state = splat.splatData.getProp('state') as Uint8Array;
         const indices = splat.transformTexture.lock() as Uint16Array;
 
         // invert the palette map
@@ -485,11 +523,12 @@ class SplatsTransformOp {
             inverseMap.set(newIdx, oldIdx);
         });
 
-        // restore the original transform indices
-        for (let i = 0; i < state.length; ++i) {
-            if (state[i] === State.selected) {
-                indices[i] = inverseMap.get(indices[i]);
-            }
+        // Restore by slot rather than by selection: what has to go back is
+        // exactly what was moved, and the selection may have changed since.
+        // The slots are the newest allocations, so nothing later uses them.
+        for (let i = 0; i < indices.length; ++i) {
+            const back = inverseMap.get(indices[i]);
+            if (back !== undefined) indices[i] = back;
         }
 
         splat.transformTexture.unlock();
@@ -643,6 +682,20 @@ class SetSplatColorAdjustmentOp {
 
     do() {
         const { splat } = this;
+        // undo returns to what this lands on, read now rather than kept from
+        // when the op was made - an earlier node removed or moved since then
+        // changes what that was. The constructor's value covers a first
+        // application the panel already made.
+        this.oldState = {
+            tintClr: splat.tintClr.clone(),
+            temperature: splat.temperature,
+            saturation: splat.saturation,
+            exposure: splat.exposure,
+            brightness: splat.brightness,
+            blackPoint: splat.blackPoint,
+            whitePoint: splat.whitePoint,
+            transparency: splat.transparency
+        };
         const { tintClr, temperature, saturation, exposure, brightness, blackPoint, whitePoint, transparency } = this.newState;
         if (tintClr) splat.tintClr = tintClr;
         if (temperature !== null) splat.temperature = temperature;
@@ -865,7 +918,9 @@ class CropOp extends StateOp {
         this.keepInside = keepInside;
 
         this.resolver = async (s: Splat) => {
-            const isHit = await resolveHits(s, { kind: this.shape, transform: this.transform });
+            // a crop acts on the whole of a 4D model, not on the frame shown:
+            // each gaussian is kept or cut by where it is at its own centre
+            const isHit = await resolveHits(s, { kind: this.shape, transform: this.transform }, null);
             const state = s.splatData.getProp('state') as Uint8Array;
             return IndexRanges.fromPredicate(s.splatData.numSplats, (i) => {
                 const inside = isHit(i);
@@ -945,6 +1000,8 @@ class SetShBandsOp {
     }
 
     do() {
+        // what undo returns to is read when this applies, not when it was made
+        this.oldBands = this.splat.shBandLimit;
         this.splat.shBandLimit = this.newBands;
     }
 
@@ -1519,6 +1576,8 @@ class CameraPoseOp {
     }
 
     do() {
+        // what undo returns to is read when this applies, not when it was made
+        this.oldPose = { position: this.camera.position.clone(), target: this.camera.target.clone() };
         this.apply(this.newPose);
     }
 
@@ -1695,6 +1754,8 @@ class LightPoseOp {
     }
 
     do() {
+        // what undo returns to is read when this applies, not when it was made
+        this.oldPose = this.light.getPose();
         this.light.setPose(this.newPose);
     }
 
@@ -1756,6 +1817,8 @@ class PrimitivePoseOp {
     }
 
     do() {
+        // what undo returns to is read when this applies, not when it was made
+        this.oldPose = this.primitive.getPose();
         this.primitive.setPose(this.newPose);
     }
 

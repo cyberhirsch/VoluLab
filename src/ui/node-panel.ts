@@ -42,7 +42,9 @@ class NodePanel extends Container {
     private body: HTMLElement;
     private empty: HTMLElement;
 
-    private selected: number | null = null;
+    // the op itself, not its index: removing or moving a node ahead of it
+    // shifts the index, and the pane would edit the neighbour
+    private selected: EditOp | null = null;
 
     /** the node a face that edits in place is showing, while it shows it */
     private shown: { op: EditOp, panel: HTMLElement } | null = null;
@@ -74,8 +76,10 @@ class NodePanel extends Container {
         this.empty.textContent = 'no node selected';
         this.dom.appendChild(this.empty);
 
-        events.on('graph.selected', (selected: { index: number | null, splat: Splat | null, isImport: boolean }) => {
-            this.selected = selected?.index ?? null;
+        events.on('graph.selected', (selected: { index: number | null, op?: EditOp | null, splat: Splat | null, isImport: boolean }) => {
+            const index = selected?.index ?? null;
+            const ops = (this.events.invoke('edit.history') as { ops: EditOp[] })?.ops;
+            this.selected = selected?.op ?? (index !== null ? ops?.[index] ?? null : null);
             this.importSplat = selected?.isImport ? selected.splat : null;
             this.rebuild();
         });
@@ -101,8 +105,8 @@ class NodePanel extends Container {
     private currentOp(): { op: EditOp, index: number } | null {
         if (this.selected === null) return null;
         const history = this.events.invoke('edit.history') as { ops: EditOp[] };
-        const op = history?.ops?.[this.selected];
-        return op ? { op, index: this.selected } : null;
+        const index = history?.ops?.indexOf(this.selected) ?? -1;
+        return index !== -1 ? { op: this.selected, index } : null;
     }
 
     private rebuild() {

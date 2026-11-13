@@ -60,7 +60,8 @@ type SerializeSettings = {
     // is accepted for compatibility but the streaming writers never export state.
     keepStateData?: boolean;        // keep the state data array
     keepWorldTransform?: boolean;   // don't apply the world transform when resolving splat transforms
-    keepColorTint?: boolean;        // refrain from applying color tints
+    keepColorTint?: boolean;        // refrain from applying the object's own color grade (colour nodes scoped to a selection are still baked: nothing else stores them)
+    keepSHBands?: boolean;          // write every band the data has, ignoring sh-band node limits (the document stores the limit itself)
 };
 
 type ViewerExportSettings = {
@@ -171,9 +172,15 @@ const calcSHBands = (data: Set<string>) => {
     return { '9': 1, '24': 2, '-1': 3 }[shNames.findIndex(v => !data.has(v))] ?? 0;
 };
 
-/** The highest SH band count present in any of `splats`. */
-const sceneSHBands = (splats: Splat[]) => {
-    return Math.max(0, ...splats.map(s => calcSHBands(getVertexProperties(s.splatData))));
+/** The bands a splat contributes: what its data holds, capped by its sh-bands node when `honourLimit` is set. */
+const splatSHBands = (splat: Splat, honourLimit = true) => {
+    const bands = calcSHBands(getVertexProperties(splat.splatData));
+    return honourLimit ? Math.min(bands, splat.shBandLimit ?? 3) : bands;
+};
+
+/** The highest SH band count any of `splats` shows - present in its data and not capped by an sh-bands node. */
+const sceneSHBands = (splats: Splat[], honourLimits = true) => {
+    return Math.max(0, ...splats.map(s => splatSHBands(s, honourLimits)));
 };
 
 const v = new Vec3();
@@ -306,8 +313,9 @@ class SingleSplat {
                 if (!cacheMap.has(splat)) {
                     const transformCache = new SplatTransformCache(splat, serializeSettings.keepWorldTransform);
 
-                    const srcPropNames = getVertexProperties(splat.splatData);
-                    const srcSHBands = calcSHBands(srcPropNames);
+                    // an sh-bands node caps what is shown, so it caps what is
+                    // written; the bands above it are written as zeros
+                    const srcSHBands = splatSHBands(splat, !serializeSettings.keepSHBands);
                     const srcSHCoeffs = shBandCoeffs[srcSHBands];
 
                     // cache the props objects
@@ -329,7 +337,9 @@ class SingleSplat {
                     // object's own grade applies after that - the same order
                     // the shader uses. Slots are few, so one ColorGrade per
                     // slot is built as it is first met rather than per gaussian.
-                    const objectGrade = toGrade(gradeMatrix(splat));
+                    // keepColorTint stores the object's grade with the
+                    // document, so only the per-gaussian slots are baked
+                    const objectGrade = serializeSettings.keepColorTint ? identityGrade() : toGrade(gradeMatrix(splat));
                     const slots = new Uint16Array(splat.gradeTexture.lock() as Uint16Array);
                     splat.gradeTexture.unlock();
 
@@ -398,7 +408,7 @@ class SingleSplat {
                 }
             }
 
-            if (!serializeSettings.keepColorTint && hasColor && grade.hasTint) {
+            if (hasColor && grade.hasTint) {
                 const c = {
                     r: dcDecode(data.f_dc_0),
                     g: dcDecode(data.f_dc_1),
@@ -424,7 +434,7 @@ class SingleSplat {
                 }
             }
 
-            if (!serializeSettings.keepColorTint && hasOpacity && grade.hasAlpha) {
+            if (hasOpacity && grade.hasAlpha) {
                 data.opacity = grade.applyOpacity(data.opacity);
             }
         };
@@ -497,7 +507,7 @@ class VoluLabChunkSource implements ChunkSource {
         // Determine the SH band count to export: the count asked for, or else
         // the highest band present in any splat, capped by maxSHBands.
         // SingleSplat zero-fills missing bands.
-        const outputBands = settings.shBands ?? Math.min(settings.maxSHBands ?? 3, sceneSHBands(splats));
+        const outputBands = settings.shBands ?? Math.min(settings.maxSHBands ?? 3, sceneSHBands(splats, !settings.keepSHBands));
         const numRest = SH_REST_COUNTS[outputBands];
         this.numRest = numRest;
 

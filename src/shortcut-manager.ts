@@ -47,7 +47,9 @@ const defaultShortcuts: Record<string, ShortcutBinding> = {
     'tool.scaleShortcut': { keys: ['3'] },
     'tool.rectSelection': { keys: ['r'] },
     'tool.lassoSelection': { keys: ['l'] },
-    'tool.polygonSelection': { keys: ['p'] },
+    // shift+L, beside lasso as polygonal lasso sits in other editors: P is
+    // the perspective view, and the two cannot share it
+    'tool.polygonSelection': { keys: ['l'], shift: 'required' },
     'tool.brushSelection': { keys: ['b'] },
     'tool.floodSelection': { keys: ['o'] },
     'tool.eyedropperSelection': { keys: ['e'], ctrl: 'required', capture: true },

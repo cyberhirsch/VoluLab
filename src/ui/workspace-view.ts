@@ -501,6 +501,8 @@ class WorkspaceView extends Container {
             e.preventDefault();
             divider.setPointerCapture(e.pointerId);
             const rect = el.getBoundingClientRect();
+            // what the drag last painted, kept for a cancelled drag
+            let last: number | null = null;
 
             const move = (ev: PointerEvent) => {
                 const frac = isRow ?
@@ -509,12 +511,20 @@ class WorkspaceView extends Container {
                 // live feedback without a full rebuild
                 const clamped = Math.max(0.1, Math.min(0.9, frac));
                 a.style.flex = `0 0 ${clamped * 100}%`;
+                last = frac;
+            };
+
+            const finish = (ev: PointerEvent) => {
+                if (divider.hasPointerCapture(ev.pointerId)) divider.releasePointerCapture(ev.pointerId);
+                divider.removeEventListener('pointermove', move);
+                // eslint-disable-next-line no-use-before-define
+                divider.removeEventListener('pointerup', up);
+                // eslint-disable-next-line no-use-before-define
+                divider.removeEventListener('pointercancel', cancel);
             };
 
             const up = (ev: PointerEvent) => {
-                divider.releasePointerCapture(ev.pointerId);
-                divider.removeEventListener('pointermove', move);
-                divider.removeEventListener('pointerup', up);
+                finish(ev);
                 const frac = isRow ?
                     (ev.clientX - rect.left) / rect.width :
                     (ev.clientY - rect.top) / rect.height;
@@ -522,8 +532,19 @@ class WorkspaceView extends Container {
                 s.editQuiet(root => setRatio(root, split.id, frac));
             };
 
+            // a cancelled drag keeps what it painted; its coordinates are not
+            // a position to commit
+            const cancel = (ev: PointerEvent) => {
+                finish(ev);
+                if (last !== null) {
+                    const frac = last;
+                    s.editQuiet(root => setRatio(root, split.id, frac));
+                }
+            };
+
             divider.addEventListener('pointermove', move);
             divider.addEventListener('pointerup', up);
+            divider.addEventListener('pointercancel', cancel);
         });
 
         el.appendChild(a);

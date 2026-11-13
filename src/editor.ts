@@ -72,9 +72,12 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         lastExportCursor = 0;
     });
 
-    // When a splat is removed from the scene, remove all edit operations that reference it
+    // When the user removes a splat from the scene, remove all edit operations
+    // that reference it. An op's own undo removes what its do added - a
+    // merge's or a train node's output during a bypass or a replay - and that
+    // is history moving, not the object going away: its downstream nodes stay.
     events.on('scene.elementRemoved', (element: Element) => {
-        if (element.type === ElementType.splat) {
+        if (element.type === ElementType.splat && !editHistory.applying) {
             editHistory.removeForSplat(element as Splat);
         }
     });
@@ -309,20 +312,23 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
         const splat = selectedSplats()[0];
         if (splat) {
-            // use current bounds (caller should have awaited the operation that changed data)
-            const bound = splat.numSelected > 0 ?
-                splat.selectionBound :
-                splat.localBound;
-            vec.copy(bound.center);
+            // frame what is drawn: a 4D model's bounds at the time shown,
+            // measured in the queue after the operation that changed data
+            events.invoke('queue', async () => {
+                if (!splat.scene) return;
+                const { selection, shown } = await splat.shownBounds();
+                const bound = splat.numSelected > 0 ? selection : shown;
+                vec.copy(bound.center);
 
-            const worldTransform = splat.worldTransform;
-            worldTransform.transformPoint(vec, vec);
-            worldTransform.getScale(vec2);
+                const worldTransform = splat.worldTransform;
+                worldTransform.transformPoint(vec, vec);
+                worldTransform.getScale(vec2);
 
-            scene.camera.focus({
-                focalPoint: vec,
-                radius: bound.halfExtents.length() * vec2.x,
-                speed: 1
+                scene.camera.focus({
+                    focalPoint: vec,
+                    radius: bound.halfExtents.length() * vec2.x,
+                    speed: 1
+                });
             });
         }
     });
@@ -338,21 +344,26 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             return;
         }
 
-        const bound = splat.numSelected > 0 ? splat.selectionBound : splat.localBound;
-        const newOrigin = toCenter ? bound.center.clone() : new Vec3();
-        const newFrame = new Quat();
+        // a 4D model's bound centre is the one at the time shown
+        events.invoke('queue', async () => {
+            if (!splat.scene) return;
+            const { selection, shown } = await splat.shownBounds();
+            const bound = splat.numSelected > 0 ? selection : shown;
+            const newOrigin = toCenter ? bound.center.clone() : new Vec3();
+            const newFrame = new Quat();
 
-        if (splat.localFrameOrigin.equals(newOrigin) && splat.localFrame.equals(newFrame)) {
-            return;
-        }
+            if (splat.localFrameOrigin.equals(newOrigin) && splat.localFrame.equals(newFrame)) {
+                return;
+            }
 
-        events.fire('edit.add', new SetLocalFrameOp({
-            splat,
-            oldOrigin: splat.localFrameOrigin.clone(),
-            oldFrame: splat.localFrame.clone(),
-            newOrigin,
-            newFrame
-        }));
+            events.fire('edit.add', new SetLocalFrameOp({
+                splat,
+                oldOrigin: splat.localFrameOrigin.clone(),
+                oldFrame: splat.localFrame.clone(),
+                newOrigin,
+                newFrame
+            }));
+        });
     });
 
     events.on('camera.reset', () => {
@@ -425,11 +436,15 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         };
     };
 
-    /** The node the graph currently has open, if any. */
-    let openNode: number | null = null;
+    /**
+     * The node the graph currently has open, if any. Kept as the op rather
+     * than its index, which moves when a node ahead of it is removed or moved.
+     */
+    let openOp: EditOp | null = null;
 
-    events.on('graph.selected', (selected: { index: number | null }) => {
-        openNode = selected?.index ?? null;
+    events.on('graph.selected', (selected: { index: number | null, op?: EditOp | null }) => {
+        // eslint-disable-next-line no-use-before-define
+        openOp = selected?.op ?? (selected?.index !== null && selected?.index !== undefined ? history().ops[selected.index] ?? null : null);
     });
 
     const history = () => (events.invoke('edit.history') ?? { ops: [], cursor: 0 }) as
@@ -450,8 +465,9 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
      */
     const nodeToEdit = (splat: Splat, matches: (op: EditOp) => boolean) => {
         const { ops, cursor } = history();
+        const openNode = openOp ? ops.indexOf(openOp) : -1;
 
-        if (openNode !== null && ops[openNode] && matches(ops[openNode]) &&
+        if (openNode !== -1 && matches(ops[openNode]) &&
             (ops[openNode] as any).splat === splat) {
             return openNode;
         }
@@ -592,12 +608,24 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         await editHistory.goto(index + 1);
 
         const { fileType, filename, maxSHBands, selectedOnly } = op.settings;
-        const splatIdx = (events.invoke('scene.allSplats') as Splat[]).indexOf(op.splat);
+        // scene.write indexes the list it writes from - the visible, non-empty
+        // splats - so the index has to come from that list, not from all of them
+        const splatIdx = (events.invoke('scene.splats') as Splat[]).indexOf(op.splat);
 
         try {
+            if (splatIdx < 0) {
+                // hidden or empty at this point: writing 'all' instead would
+                // put other objects in this node's file
+                await events.invoke('showPopup', {
+                    type: 'error',
+                    header: 'Output',
+                    message: `'${op.splat?.name ?? 'object'}' is hidden or empty at this node, so there is nothing to write.`
+                });
+                return;
+            }
             await events.invoke('scene.write', fileType, {
                 filename,
-                splatIdx: splatIdx < 0 ? 'all' : splatIdx,
+                splatIdx,
                 serializeSettings: { maxSHBands, selected: selectedOnly }
             });
         } finally {

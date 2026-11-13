@@ -1,6 +1,8 @@
 import { ZipFileSystem, ZipReadFileSystem } from '@playcanvas/splat-transform';
+import { Vec3 } from 'playcanvas';
 
 import { EditOp, LightOp, PrimitiveOp } from './edit-ops';
+import { ElementType } from './element';
 import { Events } from './events';
 import { BrowserFileSystem, BlobReadSource } from './io';
 import { recentFiles } from './recent-files';
@@ -12,6 +14,7 @@ import { Splat } from './splat';
 import { writeSplatFile } from './splat-serialize';
 import { Transform } from './transform';
 import { i18n } from './ui/localization';
+import { Voxels } from './voxels';
 
 // ts compiler and vscode find this type, but eslint does not
 type FilePickerAcceptType = unknown;
@@ -182,6 +185,28 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 events.fire('edit.changed');
             }
 
+            // voxel objects come back as voxel import nodes: the grid is
+            // stored, not the node that made it
+            if (Array.isArray(document.voxels)) {
+                for (let i = 0; i < document.voxels.length; ++i) {
+                    const stored = document.voxels[i];
+                    const source = await zipFs.createSource(`voxels_${i}.bin`);
+                    const bytes = await source.read().readAll();
+                    source.close();
+                    // copied so the typed arrays start on an aligned offset
+                    const buffer = bytes.slice().buffer;
+                    const count = stored.count;
+                    events.invoke('vox.import', {
+                        dims: stored.dims,
+                        origin: new Vec3(stored.origin[0], stored.origin[1], stored.origin[2]),
+                        cellSize: stored.cellSize,
+                        cells: new Uint32Array(buffer, 0, count),
+                        colors: new Float32Array(buffer, count * 4, stored.colors)
+                    }, stored.name ?? 'voxels');
+                }
+                events.fire('edit.changed');
+            }
+
             // lights come back as light nodes, the same way - without the relight
             // nodes a new light brings, since the project has its own
             const lightOps: LightOp[] = [];
@@ -230,6 +255,12 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 events.fire('docDeserialize.layout', document.ui.layout);
             }
 
+            // The nodes above went in through history so the graph shows them,
+            // but they are what the project is, not edits made since opening
+            // it: undo stops here, and the document starts clean.
+            await events.invoke('edit.markLoaded');
+            events.fire('doc.saved');
+
             // refresh the pivot to reflect the loaded transform
             const currentSelection = events.invoke('selection');
             if (currentSelection) {
@@ -265,6 +296,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             const lights = (events.invoke('light.list') ?? []) as SceneLight[];
             const primitives = (events.invoke('primitive.list') ?? []) as ScenePrimitive[];
             const history = (events.invoke('edit.history')?.ops ?? []) as EditOp[];
+            const voxels = scene.getElementsByType(ElementType.voxel) as Voxels[];
 
             const document = {
                 // .vlp starts its own numbering; an .ssproj is version 0 of a
@@ -285,6 +317,16 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
                 // the boxes, spheres and cylinders
                 primitives: primitives.map(p => p.docSerialize()),
+
+                // voxel objects; each grid's cells and colours are in voxels_<i>.bin
+                voxels: voxels.map(v => ({
+                    name: v.name,
+                    dims: [...v.grid.dims],
+                    origin: [v.grid.origin.x, v.grid.origin.y, v.grid.origin.z],
+                    cellSize: v.grid.cellSize,
+                    count: v.grid.cells.length,
+                    colors: v.grid.colors.length
+                })),
 
                 // what feeds each mesh or gauss light, by places in the lists
                 lightSources: lights.map((light, i) => {
@@ -314,7 +356,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 // path.
                 keepStateData: false,
                 keepWorldTransform: true,
-                keepColorTint: true
+                keepColorTint: true,
+                // the sh-bands limit is stored with each object, so the data keeps every band
+                keepSHBands: true
             };
 
             // Create browser filesystem and zip filesystem
@@ -330,6 +374,15 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             // Write each splat as PLY
             for (let i = 0; i < splats.length; ++i) {
                 await writeSplatFile([splats[i]], serializeSettings, 'ply', `splat_${i}.ply`, {}, zipFs);
+            }
+
+            // Write each voxel grid: its cells, then its colours
+            for (let i = 0; i < voxels.length; ++i) {
+                const { cells, colors } = voxels[i].grid;
+                const writer = await zipFs.createWriter(`voxels_${i}.bin`);
+                await writer.write(new Uint8Array(cells.buffer, cells.byteOffset, cells.byteLength));
+                await writer.write(new Uint8Array(colors.buffer, colors.byteOffset, colors.byteLength));
+                await writer.close();
             }
 
             // Close zip (also closes underlying browser writer)

@@ -415,6 +415,10 @@ class GraphPanel extends Container {
         };
         window.addEventListener('keydown', onKeyUpDown(true));
         window.addEventListener('keyup', onKeyUpDown(false));
+        // a keyup that lands in another window never arrives here
+        window.addEventListener('blur', () => {
+            this.spaceHeld = false;
+        });
 
         this.dom.addEventListener('keydown', (e: KeyboardEvent) => this.onKeyDown(e));
 
@@ -512,6 +516,16 @@ class GraphPanel extends Container {
         this.rebuild();
     }
 
+    /** Change the selection and restyle the drawn nodes, keeping the elements. */
+    private setSelectionInPlace(keys: object[]) {
+        this.selection = new Set(keys);
+        this.announce();
+        [...this.stage.querySelectorAll<HTMLElement>('.gn-node')].forEach((el) => {
+            const n = this.nodes[Number(el.dataset.nodeKey)];
+            el.classList.toggle('gn-selected', !!n && this.selection.has(n.key));
+        });
+    }
+
     /**
      * Tell the node pane what to show. It edits one thing at a time, so it
      * hears about a single selection and is told to show nothing when there
@@ -523,6 +537,9 @@ class GraphPanel extends Container {
             this.nodes.find(n => this.selection.has(n.key)) : null;
         this.events.fire('graph.selected', {
             index: only && only.index !== -1 ? only.index : null,
+            // the op itself, so a listener keeps the right node when ops
+            // ahead of it are removed or moved and the index shifts
+            op: only && only.index !== -1 ? only.key : null,
             splat: only?.splat ?? null,
             isImport: !!only && only.index === -1 && !!only.splat
         });
@@ -791,7 +808,12 @@ class GraphPanel extends Container {
         // a selection outlives a rebuild, but not the disappearance of what it
         // pointed at - an op removed from history takes its entry with it
         const live = new Set(nodes.map(n => n.key));
+        const before = this.selection.size;
         [...this.selection].forEach(k => !live.has(k) && this.selection.delete(k));
+        if (this.selection.size !== before) {
+            this.nodes = nodes;
+            this.announce();
+        }
 
         if (this.pendingSelect !== null) {
             const wanted = nodes.find(n => n.index === this.pendingSelect);
@@ -1038,13 +1060,27 @@ class GraphPanel extends Container {
 
             const move = (ev: PointerEvent) => draw(this.toStage(ev.clientX, ev.clientY));
 
-            const up = (ev: PointerEvent) => {
+            // the menus open in the window the graph is in, which is not the
+            // main one when the pane is detached
+            const doc = port.ownerDocument;
+
+            const finish = (ev: PointerEvent) => {
                 port.removeEventListener('pointermove', move);
+                // eslint-disable-next-line no-use-before-define
                 port.removeEventListener('pointerup', up);
+                // eslint-disable-next-line no-use-before-define
+                port.removeEventListener('pointercancel', cancel);
                 releasePointer(port, ev.pointerId);
                 link.remove();
                 ready.forEach(stud => stud.classList.remove('gn-port-ready'));
                 merging.forEach(el => el.classList.remove('gn-merge-ready'));
+            };
+
+            // a cancelled drag drops nothing
+            const cancel = (ev: PointerEvent) => finish(ev);
+
+            const up = (ev: PointerEvent) => {
+                finish(ev);
 
                 // released over a node with an input that takes this wire?
                 // then it goes in - an import node's dataset into a train node
@@ -1063,7 +1099,7 @@ class GraphPanel extends Container {
                 if (node.key instanceof DatasetOp) {
                     // released over nothing: offer what a dataset can feed,
                     // created at the drop point and wired up
-                    showContextMenu(document, ev.clientX, ev.clientY, [
+                    showContextMenu(doc, ev.clientX, ev.clientY, [
                         {
                             label: 'train',
                             action: () => {
@@ -1119,11 +1155,12 @@ class GraphPanel extends Container {
                 ] : [
                     { label: 'nothing attaches here', disabled: true, action: () => {} }
                 ];
-                showContextMenu(document, ev.clientX, ev.clientY, items);
+                showContextMenu(doc, ev.clientX, ev.clientY, items);
             };
 
             port.addEventListener('pointermove', move);
             port.addEventListener('pointerup', up);
+            port.addEventListener('pointercancel', cancel);
             capturePointer(port, e.pointerId);
         });
     }
@@ -1149,10 +1186,12 @@ class GraphPanel extends Container {
             // pressing an unselected node selects it, so a drag moves what you
             // pressed. Pressing one already in the selection leaves the group
             // alone, so a drag can move several at once.
+            // Without a rebuild: a rebuild would replace this element, and
+            // the drag and the click below are bound to it.
             if (!this.selection.has(node.key)) {
-                this.setSelection(extend ? [...this.selection, node.key] : [node.key]);
+                this.setSelectionInPlace(extend ? [...this.selection, node.key] : [node.key]);
             } else if (extend) {
-                this.setSelection([...this.selection].filter(k => k !== node.key));
+                this.setSelectionInPlace([...this.selection].filter(k => k !== node.key));
                 return;
             }
 
@@ -1176,16 +1215,22 @@ class GraphPanel extends Container {
                 this.repositionDrawn();
             };
 
-            const up = (ev: PointerEvent) => {
+            const finish = (ev: PointerEvent) => {
                 el.removeEventListener('pointermove', move);
+                // eslint-disable-next-line no-use-before-define
                 el.removeEventListener('pointerup', up);
+                el.removeEventListener('pointercancel', finish);
                 releasePointer(el, ev.pointerId);
+            };
+
+            const up = (ev: PointerEvent) => {
+                finish(ev);
                 if (dragging) return;
 
                 // A press on a node already in the selection kept the group, so
                 // a drag could move all of it. Releasing without having dragged
                 // means it was a click after all, which picks out just this one.
-                if (!extend && this.selection.size > 1) this.setSelection([node.key]);
+                if (!extend && this.selection.size > 1) this.setSelectionInPlace([node.key]);
                 // a light node's lane is its light, which is selected as a
                 // light rather than as an object; a primitive's likewise
                 if (node.splat instanceof SceneLight) {
@@ -1201,6 +1246,7 @@ class GraphPanel extends Container {
             // never listens is worse than a drag that leaves the element
             el.addEventListener('pointermove', move);
             el.addEventListener('pointerup', up);
+            el.addEventListener('pointercancel', finish);
             capturePointer(el, e.pointerId);
         });
     }
