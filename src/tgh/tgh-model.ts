@@ -30,6 +30,9 @@ const QUAT = new Float32Array(4);
 type TghMeta = {
     frames: number | null;
     fps: number | null;
+    // world up axis: OpenCV / COLMAP captures are -Y up, renders from
+    // Blender and the like are +Z up
+    zUp: boolean;
 };
 
 // what a model is built from: the per-gaussian tensors, flat row-major,
@@ -83,6 +86,56 @@ const toI32 = (a: NpyData, name: string): Int32Array => {
     throw new Error(`Expected integer data for ${name}`);
 };
 
+// the tensors' shapes and the hierarchy, checked before anything indexes
+// them: a short tensor or a stray level would otherwise surface as a
+// TypeError deep in the constructor, or as garbage in the frames
+const checkTensors = (init: TghTensors) => {
+    const N = init.t.length;
+    const sized = (name: string, a: ArrayLike<number> | undefined, per: number) => {
+        if (a && a.length !== N * per) {
+            throw new Error(`TGH: ${name} holds ${a.length} values, expected ${N * per}`);
+        }
+    };
+    sized('xyz', init.xyz, 3);
+    sized('scaling', init.scaling, 3);
+    sized('scaling_t', init.scalingT, 1);
+    sized('opacity', init.opacity, 1);
+    sized('features_dc', init.featuresDc, 3);
+    sized('level', init.level, 1);
+    sized('segment', init.segment, 1);
+    sized('velocity', init.velocity, 3);
+    sized('rot3', init.rot3, 4);
+    if (init.velocity && init.rot3) {
+        // the motion form leaves the 4D rotations empty
+        if (init.rotL.length) sized('rotation_l', init.rotL, 4);
+        if (init.rotR.length) sized('rotation_r', init.rotR, 4);
+    } else if (init.velocity || init.rot3) {
+        throw new Error('TGH: the motion form needs both velocity and rot3');
+    } else {
+        sized('rotation_l', init.rotL, 4);
+        sized('rotation_r', init.rotR, 4);
+    }
+    if (N > 0 && init.featuresRest.length % (N * 3) !== 0) {
+        throw new Error(`TGH: features_rest holds ${init.featuresRest.length} values, not a multiple of ${N * 3}`);
+    }
+
+    const numLevels = init.segLen.length;
+    for (let l = 0; l < numLevels; l++) {
+        if (!(init.segLen[l] > 0) || !Number.isFinite(init.segLen[l])) {
+            throw new Error(`TGH: segment length ${init.segLen[l]} at level ${l}`);
+        }
+    }
+    for (let i = 0; i < N; i++) {
+        const level = init.level[i];
+        if (level !== GLOBAL_LEVEL && !(level >= 0 && level < numLevels)) {
+            throw new Error(`TGH: gaussian ${i} is on level ${level}, of ${numLevels}`);
+        }
+        if (level !== GLOBAL_LEVEL && init.segment[i] < 0) {
+            throw new Error(`TGH: gaussian ${i} is in segment ${init.segment[i]}`);
+        }
+    }
+};
+
 class TghModel {
     // total 4D gaussians in the model
     readonly numSplats: number;
@@ -115,6 +168,7 @@ class TghModel {
     private segmentRows: Map<number, Uint32Array>[];
 
     private constructor(init: TghTensors) {
+        checkTensors(init);
         const N = init.t.length;
         this.numSplats = N;
         this.restCoeffs = N ? init.featuresRest.length / N / 3 : 0;
@@ -329,13 +383,14 @@ class TghModel {
             const g = (name: string) => read('gaussians', name);
             const h = (name: string) => read('hierarchy', name);
 
-            let meta: TghMeta = { frames: null, fps: null };
+            let meta: TghMeta = { frames: null, fps: null, zUp: false };
             const metaKey = keys.find(k => k === 'volulab.meta');
             if (metaKey) {
                 const m = toF32((await npz.read(metaKey)).data, metaKey);
                 meta = {
                     frames: m.length > 0 && m[0] > 0 ? Math.round(m[0]) : null,
-                    fps: m.length > 1 && m[1] > 0 ? m[1] : null
+                    fps: m.length > 1 && m[1] > 0 ? m[1] : null,
+                    zUp: m.length > 2 && m[2] === 1
                 };
             }
 

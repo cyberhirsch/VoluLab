@@ -1,5 +1,6 @@
 import { Mat4, Texture, Vec4 } from 'playcanvas';
 
+import { drawnAt, dropAbsent, moveCenters } from './data-processor/motion-centers';
 import { IndexRanges } from './index-ranges';
 import { Splat } from './splat';
 
@@ -171,10 +172,17 @@ const rasterizePoly = (query: PolyQuery, splat: Splat): Texture => {
  *
  * The test must be called with strictly increasing i, which is what
  * IndexRanges.fromPredicate does.
+ *
+ * A 4D model is queried as drawn at `time`: centres moved there, and only
+ * the gaussians alive then can be hit. Omitted, the time shown; a selection
+ * passes the time it was made at, so a replay catches what the gesture did.
+ * Null queries every gaussian at its temporal centre, whenever that is.
  */
-export const resolveHits = async (splat: Splat, query: SelectQuery): Promise<(i: number) => boolean> => {
+export const resolveHits = async (splat: Splat, query: SelectQuery, time?: number | null): Promise<(i: number) => boolean> => {
     const { scene, splatData } = splat;
     const numSplats = splatData.numSplats;
+    const at = time === undefined ? splat.motionTime : time;
+    const moving = !!splat.motion && at !== null;
 
     if (query.kind === 'frozen') {
         // a stored set belongs to the data it was taken from
@@ -192,8 +200,11 @@ export const resolveHits = async (splat: Splat, query: SelectQuery): Promise<(i:
             return () => false;
         }
         const { ref, threshold } = query;
+        // a 4D model's gaussians of other moments are not there to match
+        const drawn = moving ? drawnAt(splat, at) : null;
         return (i: number) => {
-            return Math.abs(decodeColorChannel(reds[i]) - ref.r) <= threshold &&
+            return (!drawn || drawn[i] === 1) &&
+                Math.abs(decodeColorChannel(reds[i]) - ref.r) <= threshold &&
                 Math.abs(decodeColorChannel(greens[i]) - ref.g) <= threshold &&
                 Math.abs(decodeColorChannel(blues[i]) - ref.b) <= threshold;
         };
@@ -206,6 +217,12 @@ export const resolveHits = async (splat: Splat, query: SelectQuery): Promise<(i:
         const y = splatData.getProp('y') as Float32Array;
         const z = splatData.getProp('z') as Float32Array;
         const { width, height } = scene.targetSize;
+
+        // a 4D model's centres, moved to the time
+        const moved = moving ? new Float32Array(numSplats * 4) : null;
+        if (moved) {
+            moveCenters(splat, at, moved, false);
+        }
         const sx = query.point.x * width;
         const sy = query.point.y * height;
 
@@ -213,13 +230,20 @@ export const resolveHits = async (splat: Splat, query: SelectQuery): Promise<(i:
 
         const hits = new Uint8Array(numSplats);
         for (let i = 0; i < numSplats; i++) {
-            vec4.set(x[i], y[i], z[i], 1.0);
+            if (moved) {
+                vec4.set(moved[i * 4], moved[i * 4 + 1], moved[i * 4 + 2], 1.0);
+            } else {
+                vec4.set(x[i], y[i], z[i], 1.0);
+            }
             mat.transformVec4(vec4, vec4);
             const px = (vec4.x / vec4.w * 0.5 + 0.5) * width;
             const py = (-vec4.y / vec4.w * 0.5 + 0.5) * height;
             if (Math.abs(px - sx) < query.size && Math.abs(py - sy) < query.size) {
                 hits[i] = 255;
             }
+        }
+        if (moving) {
+            dropAbsent(splat, at, hits);
         }
         return (i: number) => hits[i] === 255;
     }
@@ -237,6 +261,9 @@ export const resolveHits = async (splat: Splat, query: SelectQuery): Promise<(i:
             rangeStart: query.rangeStart,
             rangeEnd: query.rangeEnd
         };
+        if (moving) {
+            options.time = at;
+        }
         if (query.onScreenOnly) {
             options.viewProjection = new Mat4().mul2(cam.projectionMatrix, cam.viewMatrix);
             options.onScreenOnly = true;
@@ -248,7 +275,7 @@ export const resolveHits = async (splat: Splat, query: SelectQuery): Promise<(i:
     }
 
     // the rest go through the intersection shader on the gpu
-    const options: any = {};
+    const options: any = { time: splat.motion ? at : undefined };
     switch (query.kind) {
         case 'sphere':
             options.sphere = { transform: query.transform };

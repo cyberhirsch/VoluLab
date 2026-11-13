@@ -17,6 +17,7 @@ import {
 import { BufferPool } from './buffer-pool';
 import { gradeMatrix } from '../color-grade';
 import { packedMaskHeight, packedMaskWidth } from './histogram-config';
+import { MotionCenters, dropAbsent } from './motion-centers';
 import { vertexShader, fragmentShader } from '../shaders/select-by-range-shader';
 import { Splat } from '../splat';
 
@@ -37,6 +38,8 @@ type SelectByRangeOptions = {
     viewProjection?: Mat4;
     cameraPos?: Vec3;
     onScreenOnly?: boolean;
+    // a 4D model as drawn at this time (see Intersect); omitted, the time shown
+    time?: number;
 };
 
 const resolve = (scope: ScopeSpace, values: any) => {
@@ -60,9 +63,11 @@ class SelectByRange {
     private shaders: Map<number, Shader> = new Map();
     private texture: Texture = null;
     private renderTarget: RenderTarget = null;
+    private motionCenters: MotionCenters;
 
-    constructor(device: GraphicsDevice) {
+    constructor(device: GraphicsDevice, motionCenters: MotionCenters) {
         this.device = device;
+        this.motionCenters = motionCenters;
     }
 
     private getShader(shBands: number): Shader {
@@ -123,7 +128,9 @@ class SelectByRange {
 
         const numSplats = splat.splatData.numSplats;
         const resource = splat.entity.gsplat.instance.resource as any;
-        const transformA = resource.getTexture('transformA');
+        // a 4D model's centres moved to the time, as Intersect does
+        const time = options.time ?? splat.motionTime;
+        const transformA = splat.motion ? this.motionCenters.at(splat, time) : resource.getTexture('transformA');
         const transformB = resource.getTexture('transformB');
         const splatColor = resource.getTexture('splatColor');
         const splatTransform = splat.transformTexture;
@@ -195,6 +202,10 @@ class SelectByRange {
             data: buffer,
             immediate: this.device.isWebGPU
         });
+
+        if (splat.motion) {
+            dropAbsent(splat, time, data as Uint8Array);
+        }
 
         return data as Uint8Array;
     }

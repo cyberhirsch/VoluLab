@@ -189,12 +189,14 @@ class CalcBound {
         };
     }
 
-    async run(splat: Splat, selectionBound: BoundingBox, localBound: BoundingBox): Promise<void> {
+    // centres: a stand-in for the resource's transformA - a 4D model's
+    // centres moved to some time (see MotionCenters)
+    async run(splat: Splat, selectionBound: BoundingBox, localBound: BoundingBox, centers?: Texture): Promise<void> {
         const device = splat.scene.graphicsDevice;
         const { scope } = device;
 
         const numSplats = splat.splatData.numSplats;
-        const transformA = (splat.entity.gsplat.instance.resource as any).getTexture('transformA');
+        const transformA = centers ?? (splat.entity.gsplat.instance.resource as any).getTexture('transformA');
         const splatTransform = splat.transformTexture;
         const transformPalette = splat.transformPalette.texture;
         const splatState = splat.stateTexture;

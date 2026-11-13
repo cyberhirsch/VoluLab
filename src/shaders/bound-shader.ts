@@ -46,6 +46,12 @@ const fragmentShader = /* glsl */ `
             // read splat center
             vec3 center = uintBitsToFloat(texelFetch(transformA, splatUV, 0).xyz);
 
+            // a 4D model's gaussian not drawn at the time is put at infinity;
+            // skipped before the transform, which would turn it into NaN
+            if (all(isInf(center))) {
+                continue;
+            }
+
             // apply optional per-splat transform
             uint transformIndex = texelFetch(splatTransform, splatUV, 0).r;
             if (transformIndex > 0u) {

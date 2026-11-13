@@ -125,9 +125,10 @@ normally does not exist. Encoders MUST therefore place primitives needed at
 the final instant so that this case is covered: in the global block, or by
 writing the last segment as `[k · S_l, 1]` and flagging it `closed: true`.
 
-**Sampling.** A sequence of `N` frames samples frame `f` at
-`t = f / (N − 1)`. `meta.time.frames` and `meta.time.fps` give `N` and the
-playback rate.
+**Sampling.** A sequence of `N` frames samples frame `f` at `t = f / N`,
+as the training code does (EasyVolcap's `frame_to_t`), so the last frame
+sits one step short of `t = 1`. `meta.time.frames` and `meta.time.fps`
+give `N` and the playback rate.
 
 ## 6. Conditioning (normative)
 
@@ -379,6 +380,11 @@ the coarse levels cheaply and keeps the per-page overhead small.
   // optional 4 × 4 column-major matrix from file space to scene space
   "transform": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1],
 
+  // optional: the world up axis of file space. Absent, the capture
+  // convention of OpenCV / COLMAP (-Y up); "z" for +Z up (Blender and
+  // the like)
+  "space": { "up": "z" },
+
   "sh": { "bands": 3 },          // 0..3, so K = 0, 3, 8 or 15
 
   // shared by every page with encoding "webp"
@@ -452,6 +458,9 @@ Rules:
   lifetimes overlap, so a player fetching the pages for a time window
   fetches little it does not need.
 - Paths in `pages` resolve to `<id>/<texture>` or `<id>/<buffer>`.
+- `space.up` only tells a viewer how to stand the scene upright; it does
+  not change how primitives are decoded or conditioned. The only value
+  defined is `"z"`; a reader treats any other, or its absence, as -Y up.
 - `extensionsUsed` and `extensionsRequired` work as in glTF: a reader MUST
   refuse a file that requires an extension it does not know, and MAY
   ignore one that is only used.

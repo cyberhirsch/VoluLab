@@ -1,6 +1,6 @@
 import { ZipReadFileSystem } from '@playcanvas/splat-transform';
 
-import { decodePalette, decodeWebpPage, encodeWebpPages, MotionPage, WebpCodebooks, WebpPageInfo } from './gsv-webp';
+import { checkCodebooks, decodePalette, decodeWebpPage, encodeWebpPages, MotionPage, WebpCodebooks, WebpPageInfo } from './gsv-webp';
 import { TghModel } from './tgh-model';
 import { version } from '../../package.json';
 import { BlobReadSource } from '../io';
@@ -56,6 +56,7 @@ type GsvBlock = {
 type GsvMeta = {
     asset: { format: string, version: string, generator?: string };
     time?: { frames?: number, fps?: number, duration?: number };
+    space?: { up: 'z' };
     sh: { bands: number };
     codebooks?: WebpCodebooks;
     levels: number[];
@@ -68,6 +69,7 @@ type GsvMeta = {
 type GsvTimeline = {
     frames: number | null;
     fps: number | null;
+    zUp: boolean;
 };
 
 // the f32 buffers are little-endian; the typed arrays are the platform's
@@ -277,6 +279,7 @@ const writeGsv = async (model: TghModel, timeline: GsvTimeline, options: WriteOp
                 ...(timeline.fps ? { fps: timeline.fps } : {})
             }
         } : {}),
+        ...(timeline.zUp ? { space: { up: 'z' as const } } : {}),
         sh: { bands },
         ...(codebooks ? { codebooks } : {}),
         levels,
@@ -354,6 +357,40 @@ const readGsv = async (blob: Blob): Promise<TghModel> => {
         if (usesWebp && !meta.codebooks) {
             throw new Error('GSV: webp pages but no codebooks');
         }
+        if (usesWebp) {
+            checkCodebooks(meta.codebooks, K);
+        }
+
+        // the hierarchy and the blocks, before anything is decoded: a block
+        // that is not a whole run of rows inside its page would read garbage
+        if (!Array.isArray(meta.levels) || !meta.levels.every(len => Number.isFinite(len) && len > 0)) {
+            throw new Error('GSV: levels must be positive segment lengths');
+        }
+        for (const page of meta.pages) {
+            if (!Number.isInteger(page.count) || page.count < 0) {
+                throw new Error(`GSV page ${page.id}: count ${page.count}`);
+            }
+        }
+        for (const block of meta.blocks) {
+            const page = pages.get(block.page);
+            if (!page) {
+                throw new Error(`GSV: a block names page ${block.page}, which does not exist`);
+            }
+            if ('tiers' in block) {
+                throw new Error(`GSV: tiered blocks (page ${block.page}) are not supported yet`);
+            }
+            if (!Number.isInteger(block.start) || !Number.isInteger(block.count) ||
+                block.start < 0 || block.count < 0 || block.start + block.count > page.count) {
+                throw new Error(`GSV: a block lies outside page ${block.page}`);
+            }
+            if (block.level !== GLOBAL_LEVEL && !(Number.isInteger(block.level) && block.level >= 0 && block.level < meta.levels.length)) {
+                throw new Error(`GSV: a block names level ${block.level}, of ${meta.levels.length}`);
+            }
+            if (block.segment !== undefined && !(Number.isInteger(block.segment) && block.segment >= 0)) {
+                throw new Error(`GSV: a block names segment ${block.segment}`);
+            }
+        }
+
         const palette = usesWebp ? await decodePalette(read, meta.codebooks, K) : null;
 
         const N = meta.blocks.reduce((sum, b) => sum + b.count, 0);
@@ -397,13 +434,6 @@ const readGsv = async (blob: Blob): Promise<TghModel> => {
 
         let n = 0;
         for (const block of meta.blocks) {
-            const page = pages.get(block.page);
-            if (!page || block.start < 0 || block.start + block.count > page.count) {
-                throw new Error(`GSV: a block lies outside page ${block.page}`);
-            }
-            if (block.level !== GLOBAL_LEVEL && !(block.level >= 0 && block.level < meta.levels.length)) {
-                throw new Error(`GSV: a block names level ${block.level}, of ${meta.levels.length}`);
-            }
             const d = await pageData(block.page);
             for (let i = block.start; i < block.start + block.count; i++, n++) {
                 xyz[n * 3] = d.mean[i * 4];
@@ -446,7 +476,8 @@ const readGsv = async (blob: Blob): Promise<TghModel> => {
             segLen: Float64Array.from(meta.levels),
             meta: {
                 frames: meta.time?.frames ?? null,
-                fps: meta.time?.fps ?? null
+                fps: meta.time?.fps ?? null,
+                zUp: meta.space?.up === 'z'
             }
         });
     } finally {

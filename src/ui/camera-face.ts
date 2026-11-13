@@ -1,4 +1,5 @@
 import { Container } from '@playcanvas/pcui';
+import { Vec3 } from 'playcanvas';
 
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
@@ -157,12 +158,28 @@ class CameraFace extends Container {
         const bound = selection?.worldBound;
         if (!bound) return;
 
+        // a 4D model's world bound holds the whole sequence: focus on what
+        // is drawn at the time shown, measured in the queue
+        if (selection.motion) {
+            const op = this.op;
+            this.events.invoke('queue', async () => {
+                if (!selection.scene || this.op !== op) return;
+                const { shown } = await selection.shownBounds();
+                this.focusAt(selection.worldTransform.transformPoint(shown.center, new Vec3()));
+            });
+            return;
+        }
+
+        this.focusAt(bound.center);
+    }
+
+    private focusAt(center: Vec3) {
         const pose = this.events.invoke('camera.getPose');
         if (!pose) return;
 
-        const dx = bound.center.x - pose.position.x;
-        const dy = bound.center.y - pose.position.y;
-        const dz = bound.center.z - pose.position.z;
+        const dx = center.x - pose.position.x;
+        const dy = center.y - pose.position.y;
+        const dz = center.z - pose.position.z;
         const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
         this.op.settings.focusDistance = Math.round(distance * 1000) / 1000;
         this.readOp();

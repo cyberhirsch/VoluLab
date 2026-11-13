@@ -44,6 +44,9 @@ type SplatMotion = {
     velocityTime: Float32Array;
     // 1 / (2 sigma_t^2)
     falloff: Float32Array;
+    // the active set at another time than the one shown, for a selection
+    // replayed at the time it was made (see MotionCenters)
+    activeAt?: (t: number) => Uint32Array | null;
 };
 
 const boundingPoints =
@@ -77,6 +80,12 @@ class Splat extends Element {
     gradeTexture: Texture;
     selectionBoundStorage: BoundingBox;
     localBoundStorage: BoundingBox;
+    // what is drawn now: for a 4D model, at the time shown, while
+    // localBound covers the whole sequence; otherwise the same as localBound
+    shownBoundStorage = new BoundingBox();
+    // the time and active set selectionBound and shownBound were measured at
+    private boundsTime = NaN;
+    private boundsActive: Uint32Array | null = null;
     worldBoundStorage: BoundingBox;
 
     _visible = true;
@@ -128,6 +137,13 @@ class Splat extends Element {
     // the sort mapping for motionActive, kept until the active set or the
     // deletions change - between TGH segment boundaries only centres move
     private motionMapping: Uint32Array | null = null;
+    // after the active set changes, the sorter still hands back orders of
+    // the old set for a result or two; drawing those at the new time shows
+    // gaussians outside the segment they were trained in. motionTime goes to
+    // the shader only once a sort is of the new set (see newRows)
+    private motionAwait: Uint8Array | null = null;
+    private motionAwaitAdded = false;
+    private motionAwaitResults = 0;
 
     constructor(asset: Asset, rotation: Quat) {
         super(ElementType.splat);
@@ -270,6 +286,13 @@ class Splat extends Element {
         // when sort changes, re-render the scene
         instance.sorter.on('updated', () => {
             this.changedCounter++;
+            if (this.motion && this.motionMapping?.length === 0) {
+                // nothing is alive at motionTime; the worker does not sort
+                // an empty set, so any result still arriving is of an older one
+                instance.sorter.pendingSorted.count = 0;
+            } else if (this.motionAwait) {
+                this.checkMotionSort(instance.sorter);
+            }
         });
     }
 
@@ -389,7 +412,11 @@ class Splat extends Element {
         this.motion = motion;
         this.motionTexture = texture('splatMotion', PIXELFORMAT_RGBA32F, motion.velocityTime, 4);
         this.falloffTexture = texture('splatFalloff', PIXELFORMAT_R32F, motion.falloff, 1);
-        this.rebuildMaterial(this.scene.events.invoke('view.bands'));
+        // set before the splat is added (sequence.ts does, so it is never
+        // drawn without its motion), add() builds the material instead
+        if (this.scene) {
+            this.rebuildMaterial(this.scene.events.invoke('view.bands'));
+        }
     }
 
     /**
@@ -400,13 +427,74 @@ class Splat extends Element {
     showTime(t: number, active: Uint32Array | null) {
         if (active !== this.motionActive) {
             this.motionMapping = null;
+            this.motionAwait = this.newRows(this.motionActive, active);
+            this.motionAwaitResults = 0;
         }
         this.motionTime = t;
         this.motionActive = active;
-        this.entity.gsplat.instance.material.setParameter('motionTime', t);
+        if (!this.motionAwait) {
+            this.entity.gsplat.instance.material.setParameter('motionTime', t);
+        }
         this.sortMotion();
         this.changedCounter++;
-        this.scene.forceRender = true;
+        if (this.scene) {
+            this.scene.forceRender = true;
+        }
+    }
+
+    // flags the rows of `prev` left out of `next` with 1, the rows of `next`
+    // new to it with 2 and the rows in both with 3; null when the set is the
+    // same. A new row already deleted is never sorted, so it is not waited
+    // for. Null for either set (all rows: only before the first showTime)
+    // needs no wait, the first sort of a splat being of its motion set
+    private newRows(prev: Uint32Array | null, next: Uint32Array | null) {
+        if (!prev || !next) {
+            return null;
+        }
+        const state = this.splatData.getProp('state') as Uint8Array;
+        const flags = new Uint8Array(this.splatData.numSplats);
+        for (let i = 0; i < prev.length; i++) {
+            flags[prev[i]] = 1;
+        }
+        let kept = 0;
+        let added = false;
+        for (let i = 0; i < next.length; i++) {
+            const n = next[i];
+            if (flags[n] === 1) {
+                flags[n] = 3;
+                kept++;
+            } else if ((state[n] & State.deleted) === 0) {
+                flags[n] = 2;
+                added = true;
+            }
+        }
+        this.motionAwaitAdded = added;
+        return (added || kept < prev.length) ? flags : null;
+    }
+
+    // release motionTime once the pending sort is of the new set: it draws
+    // no row the set dropped and, when rows were added, holds one. The whole
+    // sorted range is searched for those, culled or not, so the sort that
+    // showTime asked for always passes; the result count is only a backstop
+    private checkMotionSort(sorter: any) {
+        const pending = sorter.pendingSorted as { count: number, data: Uint32Array } | null;
+        if (!pending) {
+            return;
+        }
+        const flags = this.motionAwait;
+        const { count, data } = pending;
+        let found = !this.motionAwaitAdded;
+        const sorted = Math.min(this.motionMapping?.length ?? 0, data.length);
+        for (let i = 0; i < sorted && !found; i++) {
+            found = flags[data[i]] === 2;
+        }
+        for (let i = 0; i < count && found; i++) {
+            found = flags[data[i]] !== 1;
+        }
+        if (found || ++this.motionAwaitResults > 4) {
+            this.motionAwait = null;
+            this.entity.gsplat.instance.material.setParameter('motionTime', this.motionTime);
+        }
     }
 
     // hand the sorter the centres at motionTime of the gaussians alive then
@@ -447,6 +535,14 @@ class Splat extends Element {
             centers: centers.buffer,
             mapping: trimmed.buffer
         }, [centers.buffer, trimmed.buffer]);
+
+        // the worker returns nothing for an empty set, which would leave the
+        // last order drawn: draw nothing instead, at once
+        if (count === 0) {
+            sorter.pendingSorted = { count: 0, data: new Uint32Array(this.splatData.numSplats) };
+            this.motionAwait = null;
+            this.entity.gsplat.instance.material.setParameter('motionTime', t);
+        }
     }
 
     destroy() {
@@ -454,7 +550,12 @@ class Splat extends Element {
         this.motionTexture?.destroy();
         this.falloffTexture?.destroy();
         this.entity.destroy();
-        this.asset.registry.remove(this.asset);
+        this.stateTexture.destroy();
+        this.transformTexture.destroy();
+        this.gradeTexture.destroy();
+        this.transformPalette.texture.destroy();
+        this.gradePalette.texture.destroy();
+        this.asset.registry?.remove(this.asset);
         this.asset.unload();
     }
 
@@ -642,8 +743,17 @@ class Splat extends Element {
             const { camera } = this.scene;
             const pxPerUnit = 0.5 * camera.mainTarget.width * camera.camera.projectionMatrix.data[0];
 
+            // the cap is set in viewport pixels; an offscreen render at
+            // another size scales it with the frame, along the axis the
+            // field of view is fixed on, so an export blurs as the view did
+            const view = this.scene.targetSize;
+            const target = camera.targetSize;
+            const fit = camera.camera.horizontalFov ?
+                target.width / Math.max(view.width, 1) :
+                target.height / Math.max(view.height, 1);
+
             material.setParameter('camExposure', Math.pow(2, cam.exposure));
-            material.setParameter('camDof', [cam.aperture, cam.focusDistance, cam.maxBlur, pxPerUnit]);
+            material.setParameter('camDof', [cam.aperture, cam.focusDistance, cam.maxBlur * fit, pxPerUnit]);
         }
 
         if (this.visible && selected) {
@@ -692,8 +802,29 @@ class Splat extends Element {
 
     // calculate both selection and local bounds (async, callers must await)
     async updateLocalBounds(): Promise<void> {
-        await this.scene.dataProcessor.calcBound(this, this.selectionBoundStorage, this.localBoundStorage);
+        const time = this.motionTime;
+        const active = this.motionActive;
+        await this.scene.dataProcessor.calcBound(this, this.selectionBoundStorage, this.localBoundStorage, this.shownBoundStorage);
+        this.boundsTime = time;
+        this.boundsActive = active;
         this.updateWorldBound();
+    }
+
+    /**
+     * The selection bound and the bound of what is drawn, local space, at the
+     * time shown. A 4D model's frame changes do not measure them - that would
+     * be a pass per frame of playback - so they are measured here, on demand,
+     * when the frame has changed since. Run it in the command queue.
+     */
+    async shownBounds(): Promise<{ selection: BoundingBox, shown: BoundingBox }> {
+        if (this.motion && (this.boundsTime !== this.motionTime || this.boundsActive !== this.motionActive)) {
+            const time = this.motionTime;
+            const active = this.motionActive;
+            await this.scene.dataProcessor.calcShownBound(this, this.selectionBoundStorage, this.shownBoundStorage);
+            this.boundsTime = time;
+            this.boundsActive = active;
+        }
+        return { selection: this.selectionBoundStorage, shown: this.shownBoundStorage };
     }
 
     // update world bound from local bound (synchronous)
@@ -702,12 +833,13 @@ class Splat extends Element {
         this.scene.boundDirty = true;
     }
 
-    // get the selection bound
+    // get the selection bound - for a 4D model, at the time of the last
+    // measure; shownBounds() brings it up to the time shown
     get selectionBound() {
         return this.selectionBoundStorage;
     }
 
-    // get local space bound
+    // get local space bound - for a 4D model, of the whole sequence
     get localBound() {
         return this.localBoundStorage;
     }

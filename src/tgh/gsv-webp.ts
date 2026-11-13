@@ -168,6 +168,9 @@ const packQuat = (q: Float32Array, i: number, out: Uint8Array, o: number) => {
 
 const unpackQuat = (tex: Uint8Array, o: number, out: Float32Array, i: number) => {
     const max = tex[o + 3] - 252;
+    if (max < 0) {
+        throw new Error(`GSV: rotation tag ${tex[o + 3]} names no component`);
+    }
     let sum = 0;
     for (let j = 0; j < 4; j++) out[i + j] = 0;
     for (let j = 0; j < 3; j++) {
@@ -281,21 +284,36 @@ const encodeWebpPages = async (pages: { id: string, data: MotionPage }[], K: num
         const velMins = [Infinity, Infinity, Infinity];
         const velMaxs = [-Infinity, -Infinity, -Infinity];
         let tLo = Infinity, tHi = -Infinity;
+        // a non-finite value is left out of the ranges, which it would
+        // otherwise make infinite, collapsing that axis for the whole page;
+        // it lands on the range's edge instead
         for (let i = 0; i < n; i++) {
             for (let a = 0; a < 3; a++) {
                 const v = logTransform(data.mean[i * 4 + a]);
-                if (v < mins[a]) mins[a] = v;
-                if (v > maxs[a]) maxs[a] = v;
+                if (Number.isFinite(v)) {
+                    if (v < mins[a]) mins[a] = v;
+                    if (v > maxs[a]) maxs[a] = v;
+                }
                 const u = logTransform(data.velocity[i * 3 + a]);
-                if (u < velMins[a]) velMins[a] = u;
-                if (u > velMaxs[a]) velMaxs[a] = u;
+                if (Number.isFinite(u)) {
+                    if (u < velMins[a]) velMins[a] = u;
+                    if (u > velMaxs[a]) velMaxs[a] = u;
+                }
             }
             const t = data.mean[i * 4 + 3];
-            if (t < tLo) tLo = t;
-            if (t > tHi) tHi = t;
+            if (Number.isFinite(t)) {
+                if (t < tLo) tLo = t;
+                if (t > tHi) tHi = t;
+            }
         }
-        if (n === 0) {
-            [mins, maxs, velMins, velMaxs].forEach(r => r.fill(0));
+        // an empty page, or an axis with no finite value
+        [mins, velMins].forEach(r => r.forEach((v, a) => {
+            if (!Number.isFinite(v)) r[a] = 0;
+        }));
+        [maxs, velMaxs].forEach((r, j) => r.forEach((v, a) => {
+            if (!Number.isFinite(v)) r[a] = (j ? velMins : mins)[a];
+        }));
+        if (!(tHi >= tLo)) {
             tLo = tHi = 0;
         }
 
@@ -368,6 +386,34 @@ const encodeWebpPages = async (pages: { id: string, data: MotionPage }[], K: num
 
 type ReadEntry = (name: string) => Promise<Uint8Array>;
 
+const finiteNumbers = (v: unknown, n: number) => {
+    return Array.isArray(v) && v.length === n && v.every(x => Number.isFinite(x));
+};
+
+/**
+ * Check meta.json's codebooks before any page is decoded: a short or
+ * non-numeric codebook would otherwise decode to NaN without a word.
+ */
+const checkCodebooks = (codebooks: WebpCodebooks, K: number) => {
+    const books: [string, unknown][] = [
+        ['scale', codebooks.scale],
+        ['timeScale', codebooks.timeScale],
+        ['colour', codebooks.colour]
+    ];
+    if (K > 0) {
+        books.push(['sh', codebooks.sh]);
+        const count = codebooks.shN?.count;
+        if (!Number.isInteger(count) || count < 1 || count > MAX_PALETTE || typeof codebooks.shN.file !== 'string') {
+            throw new Error('GSV: SH bands but no valid SH palette (codebooks.shN)');
+        }
+    }
+    for (const [name, book] of books) {
+        if (!finiteNumbers(book, CODEBOOK_SIZE)) {
+            throw new Error(`GSV: the ${name} codebook is not ${CODEBOOK_SIZE} numbers`);
+        }
+    }
+};
+
 /** The SH palette, decoded once for every page. */
 const decodePalette = async (read: ReadEntry, codebooks: WebpCodebooks, K: number) => {
     if (K === 0 || !codebooks.shN) return null;
@@ -379,6 +425,9 @@ const decodePalette = async (read: ReadEntry, codebooks: WebpCodebooks, K: numbe
     const shBook = Float32Array.from(codebooks.sh);
     const dim = 3 * K;
     const count = codebooks.shN.count;
+    if (rgba.length < Math.ceil(count / PALETTE_ROW) * width * 4) {
+        throw new Error(`GSV: SH palette holds fewer than its ${count} entries`);
+    }
     const palette = new Float32Array(count * dim);
     for (let c = 0; c < count; c++) {
         const row = Math.floor(c / PALETTE_ROW);
@@ -394,6 +443,15 @@ const decodePalette = async (read: ReadEntry, codebooks: WebpCodebooks, K: numbe
 };
 
 const decodeWebpPage = async (read: ReadEntry, id: string, count: number, page: WebpPageInfo, codebooks: WebpCodebooks, K: number, palette: Float32Array | null): Promise<MotionPage> => {
+    for (const [name, n] of [['mins', 3], ['maxs', 3], ['velMins', 3], ['velMaxs', 3], ['timeRange', 2]] as const) {
+        if (!finiteNumbers(page[name], n)) {
+            throw new Error(`GSV page ${id}: ${name} is not ${n} numbers`);
+        }
+    }
+    if (K > 0 && !palette) {
+        throw new Error(`GSV page ${id}: SH bands but no SH palette`);
+    }
+
     const codec = await WebPCodec.create();
     const tex = async (name: string) => {
         const { rgba, width, height } = codec.decodeRGBA(await read(`${id}/${name}`));
@@ -417,6 +475,7 @@ const decodeWebpPage = async (read: ReadEntry, id: string, count: number, page: 
     const colourBook = Float32Array.from(codebooks.colour);
     const shStride = 3 + 3 * K;
     const dim = 3 * K;
+    const paletteCount = palette ? palette.length / dim : 0;
     const [tLo, tHi] = page.timeRange;
 
     const data: MotionPage = {
@@ -455,10 +514,13 @@ const decodeWebpPage = async (read: ReadEntry, id: string, count: number, page: 
 
         if (shLabels && palette) {
             const label = shLabels[o] | (shLabels[o + 1] << 8);
+            if (label >= paletteCount) {
+                throw new Error(`GSV page ${id}: SH label ${label} past the palette's ${paletteCount} entries`);
+            }
             data.sh.set(palette.subarray(label * dim, (label + 1) * dim), i * shStride + 3);
         }
     }
     return data;
 };
 
-export { decodePalette, decodeWebpPage, encodeWebpPages, type MotionPage, type WebpCodebooks, type WebpPageInfo };
+export { checkCodebooks, decodePalette, decodeWebpPage, encodeWebpPages, type MotionPage, type WebpCodebooks, type WebpPageInfo };

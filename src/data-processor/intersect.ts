@@ -15,6 +15,7 @@ import {
 
 import { BufferPool } from './buffer-pool';
 import { packedMaskHeight, packedMaskWidth } from './histogram-config';
+import { MotionCenters, dropAbsent } from './motion-centers';
 import { vertexShader, fragmentShader } from '../shaders/intersection-shader';
 import { Splat } from '../splat';
 
@@ -49,7 +50,15 @@ type ViewOverride = {
     viewProjection?: Mat4;
 };
 
-type IntersectOptions = (MaskOptions | RectOptions | SphereOptions | BoxOptions | CylinderOptions) & ViewOverride;
+// A 4D model is tested as drawn at this time - the centres moved there, only
+// the gaussians alive then. Omitted, the time shown; a replayed selection
+// supplies the time it was made at. Null tests every gaussian at its temporal
+// centre, whenever that is - for a crop, which acts on the whole sequence.
+type TimeOverride = {
+    time?: number | null;
+};
+
+type IntersectOptions = (MaskOptions | RectOptions | SphereOptions | BoxOptions | CylinderOptions) & ViewOverride & TimeOverride;
 
 const shapeInvMat = new Mat4();
 const identityMat = new Mat4();
@@ -67,9 +76,11 @@ class Intersect {
     private shader: Shader = null;
     private texture: Texture = null;
     private renderTarget: RenderTarget = null;
+    private motionCenters: MotionCenters;
 
-    constructor(device: GraphicsDevice) {
+    constructor(device: GraphicsDevice, motionCenters: MotionCenters) {
         this.device = device;
+        this.motionCenters = motionCenters;
         this.dummyTexture = new Texture(device, {
             width: 1,
             height: 1,
@@ -128,7 +139,14 @@ class Intersect {
         const { scope } = device;
 
         const numSplats = splat.splatData.numSplats;
-        const transformA = (splat.entity.gsplat.instance.resource as any).getTexture('transformA');
+        // a 4D model's transformA holds its gaussians at their temporal
+        // centres; the shader only reads xyz, so centres moved to the time
+        // stand in
+        const time = options.time === undefined ? splat.motionTime : options.time;
+        const moving = !!splat.motion && time !== null;
+        const transformA = moving ?
+            this.motionCenters.at(splat, time) :
+            (splat.entity.gsplat.instance.resource as any).getTexture('transformA');
         const splatTransform = splat.transformTexture;
         const transformPalette = splat.transformPalette.texture;
 
@@ -223,6 +241,12 @@ class Intersect {
             data: buffer,
             immediate: this.device.isWebGPU
         });
+
+        // a 4D model hits only what is drawn at the time: gaussians in the
+        // active set that have not faded out (the splat shader's 1/255 cut)
+        if (moving) {
+            dropAbsent(splat, time, data as Uint8Array);
+        }
 
         return data as Uint8Array;
     }

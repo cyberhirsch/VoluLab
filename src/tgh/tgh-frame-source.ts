@@ -23,9 +23,9 @@ class TghFrameSource implements FrameSource {
     private scene: Scene;
     readonly name: string;
 
-    // splat files are Z-up like the model, so frames take the same 180
-    // degree flip about Z that the PLY import path applies
-    private rotation = new Quat().setFromEulerAngles(0, 0, 180);
+    // a -Y-up capture takes the 180 degree flip about Z that the PLY import
+    // path applies; a +Z-up world turns Z onto the engine's +Y instead
+    private rotation: Quat;
 
     // the per-gaussian motion for GPU playback, built with the rest frame
     private motion: SplatMotion | null = null;
@@ -35,6 +35,9 @@ class TghFrameSource implements FrameSource {
         this.frames = Math.max(1, Math.floor(frameCount));
         this.scene = scene;
         this.name = name;
+        this.rotation = model.meta.zUp ?
+            new Quat().setFromEulerAngles(-90, 0, 0) :
+            new Quat().setFromEulerAngles(0, 0, 180);
         if (gpu) {
             this.showFrame = this.showFrameGpu;
         }
@@ -42,9 +45,10 @@ class TghFrameSource implements FrameSource {
 
     showFrame?: (splat: Splat, index: number) => void;
 
-    // the training code samples frame f of N at t = f / (N - 1)
+    // EasyVolcap trains frame f of N at t = f / N (frame_to_t: the range
+    // plus one step), so the last frame sits one step short of t = 1
     private timeOf(index: number) {
-        return index / Math.max(this.frames - 1, 1);
+        return index / this.frames;
     }
 
     // the active set changes only where a TGH segment does: the same array
@@ -73,7 +77,11 @@ class TghFrameSource implements FrameSource {
         let frame;
         if (this.showFrame) {
             const rest = this.model.restFrame();
-            this.motion = { velocityTime: rest.velocityTime, falloff: rest.falloff };
+            this.motion = {
+                velocityTime: rest.velocityTime,
+                falloff: rest.falloff,
+                activeAt: t => this.model.activeIndices(t)
+            };
             frame = rest;
         } else {
             frame = this.model.evalFrame(this.timeOf(index));
