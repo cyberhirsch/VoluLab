@@ -395,7 +395,7 @@ class PointerController {
         this.update = (deltaTime: number) => {
             if (camera.controlMode !== 'fly') return;
 
-            // Fly mode: WASD for movement, Q/E for up/down - moves focal point
+            // Fly mode: WASD and Q/E move the focal point, relative to the view
             const forward = (flyForward ? 1 : 0) - (flyBackward ? 1 : 0);
             const strafe = (flyRight ? 1 : 0) - (flyLeft ? 1 : 0);
             const vertical = (flyUp ? 1 : 0) - (flyDown ? 1 : 0);
@@ -408,25 +408,24 @@ class PointerController {
 
                 moveVec.set(0, 0, 0);
 
-                // Forward/backward along horizontal forward direction (fixed Y)
+                // every axis is the view's own: W/S along the view direction,
+                // A/D along the camera's right, Q/E along its up. Looking
+                // down, W descends and E moves ahead over the ground.
+                // (Forward used to be flattened onto the ground plane, which
+                // left it undefined when looking straight down.)
                 if (forward) {
-                    const zAxis = worldTransform.getZ();
-                    zAxis.y = 0;
-                    zAxis.normalize();
+                    const zAxis = worldTransform.getZ().normalize();
                     moveVec.add(zAxis.mulScalar(-forward * factor));
                 }
 
-                // Strafe left/right (horizontal)
                 if (strafe) {
-                    const xAxis = worldTransform.getX();
-                    xAxis.y = 0;
-                    xAxis.normalize();
+                    const xAxis = worldTransform.getX().normalize();
                     moveVec.add(xAxis.mulScalar(strafe * factor));
                 }
 
-                // Up/down in world space
                 if (vertical) {
-                    moveVec.y += vertical * factor;
+                    const yAxis = worldTransform.getY().normalize();
+                    moveVec.add(yAxis.mulScalar(vertical * factor));
                 }
 
                 // Move the focal point (camera follows due to orbit calculation)
