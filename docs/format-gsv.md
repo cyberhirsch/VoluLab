@@ -95,6 +95,22 @@ scale, a single rotation. They are present at every `t` and are rendered
 as they are. A static gaussian costs about a third less than a 4D one, and
 static and dynamic content can then be edited independently.
 
+A static gaussian is what a 4D primitive that neither moves nor fades
+conditions to at every `t`: its conditional 3D covariance at its own
+place. A reader whose renderer only knows 4D primitives MAY therefore load
+one as a global primitive with zero velocity and a temporal scale so long
+that its lifetime falloff is 1 over the whole sequence. VoluLab does.
+
+**Choosing the static set (informative).** A model trained as 4D has no
+static set, only global primitives that happen to stand still. VoluLab's
+encoder moves a global primitive to the static set when, over the whole
+sequence, it drifts by less than a thousandth of its own thinnest extent
+(one standard deviation) and its lifetime falloff never falls below
+`1 - 1/510`, half an 8-bit opacity step. What falloff there is, averaged
+over the sequence, is folded into the opacity it is written with. On a
+two-layer capture (2.0M dynamic primitives over a 1.29M-gaussian
+background trained apart) that picked out exactly the background layer.
+
 ### 4.3 Temporal hierarchy
 
 The dynamic primitives are partitioned into blocks:
@@ -454,6 +470,9 @@ Rules:
 - Every dynamic primitive belongs to exactly one block; a block's rows are
   contiguous within one page, or, on a prefix-ordered page, within each
   tier. Its tier counts sum to its `count`.
+- A static page has no blocks, no `tMin` / `tMax` and, in `webp`, no
+  `timeRange`, `velMins` or `velMaxs`: all its rows are present at every
+  `t`. A block MUST NOT name a static page.
 - A page MAY hold several blocks. Encoders SHOULD group blocks whose
   lifetimes overlap, so a player fetching the pages for a time window
   fetches little it does not need.
@@ -528,9 +547,10 @@ any static format, PLY, SOG, SPZ or glTF.
 - **Hierarchy semantics** at `t = 1`: the `closed` flag is a proposal; the
   TGH training code's behaviour at the very last instant should be checked
   first.
-- **Static set from TGH.** TGH has no static set; whether to move
-  long-lived global primitives into it on export (and with what tolerance)
-  is an encoder choice to measure.
+- **Static set from TGH.** VoluLab's encoder now moves global primitives
+  that stand still into the static set (4.2). The tolerances are a first
+  choice, checked on one two-layer capture; a model trained in one piece,
+  where stillness is only approximate, has not been measured.
 - **Codebook scope.** File-wide codebooks keep pages small but force a
   writer to see all data before writing; per-page codebooks would allow
   writing a live capture as it arrives.

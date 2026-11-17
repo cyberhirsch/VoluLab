@@ -28,13 +28,17 @@ type MotionPage = {
     sh: Float32Array;           // N x (3 + 3K): dc, then each rest coefficient's r, g, b
 };
 
+// a static page (plain 3D gaussians) has no time and no velocity: it is
+// passed with `isStatic`, and the t, temporal scale and velocity of its
+// MotionPage are ignored on the way in and left at zero on the way out
 type WebpPageInfo = {
     width: number;
     mins: number[];
     maxs: number[];
-    timeRange: [number, number];
-    velMins: number[];
-    velMaxs: number[];
+    // dynamic pages only
+    timeRange?: [number, number];
+    velMins?: number[];
+    velMaxs?: number[];
 };
 
 type WebpCodebooks = {
@@ -198,7 +202,7 @@ type EncodeOptions = {
  * Encode every page. Codebooks and the SH palette are fitted on all pages
  * together, so this sees the whole model before it writes anything.
  */
-const encodeWebpPages = async (pages: { id: string, data: MotionPage }[], K: number, options: EncodeOptions) => {
+const encodeWebpPages = async (pages: { id: string, data: MotionPage, isStatic?: boolean }[], K: number, options: EncodeOptions) => {
     const codec = await WebPCodec.create();
     const shStride = 3 + 3 * K;
     const total = pages.reduce((sum, p) => sum + p.data.opacity.length, 0);
@@ -208,20 +212,22 @@ const encodeWebpPages = async (pages: { id: string, data: MotionPage }[], K: num
     const temporal = new Float32Array(total);
     const colour = new Float32Array(total * 3);
     let at = 0;
-    for (const { data } of pages) {
+    let temporalCount = 0;
+    for (const { data, isStatic } of pages) {
         const n = data.opacity.length;
         for (let i = 0; i < n; i++, at++) {
             spatial[at * 3] = data.logScale[i * 4];
             spatial[at * 3 + 1] = data.logScale[i * 4 + 1];
             spatial[at * 3 + 2] = data.logScale[i * 4 + 2];
-            temporal[at] = data.logScale[i * 4 + 3];
+            // static gaussians have no temporal scale to fit the codebook to
+            if (!isStatic) temporal[temporalCount++] = data.logScale[i * 4 + 3];
             colour[at * 3] = data.sh[i * shStride];
             colour[at * 3 + 1] = data.sh[i * shStride + 1];
             colour[at * 3 + 2] = data.sh[i * shStride + 2];
         }
     }
     const scaleBook = uniformCodebook(spatial);
-    const timeScaleBook = codebook1d(temporal);
+    const timeScaleBook = temporalCount > 0 ? codebook1d(temporal.subarray(0, temporalCount)) : new Float32Array(CODEBOOK_SIZE);
     const colourBook = codebook1d(colour);
 
     const files: ZipEntry[] = [];
@@ -272,7 +278,7 @@ const encodeWebpPages = async (pages: { id: string, data: MotionPage }[], K: num
 
     const info = new Map<string, WebpPageInfo>();
     let labelAt = 0;
-    for (const { id, data } of pages) {
+    for (const { id, data, isStatic } of pages) {
         const n = data.opacity.length;
         const width = pageWidth(n);
         const height = Math.ceil(n / width);
@@ -294,13 +300,13 @@ const encodeWebpPages = async (pages: { id: string, data: MotionPage }[], K: num
                     if (v < mins[a]) mins[a] = v;
                     if (v > maxs[a]) maxs[a] = v;
                 }
-                const u = logTransform(data.velocity[i * 3 + a]);
+                const u = isStatic ? 0 : logTransform(data.velocity[i * 3 + a]);
                 if (Number.isFinite(u)) {
                     if (u < velMins[a]) velMins[a] = u;
                     if (u > velMaxs[a]) velMaxs[a] = u;
                 }
             }
-            const t = data.mean[i * 4 + 3];
+            const t = isStatic ? 0 : data.mean[i * 4 + 3];
             if (Number.isFinite(t)) {
                 if (t < tLo) tLo = t;
                 if (t > tHi) tHi = t;
@@ -321,8 +327,8 @@ const encodeWebpPages = async (pages: { id: string, data: MotionPage }[], K: num
         const meansU = new Uint8Array(texel);
         const scales = new Uint8Array(texel);
         const rot = new Uint8Array(texel);
-        const velL = new Uint8Array(texel);
-        const velU = new Uint8Array(texel);
+        const velL = isStatic ? null : new Uint8Array(texel);
+        const velU = isStatic ? null : new Uint8Array(texel);
         const sh0 = new Uint8Array(texel);
         const shLabels = labels ? new Uint8Array(texel) : null;
 
@@ -333,24 +339,27 @@ const encodeWebpPages = async (pages: { id: string, data: MotionPage }[], K: num
                 meansL[o + a] = q & 255;
                 meansU[o + a] = q >> 8;
             }
-            const qt = q16(data.mean[o + 3], tLo, tHi);
+            // a static page's alpha is unused; opaque, so no encoder drops the colour under it
+            const qt = isStatic ? 65535 : q16(data.mean[o + 3], tLo, tHi);
             meansL[o + 3] = qt & 255;
             meansU[o + 3] = qt >> 8;
 
             scales[o] = nearest(scaleBook, data.logScale[o]);
             scales[o + 1] = nearest(scaleBook, data.logScale[o + 1]);
             scales[o + 2] = nearest(scaleBook, data.logScale[o + 2]);
-            scales[o + 3] = nearest(timeScaleBook, data.logScale[o + 3]);
+            scales[o + 3] = isStatic ? 255 : nearest(timeScaleBook, data.logScale[o + 3]);
 
             packQuat(data.rot, o, rot, o);
 
-            for (let a = 0; a < 3; a++) {
-                const q = q16(logTransform(data.velocity[i * 3 + a]), velMins[a], velMaxs[a]);
-                velL[o + a] = q & 255;
-                velU[o + a] = q >> 8;
+            if (velL) {
+                for (let a = 0; a < 3; a++) {
+                    const q = q16(logTransform(data.velocity[i * 3 + a]), velMins[a], velMaxs[a]);
+                    velL[o + a] = q & 255;
+                    velU[o + a] = q >> 8;
+                }
+                velL[o + 3] = 255;
+                velU[o + 3] = 255;
             }
-            velL[o + 3] = 255;
-            velU[o + 3] = 255;
 
             sh0[o] = nearest(colourBook, data.sh[i * shStride]);
             sh0[o + 1] = nearest(colourBook, data.sh[i * shStride + 1]);
@@ -373,12 +382,14 @@ const encodeWebpPages = async (pages: { id: string, data: MotionPage }[], K: num
         encode('means_u.webp', meansU);
         encode('scales.webp', scales);
         encode('rot.webp', rot);
-        encode('vel_l.webp', velL);
-        encode('vel_u.webp', velU);
+        if (velL) {
+            encode('vel_l.webp', velL);
+            encode('vel_u.webp', velU);
+        }
         encode('sh0.webp', sh0);
         if (shLabels) encode('shN_labels.webp', shLabels);
 
-        info.set(id, { width, mins, maxs, timeRange: [tLo, tHi], velMins, velMaxs });
+        info.set(id, isStatic ? { width, mins, maxs } : { width, mins, maxs, timeRange: [tLo, tHi], velMins, velMaxs });
     }
 
     return { files, codebooks, info };
@@ -442,8 +453,11 @@ const decodePalette = async (read: ReadEntry, codebooks: WebpCodebooks, K: numbe
     return palette;
 };
 
-const decodeWebpPage = async (read: ReadEntry, id: string, count: number, page: WebpPageInfo, codebooks: WebpCodebooks, K: number, palette: Float32Array | null): Promise<MotionPage> => {
-    for (const [name, n] of [['mins', 3], ['maxs', 3], ['velMins', 3], ['velMaxs', 3], ['timeRange', 2]] as const) {
+const decodeWebpPage = async (read: ReadEntry, id: string, count: number, page: WebpPageInfo, codebooks: WebpCodebooks, K: number, palette: Float32Array | null, isStatic = false): Promise<MotionPage> => {
+    const ranges = isStatic ?
+        [['mins', 3], ['maxs', 3]] as const :
+        [['mins', 3], ['maxs', 3], ['velMins', 3], ['velMaxs', 3], ['timeRange', 2]] as const;
+    for (const [name, n] of ranges) {
         if (!finiteNumbers(page[name], n)) {
             throw new Error(`GSV page ${id}: ${name} is not ${n} numbers`);
         }
@@ -465,8 +479,8 @@ const decodeWebpPage = async (read: ReadEntry, id: string, count: number, page: 
     const meansU = await tex('means_u.webp');
     const scales = await tex('scales.webp');
     const rotTex = await tex('rot.webp');
-    const velL = await tex('vel_l.webp');
-    const velU = await tex('vel_u.webp');
+    const velL = isStatic ? null : await tex('vel_l.webp');
+    const velU = isStatic ? null : await tex('vel_u.webp');
     const sh0 = await tex('sh0.webp');
     const shLabels = K > 0 ? await tex('shN_labels.webp') : null;
 
@@ -476,7 +490,7 @@ const decodeWebpPage = async (read: ReadEntry, id: string, count: number, page: 
     const shStride = 3 + 3 * K;
     const dim = 3 * K;
     const paletteCount = palette ? palette.length / dim : 0;
-    const [tLo, tHi] = page.timeRange;
+    const [tLo, tHi] = isStatic ? [0, 0] : page.timeRange;
 
     const data: MotionPage = {
         mean: new Float32Array(count * 4),
@@ -493,18 +507,22 @@ const decodeWebpPage = async (read: ReadEntry, id: string, count: number, page: 
             const q = meansL[o + a] | (meansU[o + a] << 8);
             data.mean[o + a] = invLogTransform(page.mins[a] + (page.maxs[a] - page.mins[a]) * (q / 65535));
         }
-        const qt = meansL[o + 3] | (meansU[o + 3] << 8);
-        data.mean[o + 3] = tLo + (tHi - tLo) * (qt / 65535);
+        if (!isStatic) {
+            const qt = meansL[o + 3] | (meansU[o + 3] << 8);
+            data.mean[o + 3] = tLo + (tHi - tLo) * (qt / 65535);
+        }
 
         data.logScale[o] = scaleBook[scales[o]];
         data.logScale[o + 1] = scaleBook[scales[o + 1]];
         data.logScale[o + 2] = scaleBook[scales[o + 2]];
-        data.logScale[o + 3] = timeScaleBook[scales[o + 3]];
+        if (!isStatic) data.logScale[o + 3] = timeScaleBook[scales[o + 3]];
 
         unpackQuat(rotTex, o, data.rot, o);
-        for (let a = 0; a < 3; a++) {
-            const q = velL[o + a] | (velU[o + a] << 8);
-            data.velocity[i * 3 + a] = invLogTransform(page.velMins[a] + (page.velMaxs[a] - page.velMins[a]) * (q / 65535));
+        if (velL) {
+            for (let a = 0; a < 3; a++) {
+                const q = velL[o + a] | (velU[o + a] << 8);
+                data.velocity[i * 3 + a] = invLogTransform(page.velMins[a] + (page.velMaxs[a] - page.velMins[a]) * (q / 65535));
+            }
         }
 
         data.sh[i * shStride] = colourBook[sh0[o]];

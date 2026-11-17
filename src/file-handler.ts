@@ -379,8 +379,9 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
     events.function('tgh.canExportGsv', () => !!playingTgh());
 
     // encoding: 'webp' for the compact file, 'f32' for the lossless one;
-    // mortonOrder: false keeps the model's row order (webp), for comparing
-    events.function('tgh.exportGsv', async (encoding: 'f32' | 'webp' = 'webp', mortonOrder = true) => {
+    // mortonOrder: false keeps the model's row order (webp), for comparing;
+    // staticSet: false keeps the gaussians that stand still dynamic
+    events.function('tgh.exportGsv', async (encoding: 'f32' | 'webp' = 'webp', mortonOrder = true, staticSet = true) => {
         const source = playingTgh();
         if (!source) return;
 
@@ -417,7 +418,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 frames: source.frameCount,
                 fps: events.invoke('timeline.frameRate') ?? source.model.meta.fps,
                 zUp: source.model.meta.zUp
-            }, { encoding, device, mortonOrder });
+            }, { encoding, device, mortonOrder, staticSet });
             if (writable) {
                 await writable.write(bytes as BlobPart);
                 await writable.close();
