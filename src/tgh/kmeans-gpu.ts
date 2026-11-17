@@ -16,8 +16,9 @@
 const MAX_DIM = 48;
 const TILE = 64;
 
-// multiply-adds per dispatch, well inside a driver timeout on slow GPUs
-const WORK_PER_DISPATCH = 2e10;
+// multiply-adds per dispatch. At the 2.5e10 per second measured on an RTX
+// 3090, the earlier 2e10 took 0.8 s a dispatch, near the 2 s driver timeout
+const WORK_PER_DISPATCH = 4e9;
 
 const SHADER = /* wgsl */`
 struct Params { n: u32, k: u32, dim: u32, pad: u32 }
