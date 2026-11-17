@@ -456,6 +456,9 @@ const motionSortWorker = () => {
             t,
             order: order.buffer,
             count: lo,
+            // for whoever measures: the two runs' sizes and the time taken
+            still: stillEnd / 2,
+            moving: numMoving,
             sortTime: performance.now() - start
         }, [order.buffer]);
     };

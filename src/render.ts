@@ -503,11 +503,13 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                     // manually update the camera so position and rotation are correct
                     scene.camera.onUpdate(0);
 
-                    // A GPU-played model posts its new centres to its sort
-                    // worker on the frame change, and the worker sorts them
-                    // with the camera it holds then - so it gets this frame's
-                    // camera first, or the sort that lands is of the previous
-                    // frame's view
+                    // A GPU-played model asks its sort worker for the new
+                    // time on the frame change, with the camera its sorter
+                    // was last told - so it gets this frame's camera first,
+                    // or the sort that lands is of the previous frame's
+                    // view. (Its sorter's 'updated' only fires for the
+                    // newest request, so what is waited for below is never
+                    // an older sort arriving late.)
                     let moved = false;
                     if (!skipSort) {
                         const pos = scene.camera.position;

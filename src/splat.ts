@@ -346,9 +346,14 @@ class Splat extends Element {
             this.motionSorter.setDeleted(this.state.data, State.deleted);
         }
         this.motionSorter.show(this.motionTime);
-        // the instance tells its sorter the camera only when it has moved,
-        // and what it told so far went to the engine's worker
+        // The instance tells its sorter the camera only when it has moved,
+        // and only when it is drawn; what it told so far went to the
+        // engine's worker. Without a camera nothing is sorted, and without
+        // a sort nothing asks for a frame - so it is told again, now.
         (instance as any).lastCameraPosition.set(NaN, NaN, NaN);
+        if (this.scene) {
+            this.scene.forceRender = true;
+        }
     }
 
     // wait for the next scene render to complete, with a safety timeout so a
