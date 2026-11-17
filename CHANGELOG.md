@@ -9,6 +9,112 @@ months finds out why before they change it.
 
 ---
 
+## 4D models are sorted in a worker of their own
+
+Playing a large 4D model updated the picture five to eight times a
+second. Each frame the main thread rebuilt the centres of every active
+gaussian (34 ms at 1.9M, more than a frame has) and handed them to the
+engine's sort worker, which sorted all of them again - the background
+included, which is two thirds of the alley capture and never moves.
+
+The model's splat now has its own sort worker (`src/motion-sort.ts`) in
+the place of the engine's. It holds the model: centres at the temporal
+centres, velocities, and the hierarchy's blocks. A request is a time and
+a camera; the worker works out the active set and the centres itself, so
+a frame costs the main thread one message. It splits the set in two. The
+rows that stand still and are in every active set (global level) are
+sorted once per view direction and kept. The rows that move are sorted
+per request. Both runs are sorted by the same key, and merged by it, so
+the order drawn is what one sort of everything by that key gives - not a
+background layer with the moving part on top.
+
+For that the key function has to be the same at every time, which the
+engine's is not: it spreads its buckets by where this frame's centres
+are dense. Here the density comes from the rows at their temporal
+centres, the depth range from everywhere a row can be while it is drawn
+(the ends of its segment and of its fade), and an eighth of the buckets
+is spread evenly. A row outside that range is one the shader has faded
+out; its key is clamped.
+
+The sort itself is two passes over 1024 buckets instead of the engine's
+one pass over a million. That one misses the cache on every row, which
+was most of its time: with every row moving the new worker still sorts
+1.93M rows in 54 ms where the old round trip took 135.
+
+Each result carries the time it was sorted at. The shader gets that
+time when the order arrives (`Splat.shaderTime`), which keeps the rule
+that an order is only drawn at its own time, and replaces the check
+that guessed from the rows in an order whether it was the awaited one
+(`checkMotionSort`, its four-result backstop, the queue). One request
+is out at a time; a newer time or camera replaces the one waiting.
+
+Measured in headless Chrome with WebGPU on the RTX 3090 (the CPU is a
+2017 Threadripper, Chrome at idle priority), 30 fps timeline, before
+and after:
+
+| | alley .gsv, 3.30M rows | alley_s2_100.npz, 1.87M rows |
+|---|---|---|
+| still / moving rows of the active set | 1.29M / 0.63M | 1.31M / 0.22M |
+| main thread per frame asked for | 3.7 ms, 34 ms when a sort went out -> 0.02 ms | 2.8 ms, 30 ms -> 0.03 ms |
+| sort results per second, camera still | 7.4 -> 29.9 | 8.6 -> 29.8 |
+| the same, camera orbiting | 11.6 -> 20 | 11.4 -> 23 |
+| frames the picture is behind the playhead | 6.3 -> 1.0 | 5.6 -> 0.6 |
+| the same, camera orbiting | 8.0 -> 2.5 | 8.1 -> 2.2 |
+| requestAnimationFrame rate | 51 -> 60 | 51 -> 60 |
+| one sort in the worker | 22 ms, 48 ms after a turn | 18 ms, 42 ms after a turn |
+
+Traps:
+
+- **Still is not zero velocity.** The alley's background has a speed of
+  2.5e-5 on every row: the nearest value to zero its file's quantiser
+  has. Asking for zero found no still row at all. A global row counts as
+  still when everywhere it is drawn it stays within one key of where it
+  is at its temporal centre, a key being a 2^20th of the scene's box
+  diagonal (0.00017 of the alley's 175 units). It is sorted where its
+  temporal centre is. So the order is not exactly a sort of the true
+  centres: it can differ between rows closer than that in depth. With
+  every velocity exactly zero or above the threshold it is exact.
+- **The picture is not pixel-identical to the old sort's**, and cannot
+  be: both sorts are bucket sorts and the buckets differ. At six fixed
+  times and cameras, 960x540: 0.15 to 0.3 % of the pixels differ, by 28
+  of 255 at most, 67 to 75 dB. Against the true centres the new order
+  is the closer one: on the alley no gaussian that is not faded out
+  comes more than 0.0009 units before one it should follow, where the
+  engine's order had 0.011.
+- **An order is as large as the order texture, not as the row count.**
+  WebGL2 uploads it as the whole texture; one entry per row drew
+  nothing there. WebGPU did not mind.
+- **The sorter's `updated` fires only for the newest request.** A
+  result overtaken by a newer request still draws, but the video export
+  waits on `updated` for the sort of the frame it just set, and must
+  not get an older one arriving late.
+- **The sorter learns the camera from the instance, which tells it only
+  while the model is drawn.** No camera, no sort; no sort, no frame.
+  Replacing the sorter therefore forces a frame.
+- `Splat.motionTime` is the time asked for. `Splat.motionActive` is
+  worked out when read - playback never reads it - and `activeAt` must
+  hand back the same array while the set is the same: the relighter and
+  `MotionCenters` tell a change of set by it.
+- The worker has its own copy of the model, 36 bytes a row, and of the
+  state bytes once something is deleted.
+
+Checked on both files: every order holds exactly the active, undeleted
+rows, and draws exactly those in front of the camera, at six times and
+cameras, after play and pause, after deleting a fifth, after playing
+with them deleted and after undo. Play, pause, scrub and the loop's
+wrap end on the playhead's frame. A 30-frame export has 30 frames
+(ffprobe), each rendered at its own time. On the .gsv alone: the order
+after a transform's centre update, relighting following the frame, the
+debug view, the worker ending with its splat, a plain PLY and its
+deletions on the engine's sorter, and WebGL2, which gives the same
+numbers.
+
+Not done: with the camera turning, the still rows are sorted again for
+every result, and that is where the 20 per second comes from. The
+360 export of this model is black in headless Chrome, before this
+change as after; not looked into. A relit 4D model still rebuilds its
+grid on the main thread at every frame change (250 ms at 3.3M rows).
+
 ## Playback of 4D models no longer fades out
 
 Pressing play on a GPU-played 4D model made it fade away, and pausing
