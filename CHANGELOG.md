@@ -9,6 +9,58 @@ months finds out why before they change it.
 
 ---
 
+## Playback of 4D models no longer fades out
+
+Pressing play on a GPU-played 4D model made it fade away, and pausing
+brought it back. The shader's time only moves once a depth sort of the
+new active set has arrived (`Splat.checkMotionSort`), so that no gaussian
+is drawn outside the segment it was trained in. During playback the set
+changes every frame and a sort of a large model takes several, so the
+sorts arriving were always of an older set than the one being waited
+for: the time never moved, while the sets drawn moved on and faded
+against it.
+
+One set is in flight at a time now. A frame asked for while a sort is
+awaited is queued, the latest one winning, and goes out when that sort
+is in (`Splat.releaseMotion`). What is drawn is always one set at its
+own time. It runs behind the playhead by the sort time - five to seven
+frames at 30 fps on a 1.9M-gaussian model in a throttled headless
+browser - and frames in between are skipped.
+
+## GSV static pages
+
+The reader and writer handle the static set of the format (plain 3D
+gaussians, `kind: "static"`, both encodings).
+
+A TGH model has no static set, only global gaussians that happen to
+stand still. The writer moves a global gaussian to the static page when
+it drifts by less than a thousandth of its thinnest extent over the
+sequence and its lifetime falloff stays above `1 - 1/510`
+(`standsStill` in `tgh/gsv.ts`); the falloff there is, averaged over the
+sequence, is folded into its opacity. What is written is its conditional
+3D covariance, which is what was drawn all along. `staticSet: false`
+keeps everything dynamic.
+
+The reader brings a static page back as global gaussians with zero
+velocity, temporal centre 0.5 and a temporal std of 1e4, first in the
+model: the falloff is 1 to float precision, so the model code needs no
+static case. For the f32 form the 3D rotation `(w, x, y, z)` becomes the
+pair `l = (w, z, -y, x)`, `r = (w, z, -y, -x)`, whose 4D rotation leaves
+the time axis alone. Read back and written again, the static set
+survives unchanged.
+
+Measured on the two-layer alley capture (2.0M dynamic + 1.29M static):
+the writer picks out exactly the 1,293,354 background gaussians; after
+an f32 round trip positions and colours are identical, covariances agree
+to 8e-8 and alpha to 0.0008 (the folded falloff). The webp form was
+checked on a 1/40 subsample only (51.5 dB against the source, the usual
+palette loss): the full-size compact export lost the WebGPU device in
+headless Chrome, with or without a static set.
+
+The k-means dispatch budget went from 2e10 to 4e9 multiply-adds: at the
+measured 2.5e10 per second a dispatch took 0.8 s, near the 2 s driver
+timeout. That did not cure the device loss.
+
 ## Debug view node
 
 A node on an object's chain that draws its gaussians false-coloured by one
