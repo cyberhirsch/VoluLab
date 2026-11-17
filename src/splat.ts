@@ -21,6 +21,7 @@ import { gradeMatrix } from './color-grade';
 import { CameraSettings } from './edit-ops';
 import { Element, ElementType } from './element';
 import { GradePalette } from './grade-palette';
+import { MotionLayout, MotionSorter } from './motion-sort';
 import type { RelightSettings } from './relight/relighter';
 import { Serializer } from './serializer';
 import { vertexShader, fragmentShader, gsplatCenter, gsplatModify, vertexShaderWGSL, fragmentShaderWGSL, gsplatCenterWGSL, gsplatModifyWGSL } from './shaders/splat-shader';
@@ -45,9 +46,13 @@ type SplatMotion = {
     velocityTime: Float32Array;
     // 1 / (2 sigma_t^2)
     falloff: Float32Array;
-    // the active set at another time than the one shown, for a selection
-    // replayed at the time it was made (see MotionCenters)
+    // the rows in the active set at time t, or null for all of them. The
+    // same array for as long as the set is the same: what reads it tells a
+    // change of set by it (see Splat.motionActive, MotionCenters)
     activeAt?: (t: number) => Uint32Array | null;
+    // the same hierarchy as blocks of rows, for the sort worker, which
+    // works out the active set itself. Without it every row is always drawn
+    layout?: () => MotionLayout;
     // per row, the hierarchy level it is on (-1: the global set) and whether
     // it stands still for the whole sequence. Built when asked for: only the
     // debug view reads it
@@ -134,28 +139,17 @@ class Splat extends Element {
 
     // GPU playback of a 4D model, if this splat is one (see setMotion)
     motion: SplatMotion | null = null;
+    // the time asked for last. What is drawn follows within a sort
     motionTime = 0;
-    // the gaussians alive at motionTime, or null for all of them
-    motionActive: Uint32Array | null = null;
     private motionTexture: Texture | null = null;
     private falloffTexture: Texture | null = null;
-    // the sort mapping for motionActive, kept until the active set or the
-    // deletions change - between TGH segment boundaries only centres move
-    private motionMapping: Uint32Array | null = null;
-    // after the active set changes, the sorter still hands back orders of
-    // the old set for a result or two; drawing those at the new time shows
-    // gaussians outside the segment they were trained in. motionTime goes to
-    // the shader only once a sort is of the new set (see newRows)
-    private motionAwait: Uint8Array | null = null;
-    private motionAwaitAdded = false;
-    private motionAwaitResults = 0;
-    // the frame asked for while a sort of another set was still awaited.
-    // One set is in flight at a time: the check that releases motionTime
-    // compares a sort with the set it was asked for, and during playback
-    // the sets change faster than they sort. Asked for all at once, no
-    // result ever matched the newest set, the shader's time stood still and
-    // the model faded out until playback stopped.
-    private motionQueued: { t: number, active: Uint32Array | null } | null = null;
+    // sorts the model in a worker of its own (see motion-sort.ts)
+    private motionSorter: MotionSorter | null = null;
+    // the time of the order being drawn, which is the time the shader gets:
+    // an order is of the active set at its own time, and drawn at another
+    // time it shows gaussians outside the segment they were trained in.
+    // The sorter says which time each order is of
+    private shaderTime = 0;
 
     /**
      * The debug view nodes applied to this object, in the order of its
@@ -216,7 +210,7 @@ class Splat extends Element {
                 material.setDefine('SPLAT_MOTION', '');
                 material.setParameter('splatMotion', this.motionTexture);
                 material.setParameter('splatFalloff', this.falloffTexture);
-                material.setParameter('motionTime', this.motionTime);
+                material.setParameter('motionTime', this.shaderTime);
             }
 
             // the debug view: a define, so an object without one pays nothing
@@ -323,14 +317,38 @@ class Splat extends Element {
         // when sort changes, re-render the scene
         instance.sorter.on('updated', () => {
             this.changedCounter++;
-            if (this.motion && this.motionMapping?.length === 0) {
-                // nothing is alive at motionTime; the worker does not sort
-                // an empty set, so any result still arriving is of an older one
-                instance.sorter.pendingSorted.count = 0;
-            } else if (this.motionAwait) {
-                this.checkMotionSort(instance.sorter);
-            }
         });
+
+        // a 4D model whose data was swapped: the new instance has the
+        // engine's sort worker again
+        if (this.motion) {
+            this.attachMotionSorter();
+        }
+    }
+
+    // put the model's own sort worker in the place of the engine's
+    private attachMotionSorter() {
+        const instance = this.entity.gsplat.instance;
+        const { sorter, material } = instance;
+        this.motionSorter?.destroy();
+        this.motionSorter = new MotionSorter(sorter, {
+            centers: sorter.centers,
+            velocityTime: this.motion.velocityTime,
+            falloff: this.motion.falloff,
+            layout: this.motion.layout?.() ?? null
+        }, (t) => {
+            // the order that draws next is of time t
+            this.shaderTime = t;
+            material.setParameter('motionTime', t);
+            this.changedCounter++;
+        });
+        if (this.state.numDeleted) {
+            this.motionSorter.setDeleted(this.state.data, State.deleted);
+        }
+        this.motionSorter.show(this.motionTime);
+        // the instance tells its sorter the camera only when it has moved,
+        // and what it told so far went to the engine's worker
+        (instance as any).lastCameraPosition.set(NaN, NaN, NaN);
     }
 
     // wait for the next scene render to complete, with a safety timeout so a
@@ -456,6 +474,7 @@ class Splat extends Element {
         this.motion = motion;
         this.motionTexture = texture('splatMotion', PIXELFORMAT_RGBA32F, motion.velocityTime, 4);
         this.falloffTexture = texture('splatFalloff', PIXELFORMAT_R32F, motion.falloff, 1);
+        this.attachMotionSorter();
         // a debug node asking for a motion channel had nothing to show until now
         if (this.debugViews.length) {
             this.debugTexture?.destroy();
@@ -470,148 +489,28 @@ class Splat extends Element {
     }
 
     /**
-     * Show the 4D model at normalised time t, drawing only the gaussians in
-     * `active` (null: all). The GPU moves and fades them; here the depth sort
-     * gets their centres at t, which is all the CPU does per frame.
+     * Show the 4D model at normalised time t. The GPU moves and fades the
+     * gaussians; the depth order at t comes from the sort worker, which
+     * holds the model, so a frame costs the main thread one message. The
+     * shader's time follows when that order is in (see shaderTime).
      */
-    showTime(t: number, active: Uint32Array | null) {
-        if (this.motionAwait) {
-            // a set is in flight: this frame waits, and the latest one wins
-            this.motionQueued = { t, active };
-            return;
-        }
-        if (active !== this.motionActive) {
-            this.motionMapping = null;
-            this.motionAwait = this.newRows(this.motionActive, active);
-            this.motionAwaitResults = 0;
-        }
+    showTime(t: number) {
         this.motionTime = t;
-        this.motionActive = active;
-        if (!this.motionAwait) {
-            this.entity.gsplat.instance.material.setParameter('motionTime', t);
-        }
-        this.sortMotion();
-        this.changedCounter++;
-        if (this.scene) {
-            this.scene.forceRender = true;
-        }
+        this.motionSorter.show(t);
     }
 
-    // flags the rows of `prev` left out of `next` with 1, the rows of `next`
-    // new to it with 2 and the rows in both with 3; null when the set is the
-    // same. A new row already deleted is never sorted, so it is not waited
-    // for. Null for either set (all rows: only before the first showTime)
-    // needs no wait, the first sort of a splat being of its motion set
-    private newRows(prev: Uint32Array | null, next: Uint32Array | null) {
-        if (!prev || !next) {
-            return null;
-        }
-        const state = this.splatData.getProp('state') as Uint8Array;
-        const flags = new Uint8Array(this.splatData.numSplats);
-        for (let i = 0; i < prev.length; i++) {
-            flags[prev[i]] = 1;
-        }
-        let kept = 0;
-        let added = false;
-        for (let i = 0; i < next.length; i++) {
-            const n = next[i];
-            if (flags[n] === 1) {
-                flags[n] = 3;
-                kept++;
-            } else if ((state[n] & State.deleted) === 0) {
-                flags[n] = 2;
-                added = true;
-            }
-        }
-        this.motionAwaitAdded = added;
-        return (added || kept < prev.length) ? flags : null;
-    }
-
-    // release motionTime once the pending sort is of the new set: it draws
-    // no row the set dropped and, when rows were added, holds one. The whole
-    // sorted range is searched for those, culled or not, so the sort that
-    // showTime asked for always passes; the result count is only a backstop
-    private checkMotionSort(sorter: any) {
-        const pending = sorter.pendingSorted as { count: number, data: Uint32Array } | null;
-        if (!pending) {
-            return;
-        }
-        const flags = this.motionAwait;
-        const { count, data } = pending;
-        let found = !this.motionAwaitAdded;
-        const sorted = Math.min(this.motionMapping?.length ?? 0, data.length);
-        for (let i = 0; i < sorted && !found; i++) {
-            found = flags[data[i]] === 2;
-        }
-        for (let i = 0; i < count && found; i++) {
-            found = flags[data[i]] !== 1;
-        }
-        if (found || ++this.motionAwaitResults > 4) {
-            this.releaseMotion();
-        }
-    }
-
-    // the awaited sort is in: the shader gets its time, and the frame that
-    // was asked for meanwhile goes out
-    private releaseMotion() {
-        this.motionAwait = null;
-        this.entity.gsplat.instance.material.setParameter('motionTime', this.motionTime);
-        const queued = this.motionQueued;
-        if (queued) {
-            this.motionQueued = null;
-            this.showTime(queued.t, queued.active);
-        }
-    }
-
-    // hand the sorter the centres at motionTime of the gaussians alive then
-    // and not deleted: its mapping both orders and limits what is drawn
-    private sortMotion() {
-        const { sorter } = this.entity.gsplat.instance;
-        const base: Float32Array = sorter.centers;
-        const vt = this.motion.velocityTime;
-        if (!this.motionMapping) {
-            const state = this.splatData.getProp('state') as Uint8Array;
-            const active = this.motionActive;
-            const total = active ? active.length : this.splatData.numSplats;
-            const all = new Uint32Array(total);
-            let kept = 0;
-            for (let i = 0; i < total; i++) {
-                const n = active ? active[i] : i;
-                if ((state[n] & State.deleted) === 0) {
-                    all[kept++] = n;
-                }
-            }
-            this.motionMapping = all.subarray(0, kept);
-        }
-        const mapping = this.motionMapping;
-        const count = mapping.length;
-        const centers = new Float32Array(count * 3);
-        const t = this.motionTime;
-        for (let i = 0; i < count; i++) {
-            const n = mapping[i];
-            const dt = t - vt[n * 4 + 3];
-            centers[i * 3] = base[n * 3] + vt[n * 4] * dt;
-            centers[i * 3 + 1] = base[n * 3 + 1] + vt[n * 4 + 1] * dt;
-            centers[i * 3 + 2] = base[n * 3 + 2] + vt[n * 4 + 2] * dt;
-        }
-        const trimmed = mapping.slice(0, count);
-        // the engine's setMapping takes centres from its own copy, which here
-        // are the gaussians' temporal centres - so the message goes direct
-        (sorter as any).worker.postMessage({
-            centers: centers.buffer,
-            mapping: trimmed.buffer
-        }, [centers.buffer, trimmed.buffer]);
-
-        // the worker returns nothing for an empty set, which would leave the
-        // last order drawn: draw nothing instead, at once
-        if (count === 0) {
-            sorter.pendingSorted = { count: 0, data: new Uint32Array(this.splatData.numSplats) };
-            this.releaseMotion();
-        }
+    /**
+     * The gaussians in the active set at motionTime, or null for all of
+     * them. Worked out when asked for - playback alone never asks - and the
+     * same array until the set changes.
+     */
+    get motionActive(): Uint32Array | null {
+        return this.motion?.activeAt ? this.motion.activeAt(this.motionTime) : null;
     }
 
     destroy() {
         super.destroy();
+        this.motionSorter?.destroy();
         this.motionTexture?.destroy();
         this.falloffTexture?.destroy();
         this.debugTexture?.destroy();
@@ -717,6 +616,7 @@ class Splat extends Element {
                 centers[i * 3 + 2] = data[i * 4 + 2];
             }
         }
+        this.motionSorter?.setCenters(centers);
 
         await this.updateSorting();
 
@@ -727,24 +627,24 @@ class Splat extends Element {
     async updateSorting() {
         const state = this.splatData.getProp('state') as Uint8Array;
 
-        let mapping;
+        if (this.motionSorter) {
+            // a 4D model's sort worker leaves the deleted rows out itself
+            this.motionSorter.setDeleted(this.numSplats !== state.length ? state : null, State.deleted);
+        } else {
+            let mapping;
 
-        // create a sorter mapping to remove deleted splats
-        if (this.numSplats !== state.length) {
-            mapping = new Uint32Array(this.numSplats);
-            let idx = 0;
-            for (let i = 0; i < state.length; ++i) {
-                if ((state[i] & State.deleted) === 0) {
-                    mapping[idx++] = i;
+            // create a sorter mapping to remove deleted splats
+            if (this.numSplats !== state.length) {
+                mapping = new Uint32Array(this.numSplats);
+                let idx = 0;
+                for (let i = 0; i < state.length; ++i) {
+                    if ((state[i] & State.deleted) === 0) {
+                        mapping[idx++] = i;
+                    }
                 }
             }
-        }
 
-        // update sorting instance
-        if (this.motion) {
-            this.motionMapping = null;
-            this.sortMotion();
-        } else {
+            // update sorting instance
             this.entity.gsplat.instance.sorter.setMapping(mapping);
         }
 

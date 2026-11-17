@@ -13,10 +13,10 @@ import { TghModel } from './tgh-model';
  * By default the model plays on the GPU: getFrame gives one asset holding
  * every gaussian at its temporal centre, and showFrame only sets the time -
  * the vertex shader moves and fades each gaussian, and the CPU work per
- * frame is the depth sort's centres. With `gpu` off, each frame is the
- * model conditioned on the CPU and built into an asset of its own, swapped
- * in by sequence.ts like any other sequence (seconds per frame at a
- * million gaussians).
+ * frame is the depth sort, in a worker (motion-sort.ts). With `gpu` off,
+ * each frame is the model conditioned on the CPU and built into an asset
+ * of its own, swapped in by sequence.ts like any other sequence (seconds
+ * per frame at a million gaussians).
  */
 class TghFrameSource implements FrameSource {
     readonly model: TghModel;
@@ -52,22 +52,31 @@ class TghFrameSource implements FrameSource {
         return index / this.frames;
     }
 
-    // the active set changes only where a TGH segment does: the same array
-    // is handed back until then, so the splat keeps its sort mapping
-    private activeKey = '';
-    private active: Uint32Array | null = null;
+    // The active set changes only where a TGH segment does: the same array
+    // is handed back until then, which is how its readers tell that the set
+    // is the same. Two are kept, the one shown and one more - a selection
+    // replayed at the time it was made asks for another time in between.
+    // Playback does not come through here: the sort worker has the blocks
+    // and works the set out itself.
+    private activeSets: { key: string, rows: Uint32Array }[] = [];
+
+    private activeAt(t: number) {
+        const key = Array.from(this.model.levels, len => Math.floor(t / len)).join(',');
+        const at = this.activeSets.findIndex(set => set.key === key);
+        if (at > 0) {
+            this.activeSets.unshift(...this.activeSets.splice(at, 1));
+        } else if (at < 0) {
+            this.activeSets.unshift({ key, rows: this.model.activeIndices(t) });
+            this.activeSets.length = Math.min(this.activeSets.length, 2);
+        }
+        return this.activeSets[0].rows;
+    }
 
     private showFrameGpu(splat: Splat, index: number) {
         if (!splat.motion) {
             splat.setMotion(this.motion);
         }
-        const t = this.timeOf(index);
-        const key = Array.from(this.model.levels, len => Math.floor(t / len)).join(',');
-        if (key !== this.activeKey) {
-            this.activeKey = key;
-            this.active = this.model.activeIndices(t);
-        }
-        splat.showTime(t, this.active);
+        splat.showTime(this.timeOf(index));
     }
 
     get frameCount() {
@@ -109,7 +118,8 @@ class TghFrameSource implements FrameSource {
             this.motion = {
                 velocityTime: rest.velocityTime,
                 falloff: rest.falloff,
-                activeAt: t => this.model.activeIndices(t),
+                activeAt: t => this.activeAt(t),
+                layout: () => ({ levels: this.model.levels, blocks: this.model.blocks() }),
                 hierarchy: () => this.hierarchy()
             };
             frame = rest;

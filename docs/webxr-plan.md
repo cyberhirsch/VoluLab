@@ -156,11 +156,9 @@ Frame passes and targets
 Sorting
 
 - One sort for both eyes is what the engine does and what we want.
-- 4D: every timeline frame, `sortMotion` computes the centres of the active
-  set on the main thread, allocates two new arrays and posts them to the
-  sort worker (`src/splat.ts:502-537`). On a Quest CPU with 300k active
-  gaussians this is main-thread time and garbage in the middle of the frame
-  budget. Move the centre evaluation into the worker.
+- 4D: done since this was written. The centres are worked out in the
+  model's own sort worker (`src/motion-sort.ts`); a timeline frame costs
+  the main thread one message, and nothing is allocated per frame.
 - The sort is asynchronous, so the order lags the head by one or more
   frames. With fast head motion this shows as popping. Known for all CPU
   sorted viewers ([GaussianSplats3D README](https://github.com/mkkellogg/GaussianSplats3D)).
