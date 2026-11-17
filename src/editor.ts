@@ -5,7 +5,7 @@ import { registerCameraEffects } from './camera-effects';
 import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
+import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -21,6 +21,7 @@ import { SceneLight } from './scene-light';
 import { PrimitiveKind, ScenePrimitive } from './scene-primitive';
 import { RangeQuery, SelectQuery, ShapeQuery } from './select-query';
 import { Splat } from './splat';
+import { DEBUG_CHANNELS, DebugChannel, defaultDebugChannel } from './splat-debug';
 import { writeSplatFile } from './splat-serialize';
 import { State } from './splat-state';
 import { registerTraining } from './training/train-run';
@@ -579,6 +580,21 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     events.on('graph.addShBandsNode', (target?: Splat) => {
         addTarget(target).forEach(splat => appendAndOpen(new SetShBandsOp(splat, splat.shBandLimit)));
+    });
+
+    // A debug view starts on a channel the object has: how fast, for a 4D
+    // model, and how opaque for anything else.
+    events.on('graph.addDebugViewNode', (target?: Splat) => {
+        addTarget(target).forEach(splat => appendAndOpen(new DebugViewOp(splat, { channel: defaultDebugChannel(splat) })));
+    });
+
+    // a debug view node for an object, on this channel: a project's come
+    // back through here
+    events.function('debugView.addNode', (splat: Splat, channel?: DebugChannel) => {
+        if (!splat) return null;
+        const op = new DebugViewOp(splat, { channel: DEBUG_CHANNELS.includes(channel) ? channel : defaultDebugChannel(splat) });
+        events.fire('edit.add', op);
+        return op;
     });
 
     events.on('graph.addOutputNode', (target?: Splat) => {

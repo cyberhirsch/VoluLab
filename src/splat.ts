@@ -24,6 +24,7 @@ import { GradePalette } from './grade-palette';
 import type { RelightSettings } from './relight/relighter';
 import { Serializer } from './serializer';
 import { vertexShader, fragmentShader, gsplatCenter, gsplatModify, vertexShaderWGSL, fragmentShaderWGSL, gsplatCenterWGSL, gsplatModifyWGSL } from './shaders/splat-shader';
+import { DebugResolved, DebugView, resolveDebugView } from './splat-debug';
 import { State, SplatState } from './splat-state';
 import { Transform } from './transform';
 import { TransformPalette } from './transform-palette';
@@ -47,6 +48,10 @@ type SplatMotion = {
     // the active set at another time than the one shown, for a selection
     // replayed at the time it was made (see MotionCenters)
     activeAt?: (t: number) => Uint32Array | null;
+    // per row, the hierarchy level it is on (-1: the global set) and whether
+    // it stands still for the whole sequence. Built when asked for: only the
+    // debug view reads it
+    hierarchy?: () => { level: Int8Array, still: Uint8Array };
 };
 
 const boundingPoints =
@@ -145,6 +150,17 @@ class Splat extends Element {
     private motionAwaitAdded = false;
     private motionAwaitResults = 0;
 
+    /**
+     * The debug view nodes applied to this object, in the order of its
+     * chain. The last one decides what is drawn; the nodes add and remove
+     * themselves (see DebugViewOp).
+     */
+    debugViews: DebugView[] = [];
+    /** what the last of them resolved to, or null when the object draws its own colour */
+    debugShown: DebugResolved | null = null;
+    // one byte per gaussian, for the channels the shader cannot work out
+    private debugTexture: Texture | null = null;
+
     constructor(asset: Asset, rotation: Quat) {
         super(ElementType.splat);
 
@@ -194,6 +210,20 @@ class Splat extends Element {
                 material.setParameter('splatMotion', this.motionTexture);
                 material.setParameter('splatFalloff', this.falloffTexture);
                 material.setParameter('motionTime', this.motionTime);
+            }
+
+            // the debug view: a define, so an object without one pays nothing
+            const debug = this.debugShown;
+            material.setDefine('SPLAT_DEBUG', debug ? '' : undefined);
+            material.setDefine('SPLAT_DEBUG_TEX', debug && this.debugTexture ? '' : undefined);
+            if (debug) {
+                material.setParameter('debugMode', debug.mode);
+                material.setParameter('debugParams', debug.params);
+            }
+            if (debug && this.debugTexture) {
+                material.setParameter('splatDebug', this.debugTexture);
+            } else {
+                material.deleteParameter('splatDebug');
             }
             material.update();
         };
@@ -336,6 +366,9 @@ class Splat extends Element {
         const oldStateTexture = this.stateTexture;
         const oldTransformTexture = this.transformTexture;
         const oldGradeTexture = this.gradeTexture;
+        // the old frame is drawn once more, with its debug texture
+        const oldDebugTexture = this.debugTexture;
+        this.debugTexture = null;
 
         // carry the current transform onto the new entity
         const position = oldEntity.getLocalPosition().clone();
@@ -349,6 +382,9 @@ class Splat extends Element {
 
         // bind the new frame (no rotation: transform already applied above)
         this.bindAsset(asset);
+
+        // the debug view is of the data, so it is worked out again for these
+        this.buildDebugView();
 
         // add the new entity to the scene and configure its instance
         this.scene.contentRoot.addChild(this.entity);
@@ -377,6 +413,7 @@ class Splat extends Element {
         oldStateTexture.destroy();
         oldTransformTexture.destroy();
         oldGradeTexture?.destroy();
+        oldDebugTexture?.destroy();
         oldAsset.registry?.remove(oldAsset);
         oldAsset.unload();
 
@@ -412,6 +449,12 @@ class Splat extends Element {
         this.motion = motion;
         this.motionTexture = texture('splatMotion', PIXELFORMAT_RGBA32F, motion.velocityTime, 4);
         this.falloffTexture = texture('splatFalloff', PIXELFORMAT_R32F, motion.falloff, 1);
+        // a debug node asking for a motion channel had nothing to show until now
+        if (this.debugViews.length) {
+            this.debugTexture?.destroy();
+            this.buildDebugView();
+            this.scene?.events.fire('splat.debugView', this);
+        }
         // set before the splat is added (sequence.ts does, so it is never
         // drawn without its motion), add() builds the material instead
         if (this.scene) {
@@ -549,6 +592,7 @@ class Splat extends Element {
         super.destroy();
         this.motionTexture?.destroy();
         this.falloffTexture?.destroy();
+        this.debugTexture?.destroy();
         this.entity.destroy();
         this.stateTexture.destroy();
         this.transformTexture.destroy();
@@ -557,6 +601,65 @@ class Splat extends Element {
         this.gradePalette.texture.destroy();
         this.asset.registry?.remove(this.asset);
         this.asset.unload();
+    }
+
+    /** A debug view node, applied: it is the last, so it is what is drawn. */
+    addDebugView(view: DebugView) {
+        this.debugViews.push(view);
+        this.updateDebugView();
+    }
+
+    /** A debug view node, undone or bypassed: the one before it shows again, or the colour. */
+    removeDebugView(view: DebugView) {
+        const index = this.debugViews.lastIndexOf(view);
+        if (index !== -1) {
+            this.debugViews.splice(index, 1);
+            this.updateDebugView();
+        }
+    }
+
+    /**
+     * Work out again what the debug view shows. Called when a node comes or
+     * goes or changes its channel - never per frame: the ranges are of the
+     * data, and a frame of a 4D model changes none of it.
+     */
+    updateDebugView() {
+        this.debugTexture?.destroy();
+        this.buildDebugView();
+        if (this.scene) {
+            this.rebuildMaterial(this.scene.events.invoke('view.bands'));
+            this.scene.forceRender = true;
+            this.scene.events.fire('splat.debugView', this);
+        }
+    }
+
+    // resolve the last debug view against the data as it is now and upload
+    // what it needs; whoever calls this has dealt with the texture before
+    private buildDebugView() {
+        const view = this.debugViews[this.debugViews.length - 1];
+        const resolved = view ? resolveDebugView(this, view.channel) : null;
+        this.debugTexture = null;
+        if (resolved?.values) {
+            const { device } = this.asset.resource as GSplatResource;
+            const { x: width, y: height } = (this.asset.resource as any).textureDimensions;
+            const padded = new Uint8Array(width * height);
+            padded.set(resolved.values.subarray(0, Math.min(resolved.values.length, padded.length)));
+            this.debugTexture = new Texture(device, {
+                name: 'splatDebug',
+                width,
+                height,
+                format: PIXELFORMAT_R8,
+                mipmaps: false,
+                minFilter: FILTER_NEAREST,
+                magFilter: FILTER_NEAREST,
+                addressU: ADDRESS_CLAMP_TO_EDGE,
+                addressV: ADDRESS_CLAMP_TO_EDGE,
+                levels: [padded]
+            });
+            // the bytes are on the GPU now; the legend does not need them
+            resolved.values = null;
+        }
+        this.debugShown = resolved;
     }
 
     async updateState(changedState = State.selected) {

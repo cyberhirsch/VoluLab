@@ -247,6 +247,16 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 events.fire('edit.changed');
             }
 
+            // debug view nodes too: they change no data, so the project holds
+            // them as nodes or not at all
+            if (Array.isArray(document.debugViews)) {
+                for (const stored of document.debugViews) {
+                    const splat = loaded[stored?.splat];
+                    if (splat) events.invoke('debugView.addNode', splat, stored.channel);
+                }
+                events.fire('edit.changed');
+            }
+
             // the session around the scene. Preferences are applied inside a
             // suspend window already opened by the caller, so applying them
             // cannot be captured back as user changes.
@@ -341,6 +351,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 relights: splats
                 .map((s, i) => (s.relight ? { splat: i, settings: { ...s.relight } } : null))
                 .filter(Boolean),
+
+                // each object's debug view nodes, in the order of its chain
+                debugViews: splats.flatMap((s, i) => s.debugViews.map(view => ({ splat: i, channel: view.channel }))),
 
                 // the session around the scene, so a project reopens in the
                 // workspace it was authored in

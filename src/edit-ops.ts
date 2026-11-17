@@ -16,6 +16,7 @@ import { PrimitivePose, ScenePrimitive } from './scene-primitive';
 import { SelectQuery, ShapeQuery, resolveHits } from './select-query';
 import { SphereShape } from './sphere-shape';
 import { Splat } from './splat';
+import type { DebugView } from './splat-debug';
 import { State } from './splat-state';
 import { Transform } from './transform';
 import { Voxels } from './voxels';
@@ -1015,6 +1016,41 @@ class SetShBandsOp {
 }
 
 /**
+ * A debug view node: the object is drawn false-coloured by one channel of
+ * its data - velocity, lifetime, opacity and so on - instead of by its
+ * colour.
+ *
+ * A way of looking, not an edit. Applied, it hands the object its view;
+ * undone or bypassed, it takes it back. Nothing in the data changes, so
+ * nothing written, trained on or relit knows the node is there. An object
+ * can carry several, and the last one applied is the one drawn.
+ */
+class DebugViewOp {
+    name = 'debugView';
+    splat: Splat;
+    view: DebugView;
+    bypassed?: boolean;
+
+    constructor(splat: Splat, view: DebugView) {
+        this.splat = splat;
+        this.view = view;
+    }
+
+    /** what the graph writes under the node's title */
+    get sourceLabel() {
+        return this.view.channel.replace(/[A-Z]/g, c => ` ${c.toLowerCase()}`);
+    }
+
+    do() {
+        this.splat.addDebugView(this.view);
+    }
+
+    undo() {
+        this.splat.removeDebugView(this.view);
+    }
+}
+
+/**
  * Group gaussians into blocks of space: a grid of BLOCKS_ALONG cells on the
  * longest side of the box they fill, trimmed half a percent off each end of
  * each axis so a few floaters do not decide the blocks for everyone else.
@@ -1998,6 +2034,7 @@ export {
     DecimateOp,
     CleanupOp,
     SetShBandsOp,
+    DebugViewOp,
     OutputOp,
     OutputSettings,
     OutputFileType,

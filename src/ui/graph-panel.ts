@@ -97,6 +97,7 @@ const OP_LABELS: Record<string, string> = {
     cleanup: 'cleanup',
     decimate: 'decimate',
     setShBands: 'sh bands',
+    debugView: 'debug view',
     output: 'output'
 };
 
@@ -1145,6 +1146,10 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addRelightNode', splat)
                     },
                     {
+                        label: 'debug view',
+                        action: () => this.events.fire('graph.addDebugViewNode', splat)
+                    },
+                    {
                         label: 'voxelise',
                         action: () => this.events.invoke('graph.voxelise', splat)
                     },
@@ -1400,6 +1405,13 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addRelightNode')
+            },
+            {
+                // the object false-coloured by a channel of its data
+                label: 'add debug view node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addDebugViewNode')
             },
             {
                 label: 'add output node',

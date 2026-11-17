@@ -1,3 +1,5 @@
+import { debugColorsGLSL, debugColorsWGSL } from '../splat-debug';
+
 const gsplatModify = /* glsl*/`
 // The camera node's depth of field.
 //
@@ -136,6 +138,18 @@ uniform sampler2D gradePalette;         // palette of colour grades
     uniform float motionTime;               // normalised time being shown
 #endif
 
+// The debug view: this object is drawn false-coloured by one channel of its
+// data (splat-debug.ts). debugMode names the channel, so switching between
+// the ones worked out here is a uniform and nothing else.
+#ifdef SPLAT_DEBUG
+    uniform int debugMode;
+    uniform vec2 debugParams;               // x: where the ramp starts, y: 1 / its length
+    #ifdef SPLAT_DEBUG_TEX
+        uniform sampler2D splatDebug;       // r: the channel per gaussian, where only the CPU knows it
+    #endif
+    ${debugColorsGLSL}
+#endif
+
 // Two grades, in order: whatever colour nodes have put on this gaussian, then
 // the object's own.
 //
@@ -222,7 +236,8 @@ void main(void) {
         vec4 motion = texelFetch(splatMotion, splat.uv, 0);
         float motionDt = motionTime - motion.w;
         modelCenter += motion.xyz * motionDt;
-        float motionAlpha = exp(-motionDt * motionDt * texelFetch(splatFalloff, splat.uv, 0).r);
+        float motionFalloff = texelFetch(splatFalloff, splat.uv, 0).r;
+        float motionAlpha = exp(-motionDt * motionDt * motionFalloff);
         if (motionAlpha < 1.0 / 255.0) {
             gl_Position = discardVec;
             return;
@@ -275,8 +290,48 @@ void main(void) {
         // read color
         color = getColor();
 
+        #ifdef SPLAT_DEBUG
+            float debugOpacity = color.a;
+        #endif
+
         // a defocused gaussian covers more screen, so it must be fainter
         color.a *= camDofAlpha * motionAlpha;
+
+        // The debug view takes the colour's place and nothing else: alpha
+        // and shape stay, so it shows where things are. Neither the grades,
+        // the relit light nor the exposure touch it - they would change
+        // what a colour in the legend means.
+        #ifdef SPLAT_DEBUG
+            #ifdef SPLAT_DEBUG_TEX
+                float debugValue = texelFetch(splatDebug, splat.uv, 0).r;
+            #else
+                float debugValue = 0.0;
+            #endif
+            vec3 debugClr = debugRamp(debugValue);
+            if (debugMode == 9) {
+                debugClr = debugCategory(int(debugValue * 255.0 + 0.5));
+            } else if (debugMode == 8) {
+                debugClr = debugHeat(debugValue);
+            } else if (debugMode == 6) {
+                debugClr = debugRamp(debugOpacity);
+            }
+            #ifdef SPLAT_MOTION
+                if (debugMode == 1) {
+                    // direction: xyz as rgb around grey, in the model's own axes
+                    debugClr = clamp(vec3(0.5) + 0.5 * motion.xyz * debugParams.x, 0.0, 1.0);
+                } else if (debugMode == 2) {
+                    debugClr = debugHeat((log(max(length(motion.xyz), 1e-20)) - debugParams.x) * debugParams.y);
+                } else if (debugMode == 3) {
+                    debugClr = debugRamp(motion.w);
+                } else if (debugMode == 4) {
+                    // falloff is 1 / (2 sigma_t^2)
+                    debugClr = debugRamp((0.5 * log(0.5 / max(motionFalloff, 1e-30)) - debugParams.x) * debugParams.y);
+                } else if (debugMode == 5) {
+                    debugClr = debugRamp(motionAlpha);
+                }
+            #endif
+            color.xyz = debugClr;
+        #else
 
         // evaluate spherical harmonics
         #if SH_BANDS > 0
@@ -310,15 +365,18 @@ void main(void) {
         }
         #endif
 
-        // don't allow out-of-range alpha
-        color.a = clamp(color.a, 0.0, 1.0);
-
         // camera exposure is the last thing before the sensor, so it lands
         // on scene-referred colour - after the object's grade, before the
         // tonemap. Doing it in a post pass instead would be a brightness
         // slider on already-tonemapped pixels, which is a different (and
         // worse) thing entirely.
         color.xyz *= camExposure;
+
+        // (the debug view skipped everything since its colour)
+        #endif
+
+        // don't allow out-of-range alpha
+        color.a = clamp(color.a, 0.0, 1.0);
 
         // apply tonemapping
         color = vec4(prepareOutputFromGamma(max(color.xyz, 0.0), -center.view.z), color.w);
@@ -622,6 +680,16 @@ var gradePalette: texture_2d<f32>;  // palette of colour grades
     uniform motionTime: f32;            // normalised time being shown
 #endif
 
+// the debug view - see the GLSL twin
+#ifdef SPLAT_DEBUG
+    uniform debugMode: i32;
+    uniform debugParams: vec2f;         // x: where the ramp starts, y: 1 / its length
+    #ifdef SPLAT_DEBUG_TEX
+        var splatDebug: texture_2d<f32>;    // r: the channel per gaussian, where only the CPU knows it
+    #endif
+    ${debugColorsWGSL}
+#endif
+
 varying vTexCoordFlags: vec4f;      // xy: texCoord, z: selected, w: locked
 varying vColor: vec4f;
 varying vDefocus: f32;              // 0 sharp, ->1 fully out of focus
@@ -702,7 +770,8 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
         let motion: vec4f = textureLoad(splatMotion, splat.uv, 0);
         let motionDt: f32 = uniform.motionTime - motion.w;
         modelCenter = modelCenter + motion.xyz * motionDt;
-        motionAlpha = exp(-motionDt * motionDt * textureLoad(splatFalloff, splat.uv, 0).r);
+        let motionFalloff: f32 = textureLoad(splatFalloff, splat.uv, 0).r;
+        motionAlpha = exp(-motionDt * motionDt * motionFalloff);
         if (motionAlpha < 1.0 / 255.0) {
             output.position = discardVec;
             return output;
@@ -750,8 +819,45 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
     #else
         var color: vec4f = getColor();
 
+        #ifdef SPLAT_DEBUG
+            let debugOpacity: f32 = color.a;
+        #endif
+
         // a defocused gaussian covers more screen, so it must be fainter
         color.a = color.a * camDofAlpha * motionAlpha;
+
+        // the debug view takes the colour's place and nothing else - see
+        // the GLSL twin
+        #ifdef SPLAT_DEBUG
+            var debugValue: f32 = 0.0;
+            #ifdef SPLAT_DEBUG_TEX
+                debugValue = textureLoad(splatDebug, splat.uv, 0).r;
+            #endif
+            var debugClr: vec3f = debugRamp(debugValue);
+            if (uniform.debugMode == 9) {
+                debugClr = debugCategory(i32(debugValue * 255.0 + 0.5));
+            } else if (uniform.debugMode == 8) {
+                debugClr = debugHeat(debugValue);
+            } else if (uniform.debugMode == 6) {
+                debugClr = debugRamp(debugOpacity);
+            }
+            #ifdef SPLAT_MOTION
+                if (uniform.debugMode == 1) {
+                    // direction: xyz as rgb around grey, in the model's own axes
+                    debugClr = clamp(vec3f(0.5) + 0.5 * motion.xyz * uniform.debugParams.x, vec3f(0.0), vec3f(1.0));
+                } else if (uniform.debugMode == 2) {
+                    debugClr = debugHeat((log(max(length(motion.xyz), 1e-20)) - uniform.debugParams.x) * uniform.debugParams.y);
+                } else if (uniform.debugMode == 3) {
+                    debugClr = debugRamp(motion.w);
+                } else if (uniform.debugMode == 4) {
+                    // falloff is 1 / (2 sigma_t^2)
+                    debugClr = debugRamp((0.5 * log(0.5 / max(motionFalloff, 1e-30)) - uniform.debugParams.x) * uniform.debugParams.y);
+                } else if (uniform.debugMode == 5) {
+                    debugClr = debugRamp(motionAlpha);
+                }
+            #endif
+            color = vec4f(debugClr, color.a);
+        #else
 
         #if SH_BANDS > 0
             let modelView3x3 = mat3x3f(center.modelView[0].xyz, center.modelView[1].xyz, center.modelView[2].xyz);
@@ -779,10 +885,13 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
             color = vec4f(color.xyz * lit, color.a);
         #endif
 
-        color.a = clamp(color.a, 0.0, 1.0);
-
         // camera exposure: scene-referred, before the tonemap
         color = vec4f(color.xyz * uniform.camExposure, color.a);
+
+        // (the debug view skipped everything since its colour)
+        #endif
+
+        color.a = clamp(color.a, 0.0, 1.0);
 
         // apply tonemapping
         color = vec4f(prepareOutputFromGamma(max(color.xyz, vec3f(0.0)), -center.view.z), color.a);

@@ -9,6 +9,73 @@ months finds out why before they change it.
 
 ---
 
+## Debug view node
+
+A node on an object's chain that draws its gaussians false-coloured by one
+channel of their data instead of by their colour (`DebugViewOp`, added
+from the graph's add menu or by dragging out of a node: "debug view"). It
+is a way of looking, not an edit: the node hands the object its view while
+it is applied and takes it back when undone or bypassed, and nothing in
+the data changes - so exports, the splat data saved in a project,
+training and relighting are as if it were not there. The node itself is
+saved with the project, the way relight nodes are.
+
+Channels. On a 4D model played on the GPU: velocity direction (xyz as rgb
+around grey), speed (heat, log), temporal centre (0..1), lifetime (the
+temporal std, log), the fade at the time shown, hierarchy level, and
+static against dynamic. On any object: opacity, size (largest scale,
+log), anisotropy (largest over smallest scale, log) and SH view
+dependence (energy of the rest coefficients against the DC colour). A
+channel the object does not have is not offered.
+
+Where the value comes from decides what a switch costs. Velocity,
+temporal centre and falloff are already in the motion textures the vertex
+shader plays from, and opacity is in the splat's own, so those are worked
+out in the shader and a uniform (`debugMode`) names the channel: no
+upload. Level, the static flag, the scale ratios and the SH energy are
+only on the CPU; they go up as one byte per gaussian, already normalised,
+when a node asks for one (`splatDebug`, R8), and the texture goes when the
+node does. `SPLAT_DEBUG` is a define, so an object without a debug node
+compiles none of it.
+
+The ramps and the category colours are defined once, in
+`splat-debug.ts`. The GLSL and WGSL are generated from them and the
+legend's CSS gradient is drawn from them, both interpolating in sRGB, so
+the legend is the ramp on screen and cannot drift from it.
+
+Ranges are measured once, when the channel or the data changes, not per
+frame. They are the values with half a percent trimmed off each end,
+from a sample: a few floaters would otherwise set the range and leave
+the rest of the object one colour. The legend shows those ends; values
+beyond them clamp. Lifetime is capped at ten sequence lengths, past
+which nothing reads differently.
+
+Static uses the GSV writer's rule and not a copy of it: `standsStill` in
+`tgh/gsv.ts`, over the same `STATIC_MAX_DRIFT` and `STATIC_MIN_FALLOFF`,
+asked of global gaussians only, as the writer does. What the view calls
+static is what an export would move to the static page.
+
+The colour replaces the splat's before the tone map. The grades, relit
+light and camera exposure are skipped, since each would change what a
+legend colour means; alpha, the fade and the shape are kept, so the view
+still shows where things are, and the selection tint and outlines land on
+top as before. Several debug nodes on one object: the last applied wins,
+and the others' faces say so.
+
+Traps:
+
+- A tone mapping other than linear bends the debug colours like any
+  others. Set it to linear to read them against the legend.
+- Velocity direction is in the model's own axes, before the object's
+  transform.
+- The view is what the viewport draws, so an image or video render shows
+  it too. Bypass the node first.
+- A PLY sequence swaps its data every frame, so a texture channel is
+  measured and uploaded again per frame there. A 4D model is not: its
+  data does not change with time.
+- Changing the channel is not an undo step, like a relight node's
+  settings. Adding, removing and bypassing the node are.
+
 ## Camera poses in the browser
 
 Photos or a video dropped into VoluLab get their camera poses without

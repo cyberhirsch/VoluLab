@@ -2,7 +2,7 @@ import { Container } from '@playcanvas/pcui';
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { fieldDefault } from './value-fields';
-import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -110,7 +110,7 @@ class NodePanel extends Container {
     }
 
     private rebuild() {
-        // The light, camera and relight faces edit their node's settings in
+        // The light, camera, relight and debug faces edit their node's settings in
         // place and announce each edit, one keystroke at a time, and it comes
         // back here. Rebuilding would take the face out from under the field
         // being typed in, and binding it again would write the setting back
@@ -139,7 +139,7 @@ class NodePanel extends Container {
 
         const op = current ? principalOp(current.op) : null;
         const panel = [...this.mounts.values()].find(el => el.parentElement === this.body);
-        const inPlace = op instanceof LightOp || op instanceof CameraOp || op instanceof RelightOp || op instanceof PrimitiveOp;
+        const inPlace = op instanceof LightOp || op instanceof CameraOp || op instanceof RelightOp || op instanceof PrimitiveOp || op instanceof DebugViewOp;
         this.shown = panel && inPlace ? { op, panel } : null;
     }
 
@@ -269,6 +269,16 @@ class NodePanel extends Container {
 
         if (op instanceof RelightOp) {
             const panel = this.mounts.get('relight');
+            if (panel) {
+                this.empty.hidden = true;
+                (panel as any).bindNode?.(op, index);
+                this.body.appendChild(panel);
+                return;
+            }
+        }
+
+        if (op instanceof DebugViewOp) {
+            const panel = this.mounts.get('debug');
             if (panel) {
                 this.empty.hidden = true;
                 (panel as any).bindNode?.(op, index);

@@ -7,6 +7,7 @@ import { BottomToolbar } from './bottom-toolbar';
 import { CameraFace } from './camera-face';
 import { CameraInfoOverlay } from './camera-info-overlay';
 import { ColorPanel } from './color-panel';
+import { DebugFace } from './debug-face';
 import { ExportPopup } from './export-popup';
 import { GraphPanel } from './graph-panel';
 import { ImageSettingsDialog } from './image-settings-dialog';
@@ -149,6 +150,9 @@ class EditorUI {
         nodePanel.mount('light', lightFace.dom);
         const relightFace = new RelightFace(events);
         nodePanel.mount('relight', relightFace.dom);
+        // a debug view node's channel and its legend
+        const debugFace = new DebugFace(events);
+        nodePanel.mount('debug', debugFace.dom);
         const primitiveFace = new PrimitiveFace(events);
         nodePanel.mount('primitive', primitiveFace.dom);
         // the colour controls are a node's parameters now, so they live inside

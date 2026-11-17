@@ -4,6 +4,7 @@ import { validateGSplatData } from '../io';
 import { Scene } from '../scene';
 import { FrameData, FrameSource } from '../sequence';
 import type { Splat, SplatMotion } from '../splat';
+import { standsStill } from './gsv';
 import { TghModel } from './tgh-model';
 
 /**
@@ -73,6 +74,34 @@ class TghFrameSource implements FrameSource {
         return this.frames;
     }
 
+    // Which level each row is on, and whether it is one the GSV writer
+    // would move to the static page: a global gaussian that neither moves
+    // nor fades over the sequence. Worked out once, when the debug view
+    // first asks.
+    private levelsAndStill: { level: Int8Array, still: Uint8Array } | null = null;
+
+    private hierarchy() {
+        if (!this.levelsAndStill) {
+            const level = new Int8Array(this.model.numSplats);
+            const still = new Uint8Array(this.model.numSplats);
+            const t = this.model.tensors.t;
+            const motion = new Float32Array(11);
+            for (const block of this.model.blocks()) {
+                const { rows } = block;
+                for (let i = 0; i < rows.length; i++) {
+                    const n = rows[i];
+                    level[n] = block.level;
+                    if (block.level < 0) {
+                        this.model.motionParams(n, motion);
+                        still[n] = standsStill(motion, t[n]) ? 1 : 0;
+                    }
+                }
+            }
+            this.levelsAndStill = { level, still };
+        }
+        return this.levelsAndStill;
+    }
+
     getFrame(index: number): Promise<FrameData> {
         let frame;
         if (this.showFrame) {
@@ -80,7 +109,8 @@ class TghFrameSource implements FrameSource {
             this.motion = {
                 velocityTime: rest.velocityTime,
                 falloff: rest.falloff,
-                activeAt: t => this.model.activeIndices(t)
+                activeAt: t => this.model.activeIndices(t),
+                hierarchy: () => this.hierarchy()
             };
             frame = rest;
         } else {
