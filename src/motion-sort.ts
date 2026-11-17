@@ -69,6 +69,9 @@ const motionSortWorker = () => {
     const fadeCut = Math.log(255);
 
     let numRows = 0;
+    // the size of an order: the engine's order texture, which is as large
+    // as the data textures and so has more texels than there are rows
+    let orderBytes = 0;
     let centers: Float32Array;
     let vt: Float32Array;
     let falloff: Float32Array;
@@ -411,7 +414,7 @@ const motionSortWorker = () => {
         const stillEnd = stillSorted.length;
         const movingEnd = numMoving * 2;
         const total = (stillEnd + movingEnd) / 2;
-        const order = new Uint32Array(free.pop() ?? new ArrayBuffer(numRows * 4));
+        const order = new Uint32Array(free.pop() ?? new ArrayBuffer(orderBytes));
         let s = 0;
         let o = 0;
         m = 0;
@@ -465,6 +468,7 @@ const motionSortWorker = () => {
             vt = model.velocityTime;
             falloff = model.falloff;
             numRows = Math.min(Math.floor(centers.length / 3), Math.floor(vt.length / 4), falloff.length);
+            orderBytes = Math.max(data.orderBytes, numRows * 4);
 
             globals = new Uint32Array(0);
             levels = [];
@@ -543,7 +547,9 @@ class MotionSorter {
         this.worker = new Worker(url);
         URL.revokeObjectURL(url);
         this.worker.onmessage = (message: MessageEvent) => this.result(message.data);
-        this.worker.postMessage({ model });
+        // WebGL2 uploads an order as the whole texture, so every order has
+        // to be as large as the one the engine made
+        this.worker.postMessage({ model, orderBytes: sorter.orderData.byteLength });
 
         // the engine's worker goes; the sorter keeps talking to `worker`
         sorter.worker.terminate();
