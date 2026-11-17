@@ -149,6 +149,13 @@ class Splat extends Element {
     private motionAwait: Uint8Array | null = null;
     private motionAwaitAdded = false;
     private motionAwaitResults = 0;
+    // the frame asked for while a sort of another set was still awaited.
+    // One set is in flight at a time: the check that releases motionTime
+    // compares a sort with the set it was asked for, and during playback
+    // the sets change faster than they sort. Asked for all at once, no
+    // result ever matched the newest set, the shader's time stood still and
+    // the model faded out until playback stopped.
+    private motionQueued: { t: number, active: Uint32Array | null } | null = null;
 
     /**
      * The debug view nodes applied to this object, in the order of its
@@ -468,6 +475,11 @@ class Splat extends Element {
      * gets their centres at t, which is all the CPU does per frame.
      */
     showTime(t: number, active: Uint32Array | null) {
+        if (this.motionAwait) {
+            // a set is in flight: this frame waits, and the latest one wins
+            this.motionQueued = { t, active };
+            return;
+        }
         if (active !== this.motionActive) {
             this.motionMapping = null;
             this.motionAwait = this.newRows(this.motionActive, active);
@@ -535,8 +547,19 @@ class Splat extends Element {
             found = flags[data[i]] !== 1;
         }
         if (found || ++this.motionAwaitResults > 4) {
-            this.motionAwait = null;
-            this.entity.gsplat.instance.material.setParameter('motionTime', this.motionTime);
+            this.releaseMotion();
+        }
+    }
+
+    // the awaited sort is in: the shader gets its time, and the frame that
+    // was asked for meanwhile goes out
+    private releaseMotion() {
+        this.motionAwait = null;
+        this.entity.gsplat.instance.material.setParameter('motionTime', this.motionTime);
+        const queued = this.motionQueued;
+        if (queued) {
+            this.motionQueued = null;
+            this.showTime(queued.t, queued.active);
         }
     }
 
@@ -583,8 +606,7 @@ class Splat extends Element {
         // last order drawn: draw nothing instead, at once
         if (count === 0) {
             sorter.pendingSorted = { count: 0, data: new Uint32Array(this.splatData.numSplats) };
-            this.motionAwait = null;
-            this.entity.gsplat.instance.material.setParameter('motionTime', t);
+            this.releaseMotion();
         }
     }
 
