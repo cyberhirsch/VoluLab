@@ -385,7 +385,7 @@
     "debug.channel.size": "サイズ",
     "debug.channel.anisotropy": "異方性",
     "debug.channel.shEnergy": "SH視点依存性",
-    "debug.legend.velocity": "x、y、z をグレーを中心とした赤、緑、青で、モデル自身の軸で表します。シーケンスあたりの距離。",
+    "debug.legend.velocity": "x、y、z に沿った速さを赤、緑、青で、モデル自身の軸で表します。黒は静止で、軸に沿った向きは表示されません。シーケンスあたりの距離。",
     "debug.legend.speed": "シーケンスあたりの距離(対数スケール)。静止しているものは下端になります。",
     "debug.legend.time": "各ガウシアンがシーケンスのどこに中心を持つか:0 が開始、1 が終了。",
     "debug.legend.lifetime": "時間方向の標準偏差(シーケンス長単位、対数スケール)。10 以上は同じ色になります。",

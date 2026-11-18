@@ -318,7 +318,7 @@ void main(void) {
             #ifdef SPLAT_MOTION
                 if (debugMode == 1) {
                     // direction: xyz as rgb around grey, in the model's own axes
-                    debugClr = clamp(vec3(0.5) + 0.5 * motion.xyz * debugParams.x, 0.0, 1.0);
+                    debugClr = clamp(abs(motion.xyz) * debugParams.x, 0.0, 1.0);
                 } else if (debugMode == 2) {
                     debugClr = debugHeat((log(max(length(motion.xyz), 1e-20)) - debugParams.x) * debugParams.y);
                 } else if (debugMode == 3) {
@@ -844,7 +844,7 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
             #ifdef SPLAT_MOTION
                 if (uniform.debugMode == 1) {
                     // direction: xyz as rgb around grey, in the model's own axes
-                    debugClr = clamp(vec3f(0.5) + 0.5 * motion.xyz * uniform.debugParams.x, vec3f(0.0), vec3f(1.0));
+                    debugClr = clamp(abs(motion.xyz) * uniform.debugParams.x, vec3f(0.0), vec3f(1.0));
                 } else if (uniform.debugMode == 2) {
                     debugClr = debugHeat((log(max(length(motion.xyz), 1e-20)) - uniform.debugParams.x) * uniform.debugParams.y);
                 } else if (uniform.debugMode == 3) {

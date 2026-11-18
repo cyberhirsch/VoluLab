@@ -385,7 +385,7 @@
     "debug.channel.size": "tamanho",
     "debug.channel.anisotropy": "anisotropia",
     "debug.channel.shEnergy": "dependência de vista SH",
-    "debug.legend.velocity": "x, y, z como vermelho, verde, azul em torno do cinza, nos eixos do modelo. Distância por sequência.",
+    "debug.legend.velocity": "Rapidez ao longo de x, y, z como vermelho, verde, azul, nos eixos do modelo; preto está em repouso e o sentido ao longo de um eixo não é mostrado. Distância por sequência.",
     "debug.legend.speed": "Distância por sequência, escala logarítmica. O que fica parado está na ponta baixa.",
     "debug.legend.time": "Onde na sequência cada gaussiana está centrada: 0 é o início, 1 o fim.",
     "debug.legend.lifetime": "Desvio padrão temporal em durações de sequência, escala logarítmica. Dez ou mais aparecem iguais.",

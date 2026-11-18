@@ -385,7 +385,7 @@
     "debug.channel.size": "大小",
     "debug.channel.anisotropy": "各向异性",
     "debug.channel.shEnergy": "SH 视角相关性",
-    "debug.legend.velocity": "x、y、z 以灰色为中心显示为红、绿、蓝,使用模型自身的坐标轴。每个序列的距离。",
+    "debug.legend.velocity": "沿 x、y、z 的速率显示为红、绿、蓝,使用模型自身的坐标轴;黑色为静止,不显示沿轴的方向。每个序列的距离。",
     "debug.legend.speed": "每个序列的距离,对数刻度。静止的位于低端。",
     "debug.legend.time": "每个高斯在序列中的中心位置:0 为开始,1 为结束。",
     "debug.legend.lifetime": "以序列长度为单位的时间标准差,对数刻度。十及以上显示相同。",

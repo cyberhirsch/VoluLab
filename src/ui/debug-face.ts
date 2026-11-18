@@ -182,11 +182,11 @@ class DebugFace extends Container {
         if (legend.kind === 'ramp' || legend.kind === 'heat') {
             bar(gradient(DEBUG_RAMPS[legend.kind]), figure(legend.min), figure(legend.max), legend.log ? 'log' : '');
         } else if (legend.kind === 'direction') {
-            // one bar per axis: that axis from backwards to forwards, the
-            // other two at rest
+            // one bar per axis: black at rest to the axis' colour at full
+            // speed, either way along it
             ['x', 'y', 'z'].forEach((axis, a) => {
-                const at = (v: number) => [0, 1, 2].map(c => (c === a ? v : 0.5));
-                bar(gradient([at(0), at(0.5), at(1)]), `-${figure(legend.max)}`, `+${figure(legend.max)}`, axis);
+                const at = (v: number) => [0, 1, 2].map(c => (c === a ? v : 0));
+                bar(gradient([at(0), at(1)]), '0', `\u00b1${figure(legend.max)}`, axis);
             });
         } else if (legend.kind === 'categories') {
             legend.entries.forEach((entry) => {

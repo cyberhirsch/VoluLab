@@ -385,7 +385,7 @@
     "debug.channel.size": "Größe",
     "debug.channel.anisotropy": "Anisotropie",
     "debug.channel.shEnergy": "SH-Blickabhängigkeit",
-    "debug.legend.velocity": "x, y, z als Rot, Grün, Blau um Grau, in den Achsen des Modells. Strecke pro Sequenz.",
+    "debug.legend.velocity": "Tempo entlang x, y, z als Rot, Grün, Blau, in den Achsen des Modells; Schwarz ruht, die Richtung entlang einer Achse wird nicht gezeigt. Strecke pro Sequenz.",
     "debug.legend.speed": "Strecke pro Sequenz, logarithmisch. Was stillsteht, liegt am unteren Ende.",
     "debug.legend.time": "Wo in der Sequenz jeder Gaussian zentriert ist: 0 ist der Anfang, 1 das Ende.",
     "debug.legend.lifetime": "Zeitliche Standardabweichung in Sequenzlängen, logarithmisch. Zehn und mehr sehen gleich aus.",

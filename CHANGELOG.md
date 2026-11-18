@@ -178,8 +178,8 @@ the data changes - so exports, the splat data saved in a project,
 training and relighting are as if it were not there. The node itself is
 saved with the project, the way relight nodes are.
 
-Channels. On a 4D model played on the GPU: velocity direction (xyz as rgb
-around grey), speed (heat, log), temporal centre (0..1), lifetime (the
+Channels. On a 4D model played on the GPU: velocity per axis (|xyz| as rgb,
+black at rest), speed (heat, log), temporal centre (0..1), lifetime (the
 temporal std, log), the fade at the time shown, hierarchy level, and
 static against dynamic. On any object: opacity, size (largest scale,
 log), anisotropy (largest over smallest scale, log) and SH view

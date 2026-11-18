@@ -385,7 +385,7 @@
     "debug.channel.size": "size",
     "debug.channel.anisotropy": "anisotropy",
     "debug.channel.shEnergy": "SH view dependence",
-    "debug.legend.velocity": "x, y, z as red, green, blue around grey, in the model's own axes. Distance per sequence.",
+    "debug.legend.velocity": "Speed along x, y, z as red, green, blue, in the model's own axes; black is at rest, and the direction along an axis is not shown. Distance per sequence.",
     "debug.legend.speed": "Distance per sequence, log scale. What stands still takes the low end.",
     "debug.legend.time": "Where in the sequence each gaussian is centred: 0 is the start, 1 the end.",
     "debug.legend.lifetime": "Temporal std in sequence lengths, log scale. Ten and longer read the same.",

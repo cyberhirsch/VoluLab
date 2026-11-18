@@ -385,7 +385,7 @@
     "debug.channel.size": "tamaño",
     "debug.channel.anisotropy": "anisotropía",
     "debug.channel.shEnergy": "dependencia de vista SH",
-    "debug.legend.velocity": "x, y, z como rojo, verde, azul alrededor del gris, en los ejes del modelo. Distancia por secuencia.",
+    "debug.legend.velocity": "Rapidez a lo largo de x, y, z como rojo, verde, azul, en los ejes del modelo; el negro está en reposo y no se muestra el sentido a lo largo de un eje. Distancia por secuencia.",
     "debug.legend.speed": "Distancia por secuencia, escala logarítmica. Lo que no se mueve queda en el extremo bajo.",
     "debug.legend.time": "En qué punto de la secuencia está centrada cada gaussiana: 0 es el inicio, 1 el final.",
     "debug.legend.lifetime": "Desviación temporal en duraciones de secuencia, escala logarítmica. Diez o más se ven igual.",

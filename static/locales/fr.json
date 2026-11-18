@@ -385,7 +385,7 @@
     "debug.channel.size": "taille",
     "debug.channel.anisotropy": "anisotropie",
     "debug.channel.shEnergy": "dépendance à la vue SH",
-    "debug.legend.velocity": "x, y, z en rouge, vert, bleu autour du gris, dans les axes du modèle. Distance par séquence.",
+    "debug.legend.velocity": "Vitesse le long de x, y, z en rouge, vert, bleu, dans les axes du modèle ; le noir est au repos et le sens le long d'un axe n'est pas montré. Distance par séquence.",
     "debug.legend.speed": "Distance par séquence, échelle logarithmique. Ce qui ne bouge pas est en bas de l'échelle.",
     "debug.legend.time": "Où dans la séquence chaque gaussienne est centrée : 0 est le début, 1 la fin.",
     "debug.legend.lifetime": "Écart-type temporel en longueurs de séquence, échelle logarithmique. Dix et plus se lisent pareil.",

@@ -385,7 +385,7 @@
     "debug.channel.size": "크기",
     "debug.channel.anisotropy": "이방성",
     "debug.channel.shEnergy": "SH 시점 의존성",
-    "debug.legend.velocity": "x, y, z를 회색을 중심으로 빨강, 초록, 파랑으로, 모델 자체의 축으로 표시합니다. 시퀀스당 거리.",
+    "debug.legend.velocity": "x, y, z 방향의 속력을 빨강, 초록, 파랑으로, 모델 자체의 축으로 표시합니다. 검정은 정지이며 축을 따른 방향은 표시되지 않습니다. 시퀀스당 거리.",
     "debug.legend.speed": "시퀀스당 거리, 로그 스케일. 멈춰 있는 것은 낮은 쪽 끝이 됩니다.",
     "debug.legend.time": "각 가우시안이 시퀀스의 어디에 중심을 두는지: 0은 시작, 1은 끝.",
     "debug.legend.lifetime": "시퀀스 길이 단위의 시간 표준편차, 로그 스케일. 10 이상은 같은 색입니다.",
