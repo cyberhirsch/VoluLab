@@ -59,7 +59,8 @@ type RunState = {
  */
 const seedSource = async (source: TrainSource, seed: Splat): Promise<{ source: TrainSource, bytes: number }> => {
     const memFs = new MemoryFileSystem();
-    await writeSplatFile([seed], { maxSHBands: 3, keepWorldTransform: true }, 'ply', 'init.ply', {}, memFs);
+    // (its own colour: a debug view on the seed is a way of looking at it)
+    await writeSplatFile([seed], { maxSHBands: 3, keepWorldTransform: true, ownColor: true }, 'ply', 'init.ply', {}, memFs);
     const ply = memFs.results.get('init.ply');
     if (!ply) {
         throw new Error('the seed object has no gaussians left to start from');

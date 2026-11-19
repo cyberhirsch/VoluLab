@@ -43,9 +43,10 @@ import {
 import { version } from '../package.json';
 import { ColorGrade, dcDecode, dcEncode, gradeMatrix, sigmoid } from './color-grade';
 import { Events } from './events';
-import { composeGrades, identityGrade, toGrade } from './grade-palette';
+import { Grade, composeGrades, identityGrade, toGrade } from './grade-palette';
 import { SHRotation } from './sh-utils';
 import { Splat } from './splat';
+import { DebugColorSource, debugColorSource } from './splat-debug';
 import { State } from './splat-state';
 
 type SerializeSettings = {
@@ -62,6 +63,7 @@ type SerializeSettings = {
     keepWorldTransform?: boolean;   // don't apply the world transform when resolving splat transforms
     keepColorTint?: boolean;        // refrain from applying the object's own color grade (colour nodes scoped to a selection are still baked: nothing else stores them)
     keepSHBands?: boolean;          // write every band the data has, ignoring sh-band node limits (the document stores the limit itself)
+    ownColor?: boolean;             // write the object's own colour where a debug view node shows a false one (implied by keepColorTint)
 };
 
 type ViewerExportSettings = {
@@ -270,6 +272,71 @@ class SplatTransformCache {
     }
 }
 
+/**
+ * The grade each gaussian of an object carries: the palette slot it is on,
+ * then `objectGrade`, the order the shader applies them in. `slots` is the
+ * slot per gaussian where it is not the object's current one.
+ */
+const gradeLookup = (splat: Splat, objectGrade: Grade, slots?: Uint16Array) => {
+    if (!slots) {
+        slots = new Uint16Array(splat.gradeTexture.lock() as Uint16Array);
+        splat.gradeTexture.unlock();
+    }
+
+    const bySlot = new Map<number, ColorGrade>();
+    return (index: number) => {
+        const slot = slots[index] ?? 0;
+        let grade = bySlot.get(slot);
+        if (!grade) {
+            const node = slot === 0 ? identityGrade() : splat.gradePalette.getGrade(slot);
+            grade = ColorGrade.fromGrade(composeGrades(node, objectGrade));
+            bySlot.set(slot, grade);
+        }
+        return grade;
+    };
+};
+
+/**
+ * An object's debug view as colours to put in a model's place, a row per
+ * gaussian of the object: the DC term of each false colour with the grades
+ * on it, as the shader draws it, and the opacity logits with those grades'
+ * alpha - null where no grade changes the opacity. Null when the object
+ * draws its own colour.
+ *
+ * For a writer that does not come through SingleSplat (a 4D model's GSV);
+ * SingleSplat does the same per gaussian for the others.
+ */
+const bakeDebugColor = (splat: Splat) => {
+    const falseColor = debugColorSource(splat);
+    if (!falseColor) return null;
+
+    const count = splat.splatData.numSplats;
+    const gradeFor = gradeLookup(splat, toGrade(gradeMatrix(splat)));
+    const stored = splat.splatData.getProp('opacity') as Float32Array;
+    const dc = new Float32Array(count * 3);
+    let opacity: Float32Array | null = null;
+    const rgb = [0, 0, 0];
+    const c = { r: 0, g: 0, b: 0 };
+
+    for (let i = 0; i < count; i++) {
+        falseColor.at(i, rgb);
+        [c.r, c.g, c.b] = rgb;
+        const grade = gradeFor(i);
+        if (grade.hasTint) {
+            grade.applyDC(c);
+        }
+        dc[i * 3] = dcEncode(c.r);
+        dc[i * 3 + 1] = dcEncode(c.g);
+        dc[i * 3 + 2] = dcEncode(c.b);
+        if (grade.hasAlpha) {
+            opacity ??= new Float32Array(stored);
+            opacity[i] = grade.applyOpacity(stored[i]);
+        }
+    }
+
+    return { channel: falseColor.channel, dc, opacity };
+};
+
 // helper class for extracting and transforming a single splat's data
 // to prepare it for export
 class SingleSplat {
@@ -302,7 +369,13 @@ class SingleSplat {
             srcProps: { [name: string]: Float32Array };
             /** the grade for a gaussian, by its palette slot */
             gradeFor: (index: number) => ColorGrade;
+            /** the debug view's colours, where they are the object's colour */
+            falseColor: DebugColorSource | null;
         };
+
+        // a project and a training seed hold the object's own colour
+        const ownColor = !!(serializeSettings.ownColor || serializeSettings.keepColorTint);
+        const rgb = [0, 0, 0];
 
         const cacheMap = new Map<Splat, CacheEntry>();
         let cacheEntry: CacheEntry;
@@ -339,23 +412,18 @@ class SingleSplat {
                     // slot is built as it is first met rather than per gaussian.
                     // keepColorTint stores the object's grade with the
                     // document, so only the per-gaussian slots are baked
-                    const objectGrade = serializeSettings.keepColorTint ? identityGrade() : toGrade(gradeMatrix(splat));
-                    const slots = new Uint16Array(splat.gradeTexture.lock() as Uint16Array);
-                    splat.gradeTexture.unlock();
+                    //
+                    // After a debug view node the object's colour is the
+                    // false colour, and the grades on the object are the ones
+                    // put on since: that is what is written, unless the
+                    // object's own colour is asked for, which comes with the
+                    // grades the node set aside.
+                    const own = ownColor ? splat.ownColour : null;
+                    const falseColor = ownColor ? null : debugColorSource(splat);
+                    const objectGrade = serializeSettings.keepColorTint ? identityGrade() : toGrade(gradeMatrix(own?.grade ?? splat));
+                    const gradeFor = gradeLookup(splat, objectGrade, own?.slots);
 
-                    const bySlot = new Map<number, ColorGrade>();
-                    const gradeFor = (index: number) => {
-                        const slot = slots[index] ?? 0;
-                        let grade = bySlot.get(slot);
-                        if (!grade) {
-                            const node = slot === 0 ? identityGrade() : splat.gradePalette.getGrade(slot);
-                            grade = ColorGrade.fromGrade(composeGrades(node, objectGrade));
-                            bySlot.set(slot, grade);
-                        }
-                        return grade;
-                    };
-
-                    cacheEntry = { splat, transformCache, srcProps, gradeFor };
+                    cacheEntry = { splat, transformCache, srcProps, gradeFor, falseColor };
 
                     cacheMap.set(splat, cacheEntry);
                 } else {
@@ -363,7 +431,7 @@ class SingleSplat {
                 }
             }
 
-            const { transformCache, srcProps, gradeFor } = cacheEntry;
+            const { transformCache, srcProps, gradeFor, falseColor } = cacheEntry;
             // the grade this particular gaussian carries
             const grade = gradeFor(i);
 
@@ -371,6 +439,20 @@ class SingleSplat {
             members.forEach((name) => {
                 data[name] = srcProps[name]?.[i] ?? 0;
             });
+
+            // the false colour in the colour's place: the same from every
+            // side, so it is all in the DC term and the bands above are zero
+            if (falseColor) {
+                falseColor.at(i, rgb);
+                if (hasColor) {
+                    data.f_dc_0 = dcEncode(rgb[0]);
+                    data.f_dc_1 = dcEncode(rgb[1]);
+                    data.f_dc_2 = dcEncode(rgb[2]);
+                }
+                for (let d = 0; d < dstSHCoeffs * 3; ++d) {
+                    data[shNames[d]] = 0;
+                }
+            }
 
             // apply transform palette transforms
             const mat = transformCache.getMat(i);
@@ -507,7 +589,11 @@ class VoluLabChunkSource implements ChunkSource {
         // Determine the SH band count to export: the count asked for, or else
         // the highest band present in any splat, capped by maxSHBands.
         // SingleSplat zero-fills missing bands.
-        const outputBands = settings.shBands ?? Math.min(settings.maxSHBands ?? 3, sceneSHBands(splats, !settings.keepSHBands));
+        // An object written in its debug view's colours has none: a false
+        // colour is the same from every side.
+        const ownColor = settings.ownColor || settings.keepColorTint;
+        const banded = splats.filter(s => ownColor || !s.debugShown);
+        const outputBands = settings.shBands ?? Math.min(settings.maxSHBands ?? 3, sceneSHBands(banded, !settings.keepSHBands));
         const numRest = SH_REST_COUNTS[outputBands];
         this.numRest = numRest;
 
@@ -856,6 +942,7 @@ const serializeSpz = async (splats: Splat[], settings: SpzSettings, fs: FileSyst
 };
 
 export {
+    bakeDebugColor,
     Writer,
     writeSplatFile,
     serializeSog,

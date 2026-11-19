@@ -211,6 +211,9 @@ const registerSequenceEvents = (events: Events, scene: Scene) => {
 
     events.function('sequence.source', () => source);
 
+    // the object the sequence plays in, once its first frame is in
+    events.function('sequence.splat', () => splat);
+
     events.on('timeline.frame', async (frame: number) => {
         await setFrame(frame);
     });
