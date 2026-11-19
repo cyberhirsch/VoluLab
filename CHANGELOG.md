@@ -9,6 +9,72 @@ months finds out why before they change it.
 
 ---
 
+## Transform and delete nodes
+
+Two nodes that only ever appeared as the trace of something done in the
+viewport can now be put in from the graph: "add transform node" and "add
+delete node" in the canvas menu, "transform" and "delete" when a wire is
+dropped on nothing.
+
+The transform node (`TransformNodeOp`) is not the one a gizmo drag leaves.
+That one, `EntityTransformOp`, says where the object ends up, which is all
+a drag knows. Added empty it would have to hold the placement the object
+already had, and two of them would not add up: the later one wins. The
+new node says what is done to the object instead - a move, a turn and a
+scale about the scene's origin, in the scene's axes - and applies it on
+top of wherever the object stands. So it starts as nothing, several of
+them compose in the order of the chain, and bypassing or removing one
+leaves the object where the others put it. It also keeps what the object
+came with: a 4D model stands on a turn of its own (-90 about X for a z-up
+capture, 180 about Z otherwise), and that turn is the object's rotation
+like any other.
+
+The node's face is the one the gizmo's node already had - position,
+rotation in degrees, scale - with a reset. The angles are kept as typed;
+read back out of the quaternion, 200 would come back as -160. While a
+field is dragged or typed in the object follows at once, and the replay
+that everything after the node needs comes when the number settles. That
+shortcut is only taken while nothing later in the chain places the object
+too.
+
+The delete node (`DeleteNodeOp`) removes the gaussians the select nodes
+above it leave selected, or, set to "unselected", all the others. It takes
+its selection the way a colour node scoped to a selection does: it reads
+the selected bit when it applies, not when it was made, so changing a
+select node above it changes what is deleted. It is a `StateOp` like crop
+and cleanup, which is what gives it undo, bypass and, on a 4D model, the
+message to the sort worker. Its face shows how many it removed.
+
+A project keeps transform nodes as nodes. The object is stored where it
+stands without them (`TransformNodeOp.baseOf`) and they go back on top
+when it is opened. A delete node is stored the way crop, cleanup and the
+Delete key are: the gaussians are gone from the saved data and no node
+comes back.
+
+Fixed on the way: undoing a gizmo move of an object did nothing.
+`EntityTransformOp.do` read where the object stood as the place to go back
+to, and on the first application the gizmo had already moved it there.
+
+Traps:
+
+- An uneven scale in a transform node, over an object turned by something
+  other than quarter turns, would shear it. An object's placement cannot
+  hold a shear; the nearest placement without one is used. For the same
+  reason a project cannot always store such an object under its nodes -
+  then it is stored as it stands and its transform nodes are not kept.
+- A gizmo drag after a transform node still says where the object ends up.
+  Changing or bypassing the transform node above it then changes nothing
+  that shows, until the gizmo's node is bypassed or removed.
+- With nothing selected the delete node removes nothing, also when set to
+  "unselected": the rest of nothing is the whole object, and a node just
+  added should not empty it.
+- Hidden gaussians are neither selected nor unselected. Neither setting
+  removes them.
+- "Unselected" on a 4D model removes every unselected gaussian of the
+  whole sequence, not only those alive at the frame shown.
+- The move gizmo is not put back where the object went when a transform
+  node's numbers change. Picking the tool again places it.
+
 ## 4D models are sorted in a worker of their own
 
 Playing a large 4D model updated the picture five to eight times a
