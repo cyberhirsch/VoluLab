@@ -1,8 +1,13 @@
+import type { GradeParams } from './color-grade';
 import type { Splat } from './splat';
 
 /**
  * The debug view: an object's gaussians drawn false-coloured by one channel
  * of their data instead of by their colour.
+ *
+ * From its node on, that false colour is the object's colour: colour nodes
+ * after it grade it and an output node after it writes it (see
+ * Splat.addDebugView for how the node takes its place in the colour chain).
  *
  * Most channels cost nothing to switch between. The motion textures a 4D
  * model already plays from hold velocity, temporal centre and falloff, and
@@ -19,9 +24,24 @@ type DebugChannel =
     'velocity' | 'speed' | 'time' | 'lifetime' | 'level' | 'static' | 'falloff' |
     'opacity' | 'size' | 'anisotropy' | 'shEnergy';
 
+/**
+ * The colour state a debug view node took the place of: the object's own
+ * grade, and the grade slot each gaussian was on. The node hands them back
+ * when it is undone or bypassed (see Splat.addDebugView).
+ */
+type DebugStash = {
+    grade: GradeParams;
+    slots: Uint16Array;
+};
+
 /** What a debug view node holds. */
 type DebugView = {
     channel: DebugChannel;
+    // set while the node is applied and has a colour to show; not stored
+    stash?: DebugStash | null;
+    // the grades on the false colour that no colour node holds, kept while
+    // the node is off (see Splat.removeDebugView); not stored
+    kept?: DebugStash | null;
 };
 
 type DebugLegend =
@@ -298,7 +318,9 @@ const resolveDebugView = (splat: Splat, channel: DebugChannel): DebugResolved | 
 // The shader's half: the ramps and categories above as GLSL and WGSL.
 // ---------------------------------------------------------------------------
 
-const f = (v: number) => v.toFixed(4);
+// nine figures: a float's worth, so the shader's constants are the numbers
+// debugColor() below works with
+const f = (v: number) => v.toPrecision(9);
 const vec3Of = (c: number[], type: string) => `${type}(${f(c[0])}, ${f(c[1])}, ${f(c[2])})`;
 
 const rampGlsl = (name: string, stops: number[][]) => `
@@ -325,7 +347,80 @@ const categoryLines = (type: string) => DEBUG_CATEGORIES.slice(1)
 .map((c, i) => `    if (i == ${i + 1}) { return ${vec3Of(c, type)}; }`)
 .join('\n');
 
-/** debugRamp, debugHeat and debugCategory, for the vertex shader. */
+// The channel -> colour mapping, once per dialect and once for the CPU
+// (debugColorSource below). The three are kept side by side and are the
+// only places it is written: the shader draws with the first two, and
+// whatever writes the false colours into a file works them out with the
+// third, so what is exported is what was on screen.
+//
+// value: the byte texture's entry, 0..1; opacity: the stored opacity;
+// motion: velocity and temporal centre; falloff: 1 / (2 sigma_t^2); fade:
+// how much of its opacity the gaussian has at the time shown.
+const debugColorGlsl = `
+vec3 debugColor(int mode, vec2 params, float value, float opacity, vec4 motion, float falloff, float fade) {
+    if (mode == ${MODE_VELOCITY}) {
+        // speed along each axis as red, green, blue, in the model's own axes
+        return clamp(abs(motion.xyz) * params.x, 0.0, 1.0);
+    }
+    if (mode == ${MODE_SPEED}) {
+        return debugHeat((log(max(length(motion.xyz), 1e-20)) - params.x) * params.y);
+    }
+    if (mode == ${MODE_TIME}) {
+        return debugRamp(motion.w);
+    }
+    if (mode == ${MODE_LIFETIME}) {
+        // falloff is 1 / (2 sigma_t^2)
+        return debugRamp((0.5 * log(0.5 / max(falloff, 1e-30)) - params.x) * params.y);
+    }
+    if (mode == ${MODE_FALLOFF}) {
+        return debugRamp(fade);
+    }
+    if (mode == ${MODE_OPACITY}) {
+        return debugRamp(opacity);
+    }
+    if (mode == ${MODE_TEX_HEAT}) {
+        return debugHeat(value);
+    }
+    if (mode == ${MODE_TEX_CATEGORY}) {
+        return debugCategory(int(value * 255.0 + 0.5));
+    }
+    return debugRamp(value);
+}
+`;
+
+const debugColorWgsl = `
+fn debugColor(mode: i32, params: vec2f, value: f32, opacity: f32, motion: vec4f, falloff: f32, fade: f32) -> vec3f {
+    if (mode == ${MODE_VELOCITY}) {
+        // speed along each axis as red, green, blue, in the model's own axes
+        return clamp(abs(motion.xyz) * params.x, vec3f(0.0), vec3f(1.0));
+    }
+    if (mode == ${MODE_SPEED}) {
+        return debugHeat((log(max(length(motion.xyz), 1e-20)) - params.x) * params.y);
+    }
+    if (mode == ${MODE_TIME}) {
+        return debugRamp(motion.w);
+    }
+    if (mode == ${MODE_LIFETIME}) {
+        // falloff is 1 / (2 sigma_t^2)
+        return debugRamp((0.5 * log(0.5 / max(falloff, 1e-30)) - params.x) * params.y);
+    }
+    if (mode == ${MODE_FALLOFF}) {
+        return debugRamp(fade);
+    }
+    if (mode == ${MODE_OPACITY}) {
+        return debugRamp(opacity);
+    }
+    if (mode == ${MODE_TEX_HEAT}) {
+        return debugHeat(value);
+    }
+    if (mode == ${MODE_TEX_CATEGORY}) {
+        return debugCategory(i32(value * 255.0 + 0.5));
+    }
+    return debugRamp(value);
+}
+`;
+
+/** debugRamp, debugHeat, debugCategory and debugColor, for the vertex shader. */
 const debugColorsGLSL = `
 ${rampGlsl('debugRamp', DEBUG_RAMPS.ramp)}
 ${rampGlsl('debugHeat', DEBUG_RAMPS.heat)}
@@ -333,6 +428,7 @@ vec3 debugCategory(int i) {
 ${categoryLines('vec3')}
     return ${vec3Of(DEBUG_CATEGORIES[0], 'vec3')};
 }
+${debugColorGlsl}
 `;
 
 const debugColorsWGSL = `
@@ -342,7 +438,104 @@ fn debugCategory(i: i32) -> vec3f {
 ${categoryLines('vec3f')}
     return ${vec3Of(DEBUG_CATEGORIES[0], 'vec3f')};
 }
+${debugColorWgsl}
 `;
+
+// ---------------------------------------------------------------------------
+// The CPU's half: the same mapping, for writing the false colours out.
+// ---------------------------------------------------------------------------
+
+// NaN lands on 0, as it does in toBytes
+const clamp01 = (v: number) => (v > 0 ? (v < 1 ? v : 1) : 0);
+
+// rampGlsl, statement for statement
+const rampAt = (stops: number[][], v: number, out: number[]) => {
+    const x = clamp01(v) * 4;
+    const a = clamp01(x), b = clamp01(x - 1), c = clamp01(x - 2), d = clamp01(x - 3);
+    for (let k = 0; k < 3; k++) {
+        let r = stops[0][k] + (stops[1][k] - stops[0][k]) * a;
+        r += (stops[2][k] - r) * b;
+        r += (stops[3][k] - r) * c;
+        out[k] = r + (stops[4][k] - r) * d;
+    }
+};
+
+type DebugColorSource = {
+    channel: DebugChannel;
+    /** the false colour of gaussian i, as the shader draws it, into out[0..2] */
+    at: (i: number, out: number[]) => void;
+};
+
+/**
+ * The false colours of an object's debug view, per gaussian: the shaders'
+ * debugColor on the CPU, fed from the arrays the textures were filled
+ * from. Null when the object draws its own colour.
+ *
+ * The channel is resolved again here, against the data as it is now, which
+ * is one pass - so this is for a file being written, not for a frame. The
+ * fade channel is of the time the object shows; the others do not change
+ * over a sequence.
+ */
+const debugColorSource = (splat: Splat): DebugColorSource | null => {
+    const view = splat.debugViews[splat.debugViews.length - 1];
+    const resolved = view ? resolveDebugView(splat, view.channel) : null;
+    if (!resolved) return null;
+
+    const { mode, params, values } = resolved;
+    const [p0, p1] = params;
+    const vt = splat.motion?.velocityTime;
+    const falloff = splat.motion?.falloff;
+    const time = splat.motionTime;
+    const opacity = prop(splat, 'opacity');
+
+    let at: (i: number, out: number[]) => void;
+    switch (mode) {
+        case MODE_VELOCITY:
+            at = (i, out) => {
+                out[0] = clamp01(Math.abs(vt[i * 4]) * p0);
+                out[1] = clamp01(Math.abs(vt[i * 4 + 1]) * p0);
+                out[2] = clamp01(Math.abs(vt[i * 4 + 2]) * p0);
+            };
+            break;
+        case MODE_SPEED:
+            at = (i, out) => {
+                const s = Math.hypot(vt[i * 4], vt[i * 4 + 1], vt[i * 4 + 2]);
+                rampAt(DEBUG_RAMPS.heat, (Math.log(Math.max(s, 1e-20)) - p0) * p1, out);
+            };
+            break;
+        case MODE_TIME:
+            at = (i, out) => rampAt(DEBUG_RAMPS.ramp, vt[i * 4 + 3], out);
+            break;
+        case MODE_LIFETIME:
+            at = (i, out) => rampAt(DEBUG_RAMPS.ramp, (0.5 * Math.log(0.5 / Math.max(falloff[i], 1e-30)) - p0) * p1, out);
+            break;
+        case MODE_FALLOFF:
+            at = (i, out) => {
+                const dt = time - vt[i * 4 + 3];
+                rampAt(DEBUG_RAMPS.ramp, Math.exp(-dt * dt * falloff[i]), out);
+            };
+            break;
+        case MODE_OPACITY:
+            at = (i, out) => rampAt(DEBUG_RAMPS.ramp, 1 / (1 + Math.exp(-opacity[i])), out);
+            break;
+        case MODE_TEX_HEAT:
+            at = (i, out) => rampAt(DEBUG_RAMPS.heat, values[i] / 255, out);
+            break;
+        case MODE_TEX_CATEGORY:
+            at = (i, out) => {
+                const c = DEBUG_CATEGORIES[values[i]] ?? DEBUG_CATEGORIES[0];
+                out[0] = c[0];
+                out[1] = c[1];
+                out[2] = c[2];
+            };
+            break;
+        default:
+            at = (i, out) => rampAt(DEBUG_RAMPS.ramp, values[i] / 255, out);
+            break;
+    }
+
+    return { channel: resolved.channel, at };
+};
 
 const DEBUG_CHANNELS = CHANNELS.map(c => c.id);
 
@@ -354,7 +547,10 @@ export {
     resolveDebugView,
     debugColorsGLSL,
     debugColorsWGSL,
+    debugColorSource,
     type DebugChannel,
+    type DebugColorSource,
+    type DebugStash,
     type DebugLegend,
     type DebugResolved,
     type DebugView

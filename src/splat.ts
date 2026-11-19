@@ -17,15 +17,15 @@ import {
     Vec3
 } from 'playcanvas';
 
-import { gradeMatrix } from './color-grade';
+import { GradeParams, gradeMatrix } from './color-grade';
 import { CameraSettings } from './edit-ops';
 import { Element, ElementType } from './element';
-import { GradePalette } from './grade-palette';
+import { Grade, GradePalette } from './grade-palette';
 import { MotionLayout, MotionSorter } from './motion-sort';
 import type { RelightSettings } from './relight/relighter';
 import { Serializer } from './serializer';
 import { vertexShader, fragmentShader, gsplatCenter, gsplatModify, vertexShaderWGSL, fragmentShaderWGSL, gsplatCenterWGSL, gsplatModifyWGSL } from './shaders/splat-shader';
-import { DebugResolved, DebugView, resolveDebugView } from './splat-debug';
+import { DebugResolved, DebugStash, DebugView, debugChannelAvailable, resolveDebugView } from './splat-debug';
 import { State, SplatState } from './splat-state';
 import { Transform } from './transform';
 import { TransformPalette } from './transform-palette';
@@ -154,7 +154,8 @@ class Splat extends Element {
     /**
      * The debug view nodes applied to this object, in the order of its
      * chain. The last one decides what is drawn; the nodes add and remove
-     * themselves (see DebugViewOp).
+     * themselves (see DebugViewOp). Each holds the colour state it took the
+     * place of (see addDebugView).
      */
     debugViews: DebugView[] = [];
     /** what the last of them resolved to, or null when the object draws its own colour */
@@ -529,10 +530,67 @@ class Splat extends Element {
         this.asset.unload();
     }
 
-    /** A debug view node, applied: it is the last, so it is what is drawn. */
+    /**
+     * A debug view node, applied: it is the last, so it is what is drawn.
+     *
+     * From here on the false colour is the object's colour, so the colour
+     * chain starts again at this node. The grades put on so far - the
+     * object's own and the slot each gaussian is on - graded the colour the
+     * node replaces; they are set aside (view.stash) and the object is left
+     * with none. Whatever colour node applies after this one then grades the
+     * false colour, through the same two places every colour node writes
+     * to, and the shader and the file writers need no second chain.
+     * removeDebugView hands back what was set aside. History applies and
+     * reverses in order, so by then everything put on since is off again.
+     *
+     * A node on a channel the object does not have takes nothing: the
+     * object goes on drawing its own colour, with its own grades.
+     */
     addDebugView(view: DebugView) {
+        view.stash = null;
+        if (debugChannelAvailable(this, view.channel)) {
+            const slots = this.gradeTexture.lock() as Uint16Array;
+            view.stash = this.colourState(slots);
+            // What the false colour starts with: nothing - unless the node
+            // came off with grades no node holds, which only a project's
+            // node does (see removeDebugView), and then those.
+            const { kept } = view;
+            view.kept = null;
+            slots.fill(0);
+            if (kept?.slots.length === slots.length) {
+                slots.set(kept.slots);
+            }
+            this.gradeTexture.unlock();
+            this.setGrade(kept?.grade ?? {
+                tintClr: new Color(1, 1, 1),
+                temperature: 0,
+                saturation: 1,
+                exposure: 0,
+                brightness: 0,
+                blackPoint: 0,
+                whitePoint: 1,
+                transparency: 1
+            });
+        }
         this.debugViews.push(view);
         this.updateDebugView();
+    }
+
+    // the object's grade and the slot each gaussian is on, as they stand
+    private colourState(slots: Uint16Array): DebugStash {
+        return {
+            grade: {
+                tintClr: this._tintClr.clone(),
+                temperature: this._temperature,
+                saturation: this._saturation,
+                exposure: this._exposure,
+                brightness: this._brightness,
+                blackPoint: this._blackPoint,
+                whitePoint: this._whitePoint,
+                transparency: this._transparency
+            },
+            slots: new Uint16Array(slots)
+        };
     }
 
     /** A debug view node, undone or bypassed: the one before it shows again, or the colour. */
@@ -540,8 +598,144 @@ class Splat extends Element {
         const index = this.debugViews.lastIndexOf(view);
         if (index !== -1) {
             this.debugViews.splice(index, 1);
+            const { stash } = view;
+            view.stash = null;
+            if (stash) {
+                const slots = this.gradeTexture.lock() as Uint16Array;
+                // The colour nodes after this one are off by now and have
+                // taken their grades with them. What is still on the false
+                // colour is held by no node: the grades a project stored
+                // with this one (docDeserializeDebugGrade). They stay with
+                // it, for when it is applied again.
+                const c = this._tintClr;
+                const graded = c.r !== 1 || c.g !== 1 || c.b !== 1 || this._temperature !== 0 || this._saturation !== 1 ||
+                    this._exposure !== 0 || this._brightness !== 0 || this._blackPoint !== 0 || this._whitePoint !== 1 ||
+                    this._transparency !== 1;
+                view.kept = graded || slots.some(slot => slot !== 0) ? this.colourState(slots) : null;
+                // a sequence's next frame comes with slots of its own, all
+                // unset, and the nodes that set them are applied again
+                slots.fill(0);
+                if (stash.slots.length === slots.length) {
+                    slots.set(stash.slots);
+                }
+                this.gradeTexture.unlock();
+                this.setGrade(stash.grade);
+            }
             this.updateDebugView();
         }
+    }
+
+    /**
+     * The grades on the object's own colour while a debug view node has
+     * taken the colour chain over, or null when none has: what the first
+     * such node set aside. A project and a training seed store the object's
+     * own colour, and the histogram counts it.
+     */
+    get ownColour(): DebugStash | null {
+        return this.debugViews.find(view => view.stash)?.stash ?? null;
+    }
+
+    /** The object's own grade: the one on its own colour, whatever a debug view shows. */
+    get ownGrade(): GradeParams {
+        return this.ownColour?.grade ?? this;
+    }
+
+    /**
+     * For a project: the grades on the false colour - what colour nodes
+     * after the last debug view node put on - or null when no debug view
+     * holds the colour chain. A project keeps no colour nodes, so it keeps
+     * what they came to: the object's grade as it stands, and per gaussian
+     * the grade it is on, as an entry of `palette` plus one (0: none), one
+     * per row the project's file has - the rows not deleted, in order.
+     */
+    docSerializeDebugGrade() {
+        const last = this.debugViews[this.debugViews.length - 1];
+        if (!last?.stash) return null;
+
+        const state = this.state.data;
+        const slots = new Uint16Array(this.gradeTexture.lock() as Uint16Array);
+        this.gradeTexture.unlock();
+
+        const palette: Grade[] = [];
+        const entryOf = new Map<number, number>();
+        const rows = new Uint16Array(state.length - this.state.numDeleted);
+        let row = 0;
+        for (let i = 0; i < state.length; i++) {
+            if (state[i] & State.deleted) continue;
+            const slot = slots[i];
+            if (slot) {
+                let entry = entryOf.get(slot);
+                if (!entry) {
+                    entry = palette.push(this.gradePalette.getGrade(slot));
+                    entryOf.set(slot, entry);
+                }
+                rows[row] = entry;
+            }
+            row++;
+        }
+
+        const c = this._tintClr;
+        return {
+            grade: {
+                tintClr: [c.r, c.g, c.b, c.a],
+                temperature: this._temperature,
+                saturation: this._saturation,
+                exposure: this._exposure,
+                brightness: this._brightness,
+                blackPoint: this._blackPoint,
+                whitePoint: this._whitePoint,
+                transparency: this._transparency
+            },
+            palette,
+            rows: palette.length ? rows : null
+        };
+    }
+
+    /**
+     * What docSerializeDebugGrade stored, put back on once the project's
+     * debug view nodes are applied. Nothing is done when the last of them
+     * shows nothing here - the object then draws its own colour, which
+     * these grades were not for.
+     */
+    docDeserializeDebugGrade(stored: any, rows: Uint16Array | null) {
+        const last = this.debugViews[this.debugViews.length - 1];
+        const g = stored?.grade;
+        if (!last?.stash || !g) return;
+
+        this.setGrade({
+            tintClr: new Color(g.tintClr[0], g.tintClr[1], g.tintClr[2], g.tintClr[3]),
+            temperature: g.temperature ?? 0,
+            saturation: g.saturation ?? 1,
+            exposure: g.exposure ?? 0,
+            brightness: g.brightness ?? 0,
+            blackPoint: g.blackPoint ?? 0,
+            whitePoint: g.whitePoint ?? 1,
+            transparency: g.transparency ?? 1
+        });
+
+        const palette = (stored.palette ?? []) as Grade[];
+        if (rows && palette.length && rows.length === this.splatData.numSplats) {
+            const first = this.gradePalette.alloc(palette.length);
+            palette.forEach((grade, k) => this.gradePalette.setGrade(first + k, grade));
+            const slots = this.gradeTexture.lock() as Uint16Array;
+            for (let i = 0; i < rows.length; i++) {
+                slots[i] = rows[i] ? first + rows[i] - 1 : 0;
+            }
+            this.gradeTexture.unlock();
+        }
+        this.scene.forceRender = true;
+    }
+
+    // the object's grade, all eight at once
+    private setGrade(grade: GradeParams) {
+        this.tintClr = grade.tintClr;
+        this.temperature = grade.temperature;
+        this.saturation = grade.saturation;
+        this.exposure = grade.exposure ?? 0;
+        this.brightness = grade.brightness;
+        this.blackPoint = grade.blackPoint;
+        this.whitePoint = grade.whitePoint;
+        this.transparency = grade.transparency;
     }
 
     /**
@@ -1021,6 +1215,10 @@ class Splat extends Element {
         const pack3 = (v: Vec3) => [v.x, v.y, v.z];
         const pack4 = (q: Quat) => [q.x, q.y, q.z, q.w];
         const packC = (c: Color) => [c.r, c.g, c.b, c.a];
+        // the object's own grade: under a debug view node the object's
+        // properties hold the grade on the false colour, which the project
+        // stores with the node (see doc.ts)
+        const grade = this.ownGrade;
         return {
             name: this.name,
             position: pack3(this.entity.getLocalPosition()),
@@ -1029,15 +1227,15 @@ class Splat extends Element {
             localFrameOrigin: pack3(this.localFrameOrigin),
             localFrame: pack4(this.localFrame),
             visible: this.visible,
-            tintClr: packC(this.tintClr),
-            temperature: this.temperature,
-            saturation: this.saturation,
-            exposure: this.exposure,
+            tintClr: packC(grade.tintClr),
+            temperature: grade.temperature,
+            saturation: grade.saturation,
+            exposure: grade.exposure ?? 0,
             shBandLimit: this.shBandLimit,
-            brightness: this.brightness,
-            blackPoint: this.blackPoint,
-            whitePoint: this.whitePoint,
-            transparency: this.transparency
+            brightness: grade.brightness,
+            blackPoint: grade.blackPoint,
+            whitePoint: grade.whitePoint,
+            transparency: grade.transparency
         };
     }
 

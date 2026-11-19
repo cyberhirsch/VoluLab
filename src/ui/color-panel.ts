@@ -358,6 +358,7 @@ class ColorPanel extends Container {
                         transparency: selected.transparency
                     }
                 });
+                op.from = { ...op.oldState, tintClr: selected.tintClr.clone() };
             }
         };
 
@@ -515,6 +516,7 @@ class ColorPanel extends Container {
         events.on('splat.tintClr', updateUIFromState);
         events.on('splat.temperature', updateUIFromState);
         events.on('splat.saturation', updateUIFromState);
+        events.on('splat.exposure', updateUIFromState);
         events.on('splat.brightness', updateUIFromState);
         events.on('splat.blackPoint', updateUIFromState);
         events.on('splat.whitePoint', updateUIFromState);

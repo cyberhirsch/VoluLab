@@ -297,40 +297,27 @@ void main(void) {
         // a defocused gaussian covers more screen, so it must be fainter
         color.a *= camDofAlpha * motionAlpha;
 
-        // The debug view takes the colour's place and nothing else: alpha
-        // and shape stay, so it shows where things are. Neither the grades,
-        // the relit light nor the exposure touch it - they would change
-        // what a colour in the legend means.
+        // The debug view takes the colour's place, and from there on it is
+        // the object's colour: alpha and shape stay, there is no view
+        // dependence, and what comes after a colour - the grades and the
+        // camera's exposure - comes after this one too. The grades are the
+        // ones put on since the debug view node: the node set the object's
+        // colour chain back to nothing when it applied (Splat.addDebugView).
+        // Relit light stays off it, since the relighter works from the
+        // object's own colour.
         #ifdef SPLAT_DEBUG
             #ifdef SPLAT_DEBUG_TEX
                 float debugValue = texelFetch(splatDebug, splat.uv, 0).r;
             #else
                 float debugValue = 0.0;
             #endif
-            vec3 debugClr = debugRamp(debugValue);
-            if (debugMode == 9) {
-                debugClr = debugCategory(int(debugValue * 255.0 + 0.5));
-            } else if (debugMode == 8) {
-                debugClr = debugHeat(debugValue);
-            } else if (debugMode == 6) {
-                debugClr = debugRamp(debugOpacity);
-            }
             #ifdef SPLAT_MOTION
-                if (debugMode == 1) {
-                    // direction: xyz as rgb around grey, in the model's own axes
-                    debugClr = clamp(abs(motion.xyz) * debugParams.x, 0.0, 1.0);
-                } else if (debugMode == 2) {
-                    debugClr = debugHeat((log(max(length(motion.xyz), 1e-20)) - debugParams.x) * debugParams.y);
-                } else if (debugMode == 3) {
-                    debugClr = debugRamp(motion.w);
-                } else if (debugMode == 4) {
-                    // falloff is 1 / (2 sigma_t^2)
-                    debugClr = debugRamp((0.5 * log(0.5 / max(motionFalloff, 1e-30)) - debugParams.x) * debugParams.y);
-                } else if (debugMode == 5) {
-                    debugClr = debugRamp(motionAlpha);
-                }
+                color.xyz = debugColor(debugMode, debugParams, debugValue, debugOpacity, motion, motionFalloff, motionAlpha);
+            #else
+                color.xyz = debugColor(debugMode, debugParams, debugValue, debugOpacity, vec4(0.0), 0.0, 1.0);
             #endif
-            color.xyz = debugClr;
+            color = applyGrade(color);
+            color.xyz *= camExposure;
         #else
 
         // evaluate spherical harmonics
@@ -372,7 +359,7 @@ void main(void) {
         // worse) thing entirely.
         color.xyz *= camExposure;
 
-        // (the debug view skipped everything since its colour)
+        // (the debug view has had its grade and exposure already)
         #endif
 
         // don't allow out-of-range alpha
@@ -826,37 +813,21 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
         // a defocused gaussian covers more screen, so it must be fainter
         color.a = color.a * camDofAlpha * motionAlpha;
 
-        // the debug view takes the colour's place and nothing else - see
-        // the GLSL twin
+        // the debug view takes the colour's place, and is graded and
+        // exposed as a colour is - see the GLSL twin
         #ifdef SPLAT_DEBUG
             var debugValue: f32 = 0.0;
             #ifdef SPLAT_DEBUG_TEX
                 debugValue = textureLoad(splatDebug, splat.uv, 0).r;
             #endif
-            var debugClr: vec3f = debugRamp(debugValue);
-            if (uniform.debugMode == 9) {
-                debugClr = debugCategory(i32(debugValue * 255.0 + 0.5));
-            } else if (uniform.debugMode == 8) {
-                debugClr = debugHeat(debugValue);
-            } else if (uniform.debugMode == 6) {
-                debugClr = debugRamp(debugOpacity);
-            }
             #ifdef SPLAT_MOTION
-                if (uniform.debugMode == 1) {
-                    // direction: xyz as rgb around grey, in the model's own axes
-                    debugClr = clamp(abs(motion.xyz) * uniform.debugParams.x, vec3f(0.0), vec3f(1.0));
-                } else if (uniform.debugMode == 2) {
-                    debugClr = debugHeat((log(max(length(motion.xyz), 1e-20)) - uniform.debugParams.x) * uniform.debugParams.y);
-                } else if (uniform.debugMode == 3) {
-                    debugClr = debugRamp(motion.w);
-                } else if (uniform.debugMode == 4) {
-                    // falloff is 1 / (2 sigma_t^2)
-                    debugClr = debugRamp((0.5 * log(0.5 / max(motionFalloff, 1e-30)) - uniform.debugParams.x) * uniform.debugParams.y);
-                } else if (uniform.debugMode == 5) {
-                    debugClr = debugRamp(motionAlpha);
-                }
+                let debugClr: vec3f = debugColor(uniform.debugMode, uniform.debugParams, debugValue, debugOpacity, motion, motionFalloff, motionAlpha);
+            #else
+                let debugClr: vec3f = debugColor(uniform.debugMode, uniform.debugParams, debugValue, debugOpacity, vec4f(0.0), 0.0, 1.0);
             #endif
-            color = vec4f(debugClr, color.a);
+            // then what comes after a colour: the grades, the exposure
+            color = applyGrade(vec4f(debugClr, color.a));
+            color = vec4f(color.xyz * uniform.camExposure, color.a);
         #else
 
         #if SH_BANDS > 0
@@ -888,7 +859,7 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
         // camera exposure: scene-referred, before the tonemap
         color = vec4f(color.xyz * uniform.camExposure, color.a);
 
-        // (the debug view skipped everything since its colour)
+        // (the debug view has had its grade and exposure already)
         #endif
 
         color.a = clamp(color.a, 0.0, 1.0);

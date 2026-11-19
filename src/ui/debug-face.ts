@@ -85,10 +85,23 @@ class DebugFace extends Container {
         this.channelSelect.addEventListener('change', () => {
             const op = this.op;
             if (!op) return;
-            op.view.channel = this.channelSelect.value as DebugChannel;
-            // the view is the object's while the node is applied; a bypassed
-            // node keeps the setting for when it is not
-            if (op.splat.debugViews.includes(op.view)) {
+            const channel = this.channelSelect.value as DebugChannel;
+            const applied = op.splat.debugViews.includes(op.view);
+            // A node that showed nothing took no place in the object's colour
+            // chain, and one that shows something has one: going from the one
+            // to the other is the node applied again where it stands, with
+            // what follows it. Otherwise the view is the object's while the
+            // node is applied, and a bypassed node keeps the setting for when
+            // it is not.
+            if (applied && !!op.view.stash !== debugChannelAvailable(op.splat, channel)) {
+                const { ops } = this.events.invoke('edit.history') as { ops: unknown[] };
+                this.events.invoke('edit.refresh', ops.indexOf(op), () => {
+                    op.view.channel = channel;
+                });
+                return;
+            }
+            op.view.channel = channel;
+            if (applied) {
                 op.splat.updateDebugView();
             } else {
                 this.readOp();
