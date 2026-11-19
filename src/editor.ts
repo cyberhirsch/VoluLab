@@ -5,7 +5,7 @@ import { registerCameraEffects } from './camera-effects';
 import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
+import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -568,6 +568,29 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             m.setTRS(bound.center, Quat.IDENTITY, new Vec3(size, size, size));
             appendAndOpen(new CropOp(splat, 'box', m, true));
         });
+    });
+
+    // A transform node starts as no transform at all: something to type into.
+    events.on('graph.addTransformNode', (target?: Splat) => {
+        addTarget(target).forEach(splat => appendAndOpen(new TransformNodeOp(splat)));
+    });
+
+    // a transform node for an object, holding this: a project's come back
+    // through here
+    events.function('transform.addNode', (splat: Splat, stored?: { position?: number[], rotation?: number[], scale?: number[], bypassed?: boolean }) => {
+        if (!splat) return null;
+        const vec = (v: number[] | undefined, fallback: number) => {
+            return Array.isArray(v) && v.length === 3 && v.every(Number.isFinite) ? new Vec3(v[0], v[1], v[2]) : new Vec3(fallback, fallback, fallback);
+        };
+        const op = new TransformNodeOp(splat, vec(stored?.position, 0), vec(stored?.rotation, 0), vec(stored?.scale, 1));
+        op.bypassed = !!stored?.bypassed;
+        events.fire('edit.add', op);
+        return op;
+    });
+
+    // A delete node removes what the select nodes above it leave selected.
+    events.on('graph.addDeleteNode', (target?: Splat) => {
+        addTarget(target).forEach(splat => appendAndOpen(new DeleteNodeOp(splat)));
     });
 
     events.on('graph.addCleanupNode', (target?: Splat) => {

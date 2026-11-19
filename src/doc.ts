@@ -1,7 +1,7 @@
 import { ZipFileSystem, ZipReadFileSystem } from '@playcanvas/splat-transform';
 import { Vec3 } from 'playcanvas';
 
-import { EditOp, LightOp, PrimitiveOp } from './edit-ops';
+import { EditOp, LightOp, PrimitiveOp, TransformNodeOp } from './edit-ops';
 import { ElementType } from './element';
 import { Events } from './events';
 import { BrowserFileSystem, BlobReadSource } from './io';
@@ -231,6 +231,16 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 }
             }
 
+            // transform nodes come back on the objects they were on, on top of
+            // the placement each object was stored with
+            if (Array.isArray(document.transforms)) {
+                for (const stored of document.transforms) {
+                    const splat = loaded[stored?.splat];
+                    if (splat) events.invoke('transform.addNode', splat, stored);
+                }
+                events.fire('edit.changed');
+            }
+
             // relight nodes come back on the objects they were on. A project
             // from before relight nodes had one lighting for the whole scene,
             // and its lights relit every object - so each gets a node with it.
@@ -308,6 +318,22 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             const history = (events.invoke('edit.history')?.ops ?? []) as EditOp[];
             const voxels = scene.getElementsByType(ElementType.voxel) as Voxels[];
 
+            // An object's transform nodes are kept as nodes, so the object is
+            // stored where it stands without them and they go back on top.
+            // Where no such placement exists the object is stored as it
+            // stands and its transform nodes are not kept.
+            const pack3 = (v: Vec3) => [v.x, v.y, v.z];
+            const { ops: allOps, cursor } = events.invoke('edit.history') as { ops: EditOp[], cursor: number };
+            const placements = splats.map((splat) => {
+                const nodes = allOps.slice(0, cursor).filter(o => o instanceof TransformNodeOp && o.splat === splat && (o.applied || o.bypassed)) as TransformNodeOp[];
+                const { entity } = splat;
+                const base = nodes.length ? TransformNodeOp.baseOf(
+                    new Transform(entity.getLocalPosition(), entity.getLocalRotation(), entity.getLocalScale()),
+                    nodes.filter(n => n.applied)
+                ) : null;
+                return base ? { base, nodes } : null;
+            });
+
             const document = {
                 // .vlp starts its own numbering; an .ssproj is version 0 of a
                 // different format and is detected by what it lacks
@@ -317,7 +343,24 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 view: events.invoke('docSerialize.view'),
                 poseSets: events.invoke('docSerialize.poseSets'),
                 timeline: events.invoke('docSerialize.timeline'),
-                splats: splats.map(s => s.docSerialize()),
+                splats: splats.map((s, i) => {
+                    const base = placements[i]?.base;
+                    return !base ? s.docSerialize() : {
+                        ...s.docSerialize(),
+                        position: pack3(base.position),
+                        rotation: [base.rotation.x, base.rotation.y, base.rotation.z, base.rotation.w],
+                        scale: pack3(base.scale)
+                    };
+                }),
+
+                // each object's transform nodes, in the order of its chain
+                transforms: placements.flatMap((placed, i) => (placed?.nodes ?? []).map(node => ({
+                    splat: i,
+                    position: pack3(node.newt.position),
+                    rotation: pack3(node.euler),
+                    scale: pack3(node.newt.scale),
+                    bypassed: !!node.bypassed
+                }))),
 
                 // the camera objects: pose, lens, lock and their animation
                 cameras: cameras.map(c => c.docSerialize()),

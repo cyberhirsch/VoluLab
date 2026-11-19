@@ -1,8 +1,9 @@
 import { Container } from '@playcanvas/pcui';
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
+import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
-import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, EditOp, EntityTransformOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -188,9 +189,15 @@ class NodePanel extends Container {
             return;
         }
 
-        if (op instanceof EntityTransformOp) {
+        if (op instanceof EntityTransformOp || op instanceof TransformNodeOp) {
             this.empty.hidden = true;
             this.buildTransform(op, index);
+            return;
+        }
+
+        if (op instanceof DeleteNodeOp) {
+            this.empty.hidden = true;
+            this.buildDelete(op, index);
             return;
         }
 
@@ -650,8 +657,19 @@ class NodePanel extends Container {
      * and replays from there, so moving a node that other edits stand on
      * rebuilds them rather than stranding them.
      */
-    private buildTransform(op: EntityTransformOp, index: number) {
-        const euler = op.newt.rotation.getEulerAngles();
+    private buildTransform(op: EntityTransformOp | TransformNodeOp, index: number) {
+        // a transform node keeps the angles as they were typed
+        const node = op instanceof TransformNodeOp ? op : null;
+        const euler = node ? node.euler : op.newt.rotation.getEulerAngles();
+
+        // Only while nothing after the node places the object too: what the
+        // object shows is then this node's doing, and can be shown without
+        // replaying. With a later transform in the way it waits for the replay.
+        const { ops, cursor } = this.events.invoke('edit.history') as { ops: EditOp[], cursor: number };
+        const live = !!node && !ops.slice(index + 1, cursor).some((later) => {
+            const p = principalOp(later);
+            return (p instanceof EntityTransformOp || p instanceof TransformNodeOp) && p.splat === op.splat && !later.bypassed;
+        });
 
         // neutral: what a middle click puts back; step: what a wheel notch
         // or a few pixels of drag move it by
@@ -675,6 +693,15 @@ class NodePanel extends Container {
                     const next = fields.map(f => parseFloat(f.value) || 0);
                     this.events.invoke('edit.refresh', index, () => apply(next));
                 });
+                // a transform node follows the field while it is dragged or
+                // typed in; the replay comes when the number settles
+                if (live) {
+                    input.addEventListener('input', () => {
+                        if (fields.some(f => !Number.isFinite(parseFloat(f.value)))) return;
+                        apply(fields.map(f => parseFloat(f.value)));
+                        node.preview();
+                    });
+                }
                 row.appendChild(input);
                 return input;
             });
@@ -686,7 +713,11 @@ class NodePanel extends Container {
         });
 
         triple('rotation', [euler.x, euler.y, euler.z], 0, 1, (v) => {
-            op.newt.rotation.setFromEulerAngles(v[0], v[1], v[2]);
+            if (node) {
+                node.setRotation(v[0], v[1], v[2]);
+            } else {
+                op.newt.rotation.setFromEulerAngles(v[0], v[1], v[2]);
+            }
         });
 
         triple('scale', [op.newt.scale.x, op.newt.scale.y, op.newt.scale.z], 1, 0.01, (v) => {
@@ -694,6 +725,56 @@ class NodePanel extends Container {
             // because every later value multiplies through it
             op.newt.scale.set(v[0] || 1e-4, v[1] || 1e-4, v[2] || 1e-4);
         });
+
+        if (!node) return;
+
+        const reset = document.createElement('button');
+        reset.type = 'button';
+        reset.className = 'nd-action';
+        reset.textContent = i18n.t('node.transform.reset');
+        reset.disabled = node.identity;
+        reset.addEventListener('click', () => {
+            this.events.invoke('edit.refresh', index, () => node.reset());
+        });
+        this.body.appendChild(reset);
+
+        const note = document.createElement('div');
+        note.className = 'nd-note';
+        note.textContent = i18n.t('node.transform.note');
+        this.body.appendChild(note);
+    }
+
+    /**
+     * A delete node: which side of the selection it removes, and how many
+     * that came to. The selection is whatever the select nodes above it
+     * leave, so there is nothing here to say which gaussians - only which
+     * side.
+     */
+    private buildDelete(op: DeleteNodeOp, index: number) {
+        const row = this.row(i18n.t('node.delete.what'));
+        const choices = document.createElement('div');
+        choices.className = 'nd-choices';
+        (['selected', 'unselected'] as const).forEach((what) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'nd-choice';
+            b.textContent = i18n.t(`node.delete.${what}`);
+            if (op.what === what) b.classList.add('nd-choice-active');
+            b.addEventListener('click', () => {
+                if (op.what !== what) this.events.invoke('edit.refresh', index, () => op.setWhat(what));
+            });
+            choices.appendChild(b);
+        });
+        row.appendChild(choices);
+        this.body.appendChild(row);
+
+        const n = op.affected;
+        this.stat(i18n.t('node.delete.removed'), n < 0 ? i18n.t('node.delete.not-applied') : n.toLocaleString());
+
+        const note = document.createElement('div');
+        note.className = 'nd-note';
+        note.textContent = i18n.t(n >= 0 && op.selectedIn === 0 ? 'node.delete.none' : 'node.delete.note');
+        this.body.appendChild(note);
     }
 
     private row(label: string): HTMLElement {

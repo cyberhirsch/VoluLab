@@ -73,6 +73,8 @@ const OP_LABELS: Record<string, string> = {
     deleteSelection: 'delete selection',
     reset: 'restore deleted',
     entityTransform: 'transform',
+    transformNode: 'transform',
+    deleteNode: 'delete',
     splatsTransform: 'transform splats',
     setPivot: 'place pivot',
     setLocalFrame: 'local frame',
@@ -1130,6 +1132,14 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addCropNode', splat)
                     },
                     {
+                        label: 'transform',
+                        action: () => this.events.fire('graph.addTransformNode', splat)
+                    },
+                    {
+                        label: 'delete',
+                        action: () => this.events.fire('graph.addDeleteNode', splat)
+                    },
+                    {
                         label: 'cleanup',
                         action: () => this.events.fire('graph.addCleanupNode', splat)
                     },
@@ -1379,6 +1389,20 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addCropNode')
+            },
+            {
+                // the object moved, turned and scaled, by numbers
+                label: 'add transform node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addTransformNode')
+            },
+            {
+                // removes what the select nodes above it selected, or the rest
+                label: 'add delete node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addDeleteNode')
             },
             {
                 label: 'add cleanup node',

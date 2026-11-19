@@ -455,6 +455,206 @@ class EntityTransformOp {
     }
 }
 
+/**
+ * A transform on top of another: the node's matrix times the placement it
+ * lands on, read back as position, rotation and scale. The scale is the
+ * length of each of the object's own axes afterwards, so a node that
+ * stretches the world's Y stretches whichever axis of the object points
+ * that way - a z-up 4D model stands on a turn of its own. An uneven scale
+ * across a turn that is not a quarter one would shear, which an object's
+ * placement cannot hold; the nearest placement without it is what comes out.
+ */
+const composeTransform = (delta: Mat4, base: Transform): Transform => {
+    const m = new Mat4().setTRS(base.position, base.rotation, base.scale);
+    m.mul2(delta, m);
+
+    const d = m.data;
+    const axes = [0, 4, 8].map(o => new Vec3(d[o], d[o + 1], d[o + 2]));
+    const scale = new Vec3(axes[0].length(), axes[1].length(), axes[2].length());
+    // a mirror: the axes come out left-handed, and one of them takes the sign
+    if (new Vec3().cross(axes[0], axes[1]).dot(axes[2]) < 0) {
+        scale.x = -scale.x;
+    }
+    const r = new Mat4();
+    [scale.x, scale.y, scale.z].forEach((s, k) => {
+        const inv = s ? 1 / s : 0;
+        r.data[k * 4] = axes[k].x * inv;
+        r.data[k * 4 + 1] = axes[k].y * inv;
+        r.data[k * 4 + 2] = axes[k].z * inv;
+    });
+
+    return new Transform(m.getTranslation(), new Quat().setFromMat4(r), scale);
+};
+
+/**
+ * A transform node: the object moved, turned and scaled by what the node
+ * holds, on top of wherever it stood.
+ *
+ * EntityTransformOp says where the object ends up, which is what a gizmo
+ * drag knows. This one says what is done to it, so it can be added before
+ * there is anything to say, several of them add up in the order of the
+ * chain, and it keeps what the object came with - a 4D model's turn onto
+ * the engine's up axis is a rotation of the object like any other, and a
+ * node that set the placement outright would take it away.
+ *
+ * The transform is about the scene's origin, in the scene's axes.
+ */
+class TransformNodeOp {
+    name = 'transformNode';
+    splat: Splat;
+    /** what the node adds; named as EntityTransformOp names its target, so the node pane edits both the same way */
+    newt: Transform;
+    /** the rotation as it was typed, in degrees: read back from the quaternion, 200 would come back as -160 */
+    euler: Vec3;
+    bypassed?: boolean;
+
+    // the placement this landed on, while it is applied
+    private oldt: Transform | null = null;
+
+    constructor(splat: Splat, position = new Vec3(), euler = new Vec3(), scale = new Vec3(1, 1, 1)) {
+        this.splat = splat;
+        this.euler = euler.clone();
+        this.newt = new Transform(position, new Quat().setFromEulerAngles(euler.x, euler.y, euler.z), scale);
+    }
+
+    get applied() {
+        return this.oldt !== null;
+    }
+
+    get identity() {
+        return this.newt.equalsApprox(new Transform());
+    }
+
+    setRotation(x: number, y: number, z: number) {
+        this.euler.set(x, y, z);
+        this.newt.rotation.setFromEulerAngles(x, y, z);
+    }
+
+    reset() {
+        this.newt.set(Vec3.ZERO, Quat.IDENTITY, Vec3.ONE);
+        this.euler.set(0, 0, 0);
+    }
+
+    /** the node's own matrix */
+    get matrix() {
+        return new Mat4().setTRS(this.newt.position, this.newt.rotation, this.newt.scale);
+    }
+
+    /** where a placement goes under this node */
+    over(base: Transform) {
+        return composeTransform(this.matrix, base);
+    }
+
+    /**
+     * The placement that, with these nodes applied to it in order, gives
+     * `final` - what a project stores, so the nodes can be put back on top
+     * of it. Null when no placement does: see composeTransform.
+     */
+    static baseOf(final: Transform, nodes: TransformNodeOp[]): Transform | null {
+        // a scale of nothing cannot be taken back out
+        if (nodes.some(n => n.newt.scale.x * n.newt.scale.y * n.newt.scale.z === 0)) {
+            return null;
+        }
+        const inverse = new Mat4();
+        nodes.forEach(node => inverse.mul2(node.matrix, inverse));
+        inverse.invert();
+
+        const base = composeTransform(inverse, final);
+        const back = nodes.reduce((t, node) => node.over(t), base);
+        const size = Math.max(1, final.position.length());
+        // a quaternion and its negative are the same rotation
+        const turned = Math.abs(back.rotation.dot(final.rotation));
+        const same = back.position.distance(final.position) < 1e-4 * size &&
+            turned > 1 - 1e-6 &&
+            back.scale.distance(final.scale) < 1e-4 * Math.max(1, final.scale.length());
+        return same ? base : null;
+    }
+
+    do() {
+        const { entity } = this.splat;
+        this.oldt = new Transform(entity.getLocalPosition(), entity.getLocalRotation(), entity.getLocalScale());
+        const t = this.over(this.oldt);
+        this.splat.move(t.position, t.rotation, t.scale);
+    }
+
+    /**
+     * Show the node as it now stands without replaying it: for a field being
+     * dragged. Only right while nothing after this node places the object.
+     */
+    preview() {
+        if (!this.oldt) return;
+        const t = this.over(this.oldt);
+        this.splat.move(t.position, t.rotation, t.scale);
+    }
+
+    undo() {
+        if (!this.oldt) return;
+        this.splat.move(this.oldt.position, this.oldt.rotation, this.oldt.scale);
+        this.oldt = null;
+    }
+
+    destroy() {
+        this.splat = null;
+        this.oldt = null;
+    }
+}
+
+/**
+ * A delete node: removes the gaussians the select nodes above it leave
+ * selected, or all the others.
+ *
+ * What the Delete key adds says the same thing once and has no settings.
+ * This one is put in from the graph and can be turned round: set to
+ * `unselected` it keeps the selection and removes the rest. Like the scoped
+ * colour node it reads the selection when it applies, not when it was made,
+ * so a select node above it can change and the delete follows.
+ *
+ * With nothing selected it removes nothing, whichever way it is set: the
+ * rest of nothing is the whole object, and a node just added should not
+ * empty it.
+ */
+type DeleteWhat = 'selected' | 'unselected';
+
+class DeleteNodeOp extends StateOp {
+    name = 'deleteNode';
+
+    what: DeleteWhat;
+
+    /** how many gaussians were selected when it last resolved, or -1 */
+    selectedIn = -1;
+
+    constructor(splat: Splat, what: DeleteWhat = 'selected') {
+        super(splat, null, State.deleted, BitOp.SET, State.deleted);
+        this.what = what;
+
+        this.resolver = (s: Splat) => {
+            const state = s.splatData.getProp('state') as Uint8Array;
+            const n = s.splatData.numSplats;
+
+            let selected = 0;
+            for (let i = 0; i < n; ++i) {
+                if (state[i] === State.selected) selected++;
+            }
+            this.selectedIn = selected;
+            if (!selected) return IndexRanges.fromPredicate(0, () => false);
+
+            // hidden gaussians are neither: they are out of reach of an edit
+            const doomed = this.what === 'selected' ? State.selected : 0;
+            return IndexRanges.fromPredicate(n, i => state[i] === doomed);
+        };
+    }
+
+    /** what the graph writes under the node's title */
+    get sourceLabel() {
+        return this.what;
+    }
+
+    setWhat(what: DeleteWhat) {
+        this.what = what;
+        this.invalidate();
+    }
+}
+
 const mat = new Mat4();
 
 // op for modifying a subset of individual splats
@@ -1997,6 +2197,9 @@ export {
     DeleteSelectionOp,
     ResetOp,
     EntityTransformOp,
+    TransformNodeOp,
+    DeleteNodeOp,
+    type DeleteWhat,
     SplatsTransformOp,
     PlacePivotOp,
     SetLocalFrameOp,
