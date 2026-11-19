@@ -428,6 +428,9 @@ class EntityTransformOp {
     oldt: Transform;
     newt: Transform;
 
+    // whether do() has run yet
+    private ran = false;
+
     constructor(options: { splat: Splat, oldt: Transform, newt: Transform }) {
         this.splat = options.splat;
         this.oldt = options.oldt;
@@ -440,7 +443,14 @@ class EntityTransformOp {
         // gizmo already made. After an earlier node is removed or moved the
         // two differ, and undo has to return to the former.
         const { entity } = this.splat;
-        this.oldt = new Transform(entity.getLocalPosition(), entity.getLocalRotation(), entity.getLocalScale());
+        const now = new Transform(entity.getLocalPosition(), entity.getLocalRotation(), entity.getLocalScale());
+        // The first time, an object already standing at the target is that
+        // application: where it came from is the constructor's value, and
+        // reading it here would make undo go nowhere.
+        if (this.ran || !now.equals(this.newt)) {
+            this.oldt = now;
+        }
+        this.ran = true;
         this.splat.move(this.newt.position, this.newt.rotation, this.newt.scale);
     }
 
