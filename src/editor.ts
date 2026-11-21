@@ -522,6 +522,33 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         }
 
         const existing = history().ops[target] as SetSplatColorAdjustmentOp;
+
+        // A debug view node between that node and where the history stands
+        // has the object's grade: it set the node's aside and the object
+        // holds the grade on the false colour, which is what the panel
+        // showed and changed. So the node takes what the gesture changed and
+        // keeps the rest of its own, and the replay puts both back in place.
+        const { ops, cursor } = history();
+        const taken = ops.slice(target + 1, cursor).some((o) => {
+            return o instanceof DebugViewOp && o.splat === op.splat && !o.bypassed && !!o.view.stash;
+        });
+        if (taken) {
+            const from = (op.from ?? op.oldState) as Record<string, unknown>;
+            const to = op.newState as Record<string, unknown>;
+            const changed = Object.keys(to).filter((key) => {
+                const a = from[key], b = to[key];
+                return a instanceof Color && b instanceof Color ? !a.equals(b) : a !== b;
+            });
+            const merged = { ...existing.newState } as Record<string, unknown>;
+            changed.forEach((key) => {
+                merged[key] = to[key];
+            });
+            events.invoke('edit.refresh', target, () => {
+                existing.newState = merged as typeof existing.newState;
+            });
+            return;
+        }
+
         existing.newState = op.newState;
         // the panel already applied it, so a replay is only needed when the
         // node being edited is not the last thing applied

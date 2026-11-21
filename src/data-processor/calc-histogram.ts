@@ -204,8 +204,10 @@ class CalcHistogram {
         const onScreenOnly = options?.onScreenOnly ? 1 : 0;
 
         // the one derivation, so this cannot drift from what is rendered
-        const { transparency } = splat;
-        const grade = gradeMatrix(splat);
+        // (the object's own grade: a debug view node keeps another on the
+        // object, for its false colour, which these values are not of)
+        const { transparency } = splat.ownGrade;
+        const grade = gradeMatrix(splat.ownGrade);
 
         const values: any = {
             transformA,

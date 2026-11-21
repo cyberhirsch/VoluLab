@@ -259,10 +259,26 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
             // debug view nodes too: they change no data, so the project holds
             // them as nodes or not at all
+            // What colour nodes after a debug view put on its false colour
+            // is stored with the node, and goes back on once the nodes are
+            // applied (below).
+            const debugGrades: { splat: Splat, stored: any, rows: Uint16Array | null }[] = [];
             if (Array.isArray(document.debugViews)) {
                 for (const stored of document.debugViews) {
                     const splat = loaded[stored?.splat];
-                    if (splat) events.invoke('debugView.addNode', splat, stored.channel);
+                    if (!splat) continue;
+                    events.invoke('debugView.addNode', splat, stored.channel);
+                    if (stored.colour) {
+                        let rows: Uint16Array | null = null;
+                        if (stored.colour.palette?.length) {
+                            const source = await zipFs.createSource(`debug_grade_${stored.splat}.bin`);
+                            const bytes = await source.read().readAll();
+                            source.close();
+                            // copied so the typed array starts on an aligned offset
+                            rows = new Uint16Array(bytes.slice().buffer);
+                        }
+                        debugGrades.push({ splat, stored: stored.colour, rows });
+                    }
                 }
                 events.fire('edit.changed');
             }
@@ -279,6 +295,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             // but they are what the project is, not edits made since opening
             // it: undo stops here, and the document starts clean.
             await events.invoke('edit.markLoaded');
+            // (the nodes are applied now: the history's queue has run)
+            debugGrades.forEach(({ splat, stored, rows }) => splat.docDeserializeDebugGrade(stored, rows));
             events.fire('doc.saved');
 
             // refresh the pivot to reflect the loaded transform
@@ -317,6 +335,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             const primitives = (events.invoke('primitive.list') ?? []) as ScenePrimitive[];
             const history = (events.invoke('edit.history')?.ops ?? []) as EditOp[];
             const voxels = scene.getElementsByType(ElementType.voxel) as Voxels[];
+            // the grades on each object's false colour, where a debug view shows one
+            const debugGrades = splats.map(s => s.docSerializeDebugGrade());
 
             // An object's transform nodes are kept as nodes, so the object is
             // stored where it stands without them and they go back on top.
@@ -395,8 +415,19 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 .map((s, i) => (s.relight ? { splat: i, settings: { ...s.relight } } : null))
                 .filter(Boolean),
 
-                // each object's debug view nodes, in the order of its chain
-                debugViews: splats.flatMap((s, i) => s.debugViews.map(view => ({ splat: i, channel: view.channel }))),
+                // each object's debug view nodes, in the order of its chain.
+                // The last carries what colour nodes after it put on the
+                // false colour (its per-gaussian part is in
+                // debug_grade_<i>.bin); the object's own grade is with the
+                // object, above, and in its file
+                debugViews: splats.flatMap((s, i) => s.debugViews.map((view, k) => {
+                    const colour = k === s.debugViews.length - 1 ? debugGrades[i] : null;
+                    return {
+                        splat: i,
+                        channel: view.channel,
+                        ...(colour ? { colour: { grade: colour.grade, palette: colour.palette } } : {})
+                    };
+                })),
 
                 // the session around the scene, so a project reopens in the
                 // workspace it was authored in
@@ -430,6 +461,16 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             // Write each splat as PLY
             for (let i = 0; i < splats.length; ++i) {
                 await writeSplatFile([splats[i]], serializeSettings, 'ply', `splat_${i}.ply`, {}, zipFs);
+            }
+
+            // and the grade each gaussian's false colour is on, a row per row of that file
+            for (let i = 0; i < splats.length; ++i) {
+                const rows = debugGrades[i]?.rows;
+                if (rows) {
+                    const writer = await zipFs.createWriter(`debug_grade_${i}.bin`);
+                    await writer.write(new Uint8Array(rows.buffer, rows.byteOffset, rows.byteLength));
+                    await writer.close();
+                }
             }
 
             // Write each voxel grid: its cells, then its colours

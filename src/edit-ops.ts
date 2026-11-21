@@ -884,6 +884,14 @@ class SetSplatColorAdjustmentOp {
     newState: ColorAdjustment;
     oldState: ColorAdjustment;
 
+    /**
+     * What the panel showed when the change it hands over began. oldState
+     * is read again each time the op applies, and the panel applies it at
+     * every step of a drag, so by the end it is one step back and not the
+     * start. Whoever has to tell what a gesture changed reads this.
+     */
+    from?: ColorAdjustment;
+
     constructor(options: { splat: Splat, oldState: ColorAdjustment, newState: ColorAdjustment }) {
         const { splat, oldState, newState } = options;
         this.splat = splat;
@@ -1230,10 +1238,14 @@ class SetShBandsOp {
  * its data - velocity, lifetime, opacity and so on - instead of by its
  * colour.
  *
- * A way of looking, not an edit. Applied, it hands the object its view;
- * undone or bypassed, it takes it back. Nothing in the data changes, so
- * nothing written, trained on or relit knows the node is there. An object
- * can carry several, and the last one applied is the one drawn.
+ * Applied, it hands the object its view; undone or bypassed, it takes it
+ * back. Nothing in the data changes, but the node has a place in the
+ * object's colour chain: from it on the false colour is the object's
+ * colour. Colour nodes after it grade the false colour, and an output node
+ * after it writes it; the ones before it grade and write the object's own,
+ * which the node sets aside while it is applied (Splat.addDebugView).
+ * Training and relighting work from the object's own colour either way. An
+ * object can carry several, and the last one applied is the one drawn.
  */
 class DebugViewOp {
     name = 'debugView';

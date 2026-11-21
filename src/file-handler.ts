@@ -7,7 +7,7 @@ import { BrowserFileSystem, MappedReadFileSystem } from './io';
 import { readVox } from './io/read/vox';
 import { Scene } from './scene';
 import { Splat } from './splat';
-import { SerializeSettings, serializeSog, serializeSpz, serializeViewer, SogSettings, SpzSettings, ViewerExportSettings, WebGPUUnavailableError, writeSplatFile } from './splat-serialize';
+import { bakeDebugColor, SerializeSettings, serializeSog, serializeSpz, serializeViewer, SogSettings, SpzSettings, ViewerExportSettings, WebGPUUnavailableError, writeSplatFile } from './splat-serialize';
 import { readGsv, writeGsv } from './tgh/gsv';
 import { TghFrameSource } from './tgh/tgh-frame-source';
 import { TghModel } from './tgh/tgh-model';
@@ -396,6 +396,25 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             return;
         }
 
+        // A debug view on the model is its colour from that node on, so it
+        // is what is written: the false colours, with the grades on them, in
+        // the place of the model's. All but one of the channels are of the
+        // gaussian and hold for the whole sequence. The fade is of one
+        // moment - a file that plays cannot hold it - so it is refused
+        // rather than written as the frame that happens to be shown.
+        // (Rows have to be the model's: a model conditioned per frame on the
+        // CPU has other rows, and no motion channels to show.)
+        const splat = events.invoke('sequence.splat') as Splat | null;
+        const debug = splat && splat.splatData.numSplats === source.model.numSplats ? splat.debugShown : null;
+        if (debug?.channel === 'falloff') {
+            await events.invoke('showPopup', {
+                type: 'error',
+                header: i18n.t('popup.error'),
+                message: i18n.t('debug.no-fade-in-4d')
+            });
+            return;
+        }
+
         const filename = `${source.name}.gsv`;
         let writable: FileSystemWritableFileStream | null = null;
         if (window.showSaveFilePicker) {
@@ -418,7 +437,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 frames: source.frameCount,
                 fps: events.invoke('timeline.frameRate') ?? source.model.meta.fps,
                 zUp: source.model.meta.zUp
-            }, { encoding, device, mortonOrder, staticSet });
+            }, { encoding, device, mortonOrder, staticSet, colour: debug ? bakeDebugColor(splat) : undefined });
             if (writable) {
                 await writable.write(bytes as BlobPart);
                 await writable.close();

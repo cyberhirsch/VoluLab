@@ -193,6 +193,11 @@ type WriteOptions = {
     // move global gaussians that stand still for the whole sequence to a
     // static page (the default), or keep every gaussian dynamic
     staticSet?: boolean;
+    // Colours to write in the model's place, a row per row of the model: a
+    // DC term each, with every band above it zero - a debug view's false
+    // colours (see bakeDebugColor) - and the opacity logits that go with
+    // them, where those differ from the model's.
+    colour?: { dc: Float32Array, opacity: Float32Array | null };
 };
 
 /** A TGH model as a GSV file. */
@@ -209,6 +214,10 @@ const writeGsv = async (model: TghModel, timeline: GsvTimeline, options: WriteOp
     }
 
     const src = model.tensors;
+    // the colour written: the model's, or the one handed in with no rest
+    const srcDc = options.colour?.dc ?? src.featuresDc;
+    const srcOpacity = options.colour?.opacity ?? src.opacity;
+    const writeRest = !options.colour;
     const levels = Array.from(model.levels);
     const K = model.restCoeffs;
     const bands = REST_COEFFS.indexOf(K);
@@ -296,9 +305,11 @@ const writeGsv = async (model: TghModel, timeline: GsvTimeline, options: WriteOp
             const falloff = staticFalloff.get(n);
             // untouched when there is nothing to fold in, so a static set
             // read back and written again keeps its opacities bit for bit
-            staticPage.opacity[o] = falloff === 1 ? src.opacity[n] : logit(Math.min(sigmoid(src.opacity[n]) * falloff, 1 - 1e-7));
-            staticPage.sh.set(src.featuresDc.subarray(n * 3, n * 3 + 3), o * shStride);
-            staticPage.sh.set(src.featuresRest.subarray(n * K * 3, (n + 1) * K * 3), o * shStride + 3);
+            staticPage.opacity[o] = falloff === 1 ? srcOpacity[n] : logit(Math.min(sigmoid(srcOpacity[n]) * falloff, 1 - 1e-7));
+            staticPage.sh.set(srcDc.subarray(n * 3, n * 3 + 3), o * shStride);
+            if (writeRest) {
+                staticPage.sh.set(src.featuresRest.subarray(n * K * 3, (n + 1) * K * 3), o * shStride + 3);
+            }
         }
     }
 
@@ -354,11 +365,13 @@ const writeGsv = async (model: TghModel, timeline: GsvTimeline, options: WriteOp
                     logScale[o * 4 + 3] = motion[10];
                     rot.set(motion.subarray(6, 10), o * 4);
                 }
-                opacity[o] = src.opacity[n];
+                opacity[o] = srcOpacity[n];
                 // dc, then each rest coefficient's r, g, b: the checkpoint's
                 // own coefficient-major layout
-                sh.set(src.featuresDc.subarray(n * 3, n * 3 + 3), o * shStride);
-                sh.set(src.featuresRest.subarray(n * K * 3, (n + 1) * K * 3), o * shStride + 3);
+                sh.set(srcDc.subarray(n * 3, n * 3 + 3), o * shStride);
+                if (writeRest) {
+                    sh.set(src.featuresRest.subarray(n * K * 3, (n + 1) * K * 3), o * shStride + 3);
+                }
             }
         }
         if (rotL) {

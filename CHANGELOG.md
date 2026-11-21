@@ -74,6 +74,121 @@ Traps:
   whole sequence, not only those alive at the frame shown.
 - The move gizmo is not put back where the object went when a transform
   node's numbers change. Picking the tool again places it.
+## A debug view's colour is the object's colour from its node on
+
+A colour node after a debug view node did nothing to the false colours,
+and no output wrote them: the view skipped the grades in the shader and
+the writers never heard of it. Now the node has a place in the object's
+colour chain. From it on the false colour is the object's colour. Colour
+nodes after it grade it - the object's grade and a grade on a selection
+alike - and an output node after it writes it. Colour nodes and outputs
+before it grade and write the object's own colour, as before.
+
+How the order is kept. An object has two places a colour node writes to:
+its own grade (eight numbers, the last node to set them wins) and a grade
+slot per gaussian, which nodes on a selection compose into. Neither says
+where in the chain a grade was put on. So the debug view node, when it
+applies, sets both aside (`view.stash`: the eight numbers and a copy of
+the slots) and leaves the object with none, and hands them back when it
+is undone or bypassed (`Splat.addDebugView`, `removeDebugView`). History
+applies and reverses in order, so what is on the object while the node is
+applied is exactly what was put on after it. The shader then grades the
+false colour with `applyGrade` like any colour, and the writers read the
+same two places they always read; there is no second chain. A node on a
+channel the object does not have takes nothing, and the object goes on
+drawing its own colour with its own grades.
+
+What is on the false colour: the grades after the node, then the camera
+node's exposure, then the tone map. Not the grades before the node, their
+transparency included - the opacity under a debug view is the stored one,
+as it was. Not the relit light: the relighter works from the object's own
+colour.
+
+Written out. `SingleSplat` puts the false colour in the DC term and
+writes no bands above it (a false colour is the same from every side),
+then applies the grades and their alpha the way it does for any colour.
+That one path is PLY, compressed PLY, .splat, SOG, SPZ, the viewer
+export, publish, merge and duplicate/separate - so an object merged or
+separated after a debug view node carries the false colours as its own.
+An image or video render shows the view because it is the viewport's
+shader. The project file and a training seed ask for the object's own
+colour (`ownColor`, implied by `keepColorTint`) and get it with the
+grades the node set aside; the histogram and select-by-range count it
+too (`Splat.ownGrade`).
+
+4D. A GSV is written from the model, not from the object, and so far saw
+no node at all. With a debug view on the model it now takes the false
+colours, with the grades on them, in the place of the model's DC, and no
+rest coefficients (`writeGsv`'s `colour`, from `bakeDebugColor`). Every
+channel but one is of the gaussian and holds for the whole sequence. The
+fade is of the time shown: a file that plays cannot hold it, so a GSV
+export on that channel is refused with a message, and a 3D file gets it
+as of the frame shown.
+
+One mapping. The channel -> colour function was written inline in both
+shader dialects; it is now `debugColor` in `splat-debug.ts`, as GLSL and
+WGSL text and as `debugColorSource` for the CPU, the three side by side
+with the mode numbers and ramp stops shared. The ramp stops go into the
+shader with nine figures instead of four, so both sides work with the
+same numbers. The writers resolve the channel again (`resolveDebugView`),
+which gives the same range and the same bytes as the texture got.
+
+In a project. The object's file and properties hold its own colour and
+grade. The grades on the false colour are stored with the last debug
+view node of the object: the eight numbers, and per gaussian an entry
+into a short list of grades (`debug_grade_<i>.bin`, a row per row of the
+object's file). They go back on once the node is applied. A project
+keeps no colour nodes, so after loading no node holds these grades; the
+debug view node keeps them itself while it is bypassed (`view.kept`).
+
+Measured in headless Chrome, WebGPU, RTX 3090, 640x360, the viewport
+with the debug view and a colour node after it (exposure 0.7, saturation
+1.26, temperature 0.17, brightness 0.03, black 0.02, white 0.9, a tint)
+against the written file read back and drawn from the same camera:
+
+| | PSNR | largest difference of a channel, of 255 |
+|---|---|---|
+| 3D, 702k gaussians, PLY: opacity / size / anisotropy / SH | 66.4 / 66.9 / 65.3 / 66.7 dB | 1 |
+| 4D, 702k rows, lossless GSV, frame 40: velocity / speed / time / lifetime / level / static / size | 75.6 / 68.9 / 69.2 / 70.0 / 67.0 / 68.6 / 70.6 dB | 1 |
+| WebGL2: 3D size, 4D velocity, 4D lifetime | 67.1 / 75.6 / 69.1 dB | 1 |
+
+(Velocity was graded with three stops of exposure alone; ungraded it is
+mostly black.) The
+fade written into a PLY at frame 40 agreed with exp(-dt^2 falloff)
+through the ramp to 2e-8 over the first 20,000 rows, and the GSV export
+on that channel wrote nothing. An output node before the debug view
+wrote the same bytes with the debug view and colour node applied after
+it as without them. Undoing the nodes, and bypassing the debug view,
+gave back the first picture exactly, and so did a colour node before the
+debug view changed under it: the own colour moved, the false colour did
+not. A project with a colour node before the debug view, one after it
+and one on a selection after it drew the same picture after loading,
+pixel for pixel, and its own colour again with the node bypassed.
+
+Not measured: the compact (webp) GSV with false colours. The full-size
+compact export loses the WebGPU device in headless Chrome, as it did
+before this change.
+
+Traps:
+
+- The legend shows the ramp before any colour node. Graded, the colours
+  on screen are no longer the legend's.
+- An object's own grade is one setting, and the last colour node to set
+  it wins. A colour node added after a debug view starts from none, not
+  from the grade the object had.
+- The colour panel shows the object's grade as it stands, which under a
+  debug view is the false colour's. A change made with a colour node
+  from before the debug view open goes to that node - only what was
+  changed, the rest of the node stays (`edit.addColour`).
+- A node that showed nothing and is switched to a channel the object has
+  (or the other way) takes or gives up its place in the chain, so that
+  switch replays the history from the node; any other channel switch is
+  still a uniform.
+- With two debug view nodes on one object, a project keeps the grades
+  put on after the last. Those between the two are lost on saving.
+- A project holds a 4D model as its rest frame, so a motion channel
+  shows nothing after loading and the grades stored with the node are
+  not applied.
 
 ## 4D models are sorted in a worker of their own
 
