@@ -4,6 +4,8 @@ import { Vec3 } from 'playcanvas';
 import { EditOp, LightOp, PrimitiveOp, TransformNodeOp } from './edit-ops';
 import { ElementType } from './element';
 import { Events } from './events';
+import { Grade } from './grade-palette';
+import { IndexRanges } from './index-ranges';
 import { BrowserFileSystem, BlobReadSource } from './io';
 import { recentFiles } from './recent-files';
 import { Scene } from './scene';
@@ -12,6 +14,10 @@ import { SceneLight } from './scene-light';
 import { ScenePrimitive } from './scene-primitive';
 import { Splat } from './splat';
 import { writeSplatFile } from './splat-serialize';
+import { State } from './splat-state';
+import { readGsv } from './tgh/gsv';
+import { TghFrameSource } from './tgh/tgh-frame-source';
+import { TghModel } from './tgh/tgh-model';
 import { Transform } from './transform';
 import { i18n } from './ui/localization';
 import { Voxels } from './voxels';
@@ -32,6 +38,16 @@ type FilePickerAcceptType = unknown;
  * container is the same zip and an old project's splats, camera and view
  * still load - the parts that did not exist then simply come back at
  * their defaults.
+ *
+ * A 4D model is stored as the file it was read from (splat_<i>.npz or
+ * .gsv in the place of splat_<i>.ply), and comes back as a 4D model: the
+ * same gaussians in the same rows, playing. That file rather than one
+ * written here, because it is the only form that is exact for every model
+ * - one read from a compact GSV holds no 4D rotations, so the lossless
+ * GSV writer refuses it, and the compact writer would quantise it again
+ * and put its rows in another order - and because saving then encodes
+ * nothing: no clustering on the GPU, and no second copy of the model in
+ * memory. What it costs is the size of that file in every project.
  */
 const VLP_EXTENSION = '.vlp';
 
@@ -110,6 +126,65 @@ const registerDocEvents = (scene: Scene, events: Events) => {
         documentFileHandle = null;
     };
 
+    // one entry of a project's zip, whole
+    const readEntry = async (zipFs: ZipReadFileSystem, name: string) => {
+        const source = await zipFs.createSource(name);
+        try {
+            return await source.read().readAll();
+        } finally {
+            source.close();
+        }
+    };
+
+    // A project's 4D model: read from the file it was stored as, set playing
+    // as the sequence, and handed back as the object it plays in. The
+    // gaussians the project had deleted or hidden are in `motion.state`, a
+    // byte per row.
+    const loadMotionSplat = async (zipFs: ZipReadFileSystem, motion: any, name: string) => {
+        const format = String(motion.file).toLowerCase().endsWith('.gsv') ? 'gsv' : 'npz';
+        const blob = new Blob([await readEntry(zipFs, motion.file) as BlobPart]);
+        const model = format === 'gsv' ? await readGsv(blob) : await TghModel.fromNpz(blob);
+        const frames = Math.max(1, Math.floor(motion.frames ?? model.meta.frames ?? 300));
+
+        const source = new TghFrameSource(model, frames, scene, motion.name ?? name ?? 'model');
+        source.origin = { blob, format };
+        events.fire('sequence.setSource', source);
+        // the timeline may have asked for the first frame already, in which
+        // case this waits for it and has nothing left to load
+        await events.invoke('plysequence.setFrameAsync', 0);
+        const splat = events.invoke('sequence.splat') as Splat | null;
+        if (!splat) {
+            throw new Error(`'${motion.file}' did not load`);
+        }
+
+        if (motion.state) {
+            const bytes = await readEntry(zipFs, motion.state);
+            if (bytes.length === splat.splatData.numSplats) {
+                [State.deleted, State.locked].forEach((bit) => {
+                    splat.state.setBits(IndexRanges.fromPredicate(bytes.length, i => (bytes[i] & bit) !== 0), bit);
+                });
+                await splat.updateState(State.deleted | State.locked);
+            }
+        }
+
+        // the grades colour nodes scoped to a selection left on it
+        const palette = (motion.grades?.palette ?? []) as Grade[];
+        if (palette.length) {
+            // copied so the typed array starts on an aligned offset
+            const rows = new Uint16Array((await readEntry(zipFs, motion.grades.file)).slice().buffer);
+            if (rows.length === splat.splatData.numSplats) {
+                const first = splat.gradePalette.alloc(palette.length);
+                palette.forEach((grade, k) => splat.gradePalette.setGrade(first + k, grade));
+                const slots = splat.gradeTexture.lock() as Uint16Array;
+                for (let i = 0; i < rows.length; i++) {
+                    slots[i] = rows[i] ? first + rows[i] - 1 : 0;
+                }
+                splat.gradeTexture.unlock();
+            }
+        }
+        return splat;
+    };
+
     // load the document from the given file
     const loadDocument = async (file: File) => {
         events.fire('startSpinner');
@@ -141,11 +216,17 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 const filename = `splat_${i}.ply`;
                 const splatSettings = document.splats[i];
 
-                // load splat directly from the zip filesystem (streams on-demand)
-                // skipReorder=true because ssproj PLY files are already in morton order
-                const splat = await scene.assetLoader.load(filename, zipFs, false, true);
+                let splat: Splat;
+                if (splatSettings.motion?.file) {
+                    // a 4D model: it adds itself to the scene as the sequence
+                    splat = await loadMotionSplat(zipFs, splatSettings.motion, splatSettings.name);
+                } else {
+                    // load splat directly from the zip filesystem (streams on-demand)
+                    // skipReorder=true because ssproj PLY files are already in morton order
+                    splat = await scene.assetLoader.load(filename, zipFs, false, true);
 
-                await scene.add(splat);
+                    await scene.add(splat);
+                }
 
                 splat.docDeserialize(splatSettings);
                 loaded.push(splat);
@@ -335,8 +416,61 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             const primitives = (events.invoke('primitive.list') ?? []) as ScenePrimitive[];
             const history = (events.invoke('edit.history')?.ops ?? []) as EditOp[];
             const voxels = scene.getElementsByType(ElementType.voxel) as Voxels[];
+            // A 4D model playing on the GPU is stored as the file it was read
+            // from. Where that file is not at hand the object is stored as
+            // it always was: a still of the frame shown.
+            const sequenceSource = events.invoke('sequence.source');
+            const sequenceSplat = events.invoke('sequence.splat') as Splat | null;
+            const motions = splats.map((s) => {
+                const source = s === sequenceSplat && sequenceSource instanceof TghFrameSource ? sequenceSource : null;
+                return source?.origin && s.motion && s.splatData.numSplats === source.model.numSplats ? source : null;
+            });
+            // what such a model has deleted or hidden, a byte per row: its
+            // file holds every gaussian
+            const motionStates = splats.map((s, i) => {
+                if (!motions[i]) return null;
+                const kept = s.state.data.map(v => v & (State.deleted | State.locked));
+                return kept.some(v => v !== 0) ? kept : null;
+            });
+
+            // The grade each of a 4D model's gaussians is on: what colour
+            // nodes scoped to a selection came to. A PLY has them baked into
+            // its colours; the model's file is not rewritten, so they are
+            // stored beside it, as an entry of `palette` plus one per row
+            // (0: none). Not under a debug view node, which has set the
+            // model's own grades aside.
+            const motionGrades = splats.map((s, i) => {
+                if (!motions[i] || s.debugViews.length) return null;
+                const slots = s.gradeTexture.lock() as Uint16Array;
+                const rows = new Uint16Array(s.state.data.length);
+                const palette: Grade[] = [];
+                const entryOf = new Map<number, number>();
+                for (let row = 0; row < rows.length; row++) {
+                    const slot = slots[row];
+                    if (!slot) continue;
+                    let entry = entryOf.get(slot);
+                    if (!entry) {
+                        entry = palette.push(s.gradePalette.getGrade(slot));
+                        entryOf.set(slot, entry);
+                    }
+                    rows[row] = entry;
+                }
+                s.gradeTexture.unlock();
+                return palette.length ? { palette, rows } : null;
+            });
+
             // the grades on each object's false colour, where a debug view shows one
-            const debugGrades = splats.map(s => s.docSerializeDebugGrade());
+            const debugGrades = splats.map((s, i) => {
+                const stored = s.docSerializeDebugGrade();
+                if (!stored?.rows || !motions[i]) return stored;
+                // the rows are those not deleted; a 4D model's file has them all
+                const state = s.state.data;
+                const rows = new Uint16Array(state.length);
+                for (let row = 0, k = 0; row < state.length; row++) {
+                    if ((state[row] & State.deleted) === 0) rows[row] = stored.rows[k++];
+                }
+                return { ...stored, rows };
+            });
 
             // An object's transform nodes are kept as nodes, so the object is
             // stored where it stands without them and they go back on top.
@@ -358,18 +492,34 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 // .vlp starts its own numbering; an .ssproj is version 0 of a
                 // different format and is detected by what it lacks
                 format: 'vlp',
-                version: 1,
+                // 2: a 4D model is stored as its own file, and the nodes
+                // that select and delete are stored as nodes
+                version: 2,
                 camera: scene.camera.docSerialize(),
                 view: events.invoke('docSerialize.view'),
                 poseSets: events.invoke('docSerialize.poseSets'),
                 timeline: events.invoke('docSerialize.timeline'),
                 splats: splats.map((s, i) => {
                     const base = placements[i]?.base;
-                    return !base ? s.docSerialize() : {
+                    const source = motions[i];
+                    return {
                         ...s.docSerialize(),
-                        position: pack3(base.position),
-                        rotation: [base.rotation.x, base.rotation.y, base.rotation.z, base.rotation.w],
-                        scale: pack3(base.scale)
+                        ...(base ? {
+                            position: pack3(base.position),
+                            rotation: [base.rotation.x, base.rotation.y, base.rotation.z, base.rotation.w],
+                            scale: pack3(base.scale)
+                        } : {}),
+                        // a 4D model: its file, how many frames it plays
+                        // over, and its deleted and hidden gaussians
+                        ...(source ? {
+                            motion: {
+                                file: `splat_${i}.${source.origin.format}`,
+                                frames: source.frameCount,
+                                name: source.name,
+                                ...(motionGrades[i] ? { grades: { file: `splat_${i}.grades`, palette: motionGrades[i].palette } } : {}),
+                                ...(motionStates[i] ? { state: `splat_${i}.state` } : {})
+                            }
+                        } : {})
                     };
                 }),
 
@@ -458,9 +608,36 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             await docWriter.write(new TextEncoder().encode(JSON.stringify(document)));
             await docWriter.close();
 
-            // Write each splat as PLY
+            // Write each splat as PLY, or a 4D model as its own file
             for (let i = 0; i < splats.length; ++i) {
-                await writeSplatFile([splats[i]], serializeSettings, 'ply', `splat_${i}.ply`, {}, zipFs);
+                const source = motions[i];
+                if (!source) {
+                    await writeSplatFile([splats[i]], serializeSettings, 'ply', `splat_${i}.ply`, {}, zipFs);
+                    continue;
+                }
+
+                // piece by piece: the file can be a few hundred megabytes
+                const writer = await zipFs.createWriter(`splat_${i}.${source.origin.format}`);
+                const reader = source.origin.blob.stream().getReader();
+                for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    await writer.write(value);
+                }
+                await writer.close();
+
+                if (motionStates[i]) {
+                    const stateWriter = await zipFs.createWriter(`splat_${i}.state`);
+                    await stateWriter.write(motionStates[i]);
+                    await stateWriter.close();
+                }
+
+                if (motionGrades[i]) {
+                    const { rows } = motionGrades[i];
+                    const gradeWriter = await zipFs.createWriter(`splat_${i}.grades`);
+                    await gradeWriter.write(new Uint8Array(rows.buffer, rows.byteOffset, rows.byteLength));
+                    await gradeWriter.close();
+                }
             }
 
             // and the grade each gaussian's false colour is on, a row per row of that file

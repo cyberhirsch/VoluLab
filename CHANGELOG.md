@@ -9,6 +9,70 @@ months finds out why before they change it.
 
 ---
 
+## A project keeps a 4D model as a 4D model
+
+A project stored a 4D model as a PLY of the frame shown. Opened again it
+was a still: no motion, every frame the same picture, a dead timeline.
+Now the model is stored whole and comes back playing - the same
+gaussians in the same rows, the same frame count and frame rate, standing
+on the same turn onto the engine's up axis, at the frame it was saved on.
+
+What is stored is the file the model was read from, unchanged:
+`splat_<i>.npz` or `splat_<i>.gsv` in the place of `splat_<i>.ply`
+(`TghFrameSource.origin` keeps the blob; `doc.ts` copies it into the zip
+piece by piece). The lossless GSV writer was the other candidate and
+loses on three counts:
+
+- It cannot write every model. One read from a compact GSV is in the
+  motion form and holds no 4D rotations, so the f32 writer refuses it,
+  and the compact writer would quantise it a second time.
+- It puts the rows in another order - block by block, and the static set
+  first when that is on. Everything a project keeps per gaussian is by
+  row: what is deleted and hidden, the grades on a debug view's false
+  colour, a frozen selection. All of it would have to go through that
+  permutation, and nothing would say so if one of them did not.
+- It has to build the file. The compact encoding clusters on the GPU,
+  which is where an earlier save of the 3.3M model lost the device, and
+  either encoding holds a second copy of the model while it writes. The
+  source file is already there and already the right bytes.
+
+So saving a 4D model encodes nothing and touches no GPU, and the reload
+is exact: the 1.87M-gaussian alley checkpoint and the 3.3M-gaussian
+compact GSV both render pixel for pixel the same at two frames after a
+save and a load (the still came back at 31-35 dB).
+
+Beside the file, in the object's `motion` entry of `document.json`:
+
+- The frame count, because a checkpoint without a timeline has only the
+  one the user typed in.
+- `splat_<i>.state`, a byte per row: what the model has deleted or
+  hidden. The model's file holds every gaussian.
+- `splat_<i>.grades`, a palette entry per row: the grades that colour
+  nodes scoped to a selection left on the gaussians. A PLY has those
+  baked into its colours; the model's file is not rewritten.
+
+Old projects load as they did: an object without `motion` is read from
+its PLY. The format's version is 2 now.
+
+Traps:
+
+- The project is as large as the model's file, whatever was deleted from
+  it: 299 MB for the alley checkpoint, 60 MB for the compact two-layer
+  GSV.
+- Opening reads that file out of the zip into memory before the model is
+  built from it, so for a moment the model is there twice over.
+- A 4D model whose source file is not at hand is stored as before, a
+  still of the frame shown. That is a model conditioned per frame on the
+  CPU, and a PLY sequence - which is still stored as the one frame.
+- Only one 4D model plays at a time (sequence.ts), so a project holds at
+  most one.
+- A scoped colour node on a 4D model comes back as its colours, not as a
+  node, and not at all while a debug view node is applied: that node has
+  set the model's own grades aside. A move of selected gaussians is not
+  kept on a 4D model either; it too was only ever baked into the PLY.
+- A build from before this cannot open a project with a 4D model in it:
+  it looks for `splat_<i>.ply`.
+
 ## Transform and delete nodes
 
 Two nodes that only ever appeared as the trace of something done in the
