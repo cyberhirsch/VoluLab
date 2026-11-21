@@ -350,6 +350,8 @@
     "node.loop.pingpong": "ping-pong",
     "node.loop.count": "repeats",
     "node.loop.note": "Repeats the sequence this many times. Ping-pong plays it there and back each time, without showing either end twice, so it joins up with itself.",
+    "node.freeze.frame": "frame",
+    "node.freeze.note": "Holds the object at this frame of its sequence for the whole timeline: a 4D model drawn as a still, without converting its data.",
     "light.light-group": "Light",
     "light.kind": "type",
     "light.kind-point": "point",

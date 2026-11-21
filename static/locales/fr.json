@@ -350,6 +350,8 @@
     "node.loop.pingpong": "ping-pong",
     "node.loop.count": "répétitions",
     "node.loop.note": "Répète la séquence ce nombre de fois. Ping-pong la joue en aller-retour à chaque fois, sans montrer deux fois une extrémité, de sorte qu'elle se raccorde à elle-même.",
+    "node.freeze.frame": "image",
+    "node.freeze.note": "Maintient l'objet sur cette image de sa séquence pendant toute la timeline : un modèle 4D affiché comme une image fixe, sans convertir ses données.",
     "light.light-group": "Lumière",
     "light.kind": "type",
     "light.kind-point": "ponctuelle",

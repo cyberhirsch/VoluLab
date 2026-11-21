@@ -78,6 +78,7 @@ const OP_LABELS: Record<string, string> = {
     trimNode: 'trim',
     retimeNode: 'retime',
     loopNode: 'loop',
+    freezeNode: 'freeze frame',
     splatsTransform: 'transform splats',
     setPivot: 'place pivot',
     setLocalFrame: 'local frame',
@@ -1155,6 +1156,10 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addLoopNode', splat)
                     },
                     {
+                        label: 'freeze frame',
+                        action: () => this.events.fire('graph.addFreezeNode', splat)
+                    },
+                    {
                         label: 'cleanup',
                         action: () => this.events.fire('graph.addCleanupNode', splat)
                     },
@@ -1439,6 +1444,13 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addLoopNode')
+            },
+            {
+                // a 4D model held at one of its frames
+                label: 'add freeze frame node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addFreezeNode')
             },
             {
                 label: 'add cleanup node',

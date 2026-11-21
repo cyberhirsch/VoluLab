@@ -5,7 +5,7 @@ import { registerCameraEffects } from './camera-effects';
 import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, TrimOp, RetimeOp, LoopOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
+import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, TrimOp, RetimeOp, LoopOp, FreezeOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -665,6 +665,11 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // A loop node starts as the sequence twice over.
     events.on('graph.addLoopNode', (target?: Splat) => {
         addTarget(target).forEach(splat => appendAndOpen(new LoopOp(splat)));
+    });
+
+    // A freeze frame node starts on the frame the object is showing.
+    events.on('graph.addFreezeNode', (target?: Splat) => {
+        addTarget(target).forEach(splat => appendAndOpen(new FreezeOp(splat, splat.motion ? Math.min(events.invoke('timeline.frame') ?? 0, Math.max(0, splat.timeSpan - 1)) : 0)));
     });
 
     events.on('graph.addCleanupNode', (target?: Splat) => {

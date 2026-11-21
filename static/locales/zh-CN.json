@@ -350,6 +350,8 @@
     "node.loop.pingpong": "乒乓",
     "node.loop.count": "重复次数",
     "node.loop.note": "将序列重复这么多次。乒乓模式每次来回播放，两端的帧都不会连续显示两次，因此首尾可以无缝衔接。",
+    "node.freeze.frame": "帧",
+    "node.freeze.note": "在整条时间线上将对象保持在其序列的这一帧：把 4D 模型作为静止画面绘制，而不转换其数据。",
     "light.light-group": "灯光",
     "light.kind": "类型",
     "light.kind-point": "点光源",

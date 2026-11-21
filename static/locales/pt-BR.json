@@ -350,6 +350,8 @@
     "node.loop.pingpong": "ping-pong",
     "node.loop.count": "repetições",
     "node.loop.note": "Repete a sequência este número de vezes. Ping-pong a reproduz de ida e volta a cada vez, sem mostrar duas vezes nenhuma das pontas, de modo que ela emenda em si mesma.",
+    "node.freeze.frame": "quadro",
+    "node.freeze.note": "Mantém o objeto neste quadro de sua sequência durante toda a linha do tempo: um modelo 4D desenhado como imagem parada, sem converter seus dados.",
     "light.light-group": "Luz",
     "light.kind": "tipo",
     "light.kind-point": "pontual",

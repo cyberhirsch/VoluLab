@@ -350,6 +350,8 @@
     "node.loop.pingpong": "Ping-Pong",
     "node.loop.count": "Wiederholungen",
     "node.loop.note": "Wiederholt die Sequenz so oft. Ping-Pong spielt sie jedes Mal hin und zurück, ohne ein Ende doppelt zu zeigen, sodass sie nahtlos an sich selbst anschließt.",
+    "node.freeze.frame": "Frame",
+    "node.freeze.note": "Hält das Objekt für die ganze Timeline auf diesem Frame seiner Sequenz: ein 4D-Modell als Standbild, ohne seine Daten umzuwandeln.",
     "light.light-group": "Licht",
     "light.kind": "Typ",
     "light.kind-point": "Punkt",

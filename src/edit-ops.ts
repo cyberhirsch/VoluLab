@@ -18,7 +18,7 @@ import { SphereShape } from './sphere-shape';
 import { Splat } from './splat';
 import type { DebugView } from './splat-debug';
 import { State } from './splat-state';
-import { LoopMap, LoopMode, RetimeMap, TimeMap, TrimMap, timeSpan } from './time-map';
+import { FreezeMap, LoopMap, LoopMode, RetimeMap, TimeMap, TrimMap, timeSpan } from './time-map';
 import { Transform } from './transform';
 import { Voxels } from './voxels';
 
@@ -793,6 +793,25 @@ class LoopOp extends TimeOp {
     get sourceLabel() {
         if (this.map.mode === 'none') return 'none';
         return `${this.map.mode === 'pingpong' ? 'ping-pong' : 'loop'} x${this.map.repeats}`;
+    }
+}
+
+/**
+ * Freeze frame: the object shows one frame of its sequence for the whole
+ * timeline - a 4D model drawn as a still. Its data stays a 4D model's, so
+ * taking the node off has it moving again.
+ */
+class FreezeOp extends TimeOp {
+    name = 'freezeNode';
+    declare map: FreezeMap;
+
+    constructor(splat: Splat, frame = 0) {
+        super(splat, new FreezeMap(frame));
+    }
+
+    /** what the graph writes under the node's title */
+    get sourceLabel() {
+        return `frame ${Math.round(this.map.frame) || 0}`;
     }
 }
 
@@ -2357,6 +2376,7 @@ export {
     TrimOp,
     RetimeOp,
     LoopOp,
+    FreezeOp,
     SplatsTransformOp,
     PlacePivotOp,
     SetLocalFrameOp,

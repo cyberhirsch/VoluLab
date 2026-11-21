@@ -3,7 +3,7 @@ import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
-import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -862,6 +862,12 @@ class NodePanel extends Container {
             });
             this.replayNumber(i18n.t('node.loop.count'), op.map.repeats, 1, 1, index, (v) => {
                 op.map.count = Math.max(1, Math.round(v));
+            });
+        }
+
+        if (op instanceof FreezeOp) {
+            this.replayNumber(i18n.t('node.freeze.frame'), Math.round(op.map.frame) || 0, 1, 0, index, (v) => {
+                op.map.frame = Math.max(0, Math.round(v));
             });
         }
 

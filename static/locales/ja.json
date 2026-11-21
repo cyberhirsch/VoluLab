@@ -350,6 +350,8 @@
     "node.loop.pingpong": "ピンポン",
     "node.loop.count": "繰り返し",
     "node.loop.note": "シーケンスをこの回数だけ繰り返します。ピンポンは毎回往復で再生し、両端のフレームを二度続けて表示しないので、継ぎ目なくつながります。",
+    "node.freeze.frame": "フレーム",
+    "node.freeze.note": "タイムライン全体にわたって、オブジェクトをシーケンスのこのフレームで保持します。データを変換せずに、4Dモデルを静止画として描画します。",
     "light.light-group": "ライト",
     "light.kind": "種類",
     "light.kind-point": "ポイント",
