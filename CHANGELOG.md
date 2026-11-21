@@ -9,6 +9,22 @@ months finds out why before they change it.
 
 ---
 
+## Time warp
+
+A time warp node retimes a 4D model with a curve: its speed is a parameter,
+and keying the speed makes a ramp. Frame f of the warped sequence shows the
+model at the integral of the speed up to f (sampled eight times a frame,
+trapezoids), so between frames the model is shown between frames - slow
+motion, not held frames. The sequence is as long as the curve takes to get
+through the model, cut off at ten times its length if the speed stalls.
+
+The map (`WarpMap`) reads the speed's keys itself; the keyframe driver writing
+the speed into the node per frame changes nothing, and a curve edited in the
+curve editor is picked up by the node's frame hook, which retimes the object
+so the timeline gets its new length.
+
+---
+
 ## Ground plane
 
 A ground plane node turns an object so its floor is level and puts the

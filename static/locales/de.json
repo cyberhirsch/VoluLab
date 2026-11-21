@@ -406,6 +406,8 @@
     "node.ground.tilt": "Neigung",
     "node.ground.none": "Noch kein Boden gefunden: Wähle drei Punkte darauf oder passe mit größerer Toleranz neu an.",
     "node.ground.note": "Dreht das Objekt so, dass sein Boden waagerecht ist, und setzt den Boden auf diese Höhe. Angepasst ist der Boden die Ebene, auf der die meisten stillen Gaussians liegen; die Toleranz sagt, wie nah sie ihr sein müssen, als Anteil der Objektgröße.",
+    "node.warp.speed": "Tempo",
+    "node.warp.note": "Spielt die Sequenz mit einem Tempo, das sich ändern kann: Key das Tempo für eine Rampe. Zwischen Frames wird das Modell zwischen Frames gezeigt, ein langsamer Teil ist also Zeitlupe, keine gehaltenen Frames.",
     "node.offset.frames": "Frames",
     "node.offset.outside": "außerhalb",
     "node.offset.hide": "versteckt",

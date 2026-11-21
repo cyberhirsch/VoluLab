@@ -1,6 +1,6 @@
 import { EditOp } from '../edit-ops';
 import { Events } from '../events';
-import { AlignOp, GroundPlaneOp, ObjectPoint, StabiliseOp, TrackOp } from '../motion-nodes';
+import { AlignOp, GroundPlaneOp, ObjectPoint, StabiliseOp, TimeWarpOp, TrackOp } from '../motion-nodes';
 import { Splat } from '../splat';
 import { i18n } from './localization';
 
@@ -211,12 +211,26 @@ const buildGround = (kit: PanelKit, op: GroundPlaneOp, index: number) => {
     kit.note(t('node.ground.note'));
 };
 
+const buildTimeWarp = (kit: PanelKit, op: TimeWarpOp, index: number) => {
+    kit.number(t('node.warp.speed'), op.speed, 0.05, 1, index, (v) => {
+        op.speed = v;
+    }, { op, param: 'speed' });
+    if (!op.moving) {
+        kit.note(t('node.time.still'));
+        return;
+    }
+    const frames = op.framesIn;
+    kit.stat(t('node.time.frames'), frames < 0 ? t('node.time.not-applied') : `${frames} → ${op.framesOut}`);
+    kit.note(t('node.warp.note'));
+};
+
 /** The face of one of these nodes, built into the kit's body; false for any other node. */
 const buildMotionNode = (op: EditOp, index: number, kit: PanelKit) => {
     if (op instanceof TrackOp) buildTrack(kit, op, index);
     else if (op instanceof StabiliseOp) buildStabilise(kit, op, index);
     else if (op instanceof AlignOp) buildAlign(kit, op, index);
     else if (op instanceof GroundPlaneOp) buildGround(kit, op, index);
+    else if (op instanceof TimeWarpOp) buildTimeWarp(kit, op, index);
     else return false;
     return true;
 };

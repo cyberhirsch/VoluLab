@@ -406,6 +406,8 @@
     "node.ground.tilt": "倾斜",
     "node.ground.none": "尚未找到地面：在地面上选三个点，或用更大的容差重新拟合。",
     "node.ground.note": "旋转对象使地面水平，并把地面放到这个高度。拟合时，地面是大多数静止高斯所在的平面；容差是它们需要离平面多近，按对象大小的比例计。",
+    "node.warp.speed": "速度",
+    "node.warp.note": "以可变的速度播放序列：给速度设关键帧即可做变速。帧与帧之间模型也显示在帧之间，所以慢的部分是慢动作，而不是停帧。",
     "node.offset.frames": "帧数",
     "node.offset.outside": "范围外",
     "node.offset.hide": "隐藏",

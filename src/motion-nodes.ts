@@ -565,6 +565,110 @@ class GroundPlaneOp extends TransformNodeOp {
     }
 }
 
+// ---- time warp: a time node with a speed curve
+
+/**
+ * The warp's map: frame f of its own sequence shows frame
+ * integral(0..f) speed(frame) of the one it was given, the speed being the
+ * node's keyed speed curve (a constant without keys). Between frames the
+ * model is shown between frames: a 4D model is continuous in time, so a
+ * slow ramp is a slow motion, not a held frame.
+ */
+class WarpMap implements TimeMap {
+    private op: TimeWarpOp;
+    private table: Float64Array = new Float64Array(1);
+    private sign = '';
+    // samples per frame of the integral
+    private static RES = 8;
+
+    constructor(op: TimeWarpOp) {
+        this.op = op;
+    }
+
+    private signature() {
+        return JSON.stringify(trackOf(this.op, 'speed') ?? this.op.speed);
+    }
+
+    private speedAt(f: number) {
+        const track = trackOf(this.op, 'speed');
+        return track ? evaluate(track, f) : this.op.speed;
+    }
+
+    /** the integral up to frame `len`, sampled */
+    private build(len: number) {
+        const sign = `${this.signature()}:${len}`;
+        if (sign === this.sign) return;
+        this.sign = sign;
+        const R = WarpMap.RES;
+        const n = Math.max(1, Math.ceil(len * R));
+        const table = new Float64Array(n + 1);
+        for (let i = 1; i <= n; ++i) {
+            // trapezoids
+            table[i] = table[i - 1] + 0.5 * (this.speedAt((i - 1) / R) + this.speedAt(i / R)) / R;
+        }
+        this.table = table;
+    }
+
+    private integral(f: number) {
+        const R = WarpMap.RES;
+        const x = Math.max(0, f * R);
+        const i = Math.min(this.table.length - 2, Math.floor(x));
+        if (i < 0) return 0;
+        const u = Math.min(1, x - i);
+        return this.table[i] + (this.table[i + 1] - this.table[i]) * u;
+    }
+
+    /** The changed curve, if it changed. */
+    get signatureNow() {
+        return this.signature();
+    }
+
+    span(frames: number) {
+        // as long as it takes the curve to get through the sequence, within
+        // reason: a curve that stalls is cut off at ten times the length
+        const cap = Math.max(2, frames * 10);
+        this.build(cap);
+        const last = frames - 1;
+        for (let f = 1; f <= cap; ++f) {
+            if (this.integral(f) >= last - 1e-9) return f + 1;
+        }
+        return cap;
+    }
+
+    at(f: number, frames: number) {
+        this.build(Math.max(2, frames * 10));
+        return Math.max(0, Math.min(frames - 1, this.integral(f)));
+    }
+}
+
+class TimeWarpOp extends TimeOp implements FrameDriven {
+    name = 'timeWarpNode';
+    declare map: WarpMap;
+    /** the speed without keys, 1 as recorded */
+    speed = 1;
+    private shownSign = '';
+
+    constructor(splat: Splat, speed = 1) {
+        super(splat, null);
+        this.speed = speed;
+        this.map = new WarpMap(this);
+    }
+
+    get sourceLabel() {
+        return trackOf(this, 'speed') ? 'curve' : `${+this.speed.toFixed(3)}x`;
+    }
+
+    // a curve edited: the sequence's length and frames change
+    animate() {
+        const sign = this.map.signatureNow;
+        if (this.applied && sign !== this.shownSign) {
+            this.shownSign = sign;
+            this.splat.retime();
+        }
+        return false;
+    }
+}
+
 // ---- keyable parameters
 
 const registerMotionParams = () => {
@@ -588,6 +692,18 @@ const registerMotionParams = () => {
             op.height = v;
         }
     }]);
+
+    keyable(TimeWarpOp, [{
+        id: 'speed',
+        min: -4,
+        max: 8,
+        get: op => op.speed,
+        set: (op, v) => {
+            op.speed = v;
+        }
+    }]);
+    // the map reads the curve itself: a value written per frame changes nothing
+    keyableLive(TimeWarpOp, () => true);
 
 };
 
@@ -652,6 +768,7 @@ type MotionNodeSettings = Record<string, any> & { kind: string };
 const motionSettings = (op: EditOp): MotionNodeSettings | null => {
     if (op instanceof TrackOp) return { kind: 'track', ref: op.ref };
     if (op instanceof StabiliseOp) return { kind: 'stabilise', ref: op.ref, strength: op.strength };
+    if (op instanceof TimeWarpOp) return { kind: 'timeWarp', speed: op.speed };
     return null;
 };
 
@@ -666,6 +783,7 @@ const motionNodeFrom = (splat: Splat, stored: MotionNodeSettings): EditOp | null
             op.strength = num(stored.strength, 1);
             return op;
         }
+        case 'timeWarp': return new TimeWarpOp(splat, num(stored.speed, 1));
     }
     return null;
 };
@@ -703,6 +821,7 @@ const registerMotionNodes = (events: Events, scene: Scene, canvas: HTMLElement) 
 
     events.on('graph.addTrackNode', add(splat => new TrackOp(splat, frameOf(splat))));
     events.on('graph.addStabiliseNode', add(splat => new StabiliseOp(splat, frameOf(splat))));
+    events.on('graph.addTimeWarpNode', add(splat => new TimeWarpOp(splat)));
 
     // align: onto the other object if there is just one other, which is the
     // usual case - two captures to be put together
@@ -783,6 +902,7 @@ export {
     StabiliseOp,
     AlignOp,
     GroundPlaneOp,
+    TimeWarpOp,
     registerMotionNodes,
     motionSettings,
     type ObjectPoint,

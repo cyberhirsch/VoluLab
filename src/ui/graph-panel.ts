@@ -69,6 +69,7 @@ const MOTION_NODES: [string, string][] = [
     ['stabilise', 'graph.addStabiliseNode'],
     ['align', 'graph.addAlignNode'],
     ['ground plane', 'graph.addGroundNode'],
+    ['time warp', 'graph.addTimeWarpNode'],
 ];
 
 const OP_LABELS: Record<string, string> = {
@@ -92,6 +93,7 @@ const OP_LABELS: Record<string, string> = {
     stabiliseNode: 'stabilise',
     alignNode: 'align',
     groundNode: 'ground plane',
+    timeWarpNode: 'time warp',
     splatsTransform: 'transform splats',
     setPivot: 'place pivot',
     setLocalFrame: 'local frame',
