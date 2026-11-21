@@ -63,6 +63,11 @@ class IndexRanges {
         return new IndexRanges(new Uint32Array(ranges));
     }
 
+    /** Ranges from the words of another's `data`, as a project stores them. */
+    static fromData(data: Uint32Array) {
+        return new IndexRanges(data);
+    }
+
     /** Build ranges directly from indices already known to be sorted and unique. */
     static fromSorted(sortedIds: Uint32Array) {
         return IndexRanges.fromPredicate(

@@ -116,6 +116,142 @@ Traps:
 - The graph draws the split's wire from the end of the source's lane,
   like merge's, also when nodes were added to the source after it.
 
+## A project keeps select, crop, cleanup, decimate and delete nodes
+
+Saving a project baked these in: the deleted gaussians were left out of
+the object's file and no node came back, so a crop could not be widened
+or a cleanup switched off once the project had been closed. Now every
+`StateOp` is stored as a node - select (all, none, invert and the select
+node with its steps and its mesh input), hide and unhide, the Delete
+key's node, the delete node, reset, crop, cleanup and decimate - with its
+settings, whether it is bypassed, its place in the chain and, where it
+was dragged somewhere in the graph, that place. The object's file holds
+every gaussian it came with, each in its row, and the nodes delete.
+
+Each node is stored twice over (`doc-nodes.ts`): as its settings, and as
+the set of gaussians it applied to, as `IndexRanges` words in
+`nodes_<i>.bin`. Opened, it applies that set again without asking
+(`StateOp.restore`) and asks - resolves from its settings - only once
+something invalidates it: its own settings edited, or a node ahead of it
+changed, bypassed or removed. It is not simply run again, for two
+reasons:
+
+- Some nodes have nothing to run. A brush stroke, a flood fill, a
+  ring-mode pick and a selection handed in as a mask are frozen hit sets;
+  their result is all there is, and it is what is stored. These are the
+  nodes that cannot be replayed from settings. Their rows hold now that
+  the file keeps every gaussian; before, a frozen set would have pointed
+  at other gaussians after a save.
+- The rest would be asking different data, or take too long. The file
+  holds the gaussians as the whole chain left them, so a sphere select
+  from before a move of selected gaussians would catch others now. And a
+  cleanup of 1.87M gaussians takes minutes; the project with it opens in
+  the time it takes to read the model.
+
+So what opens is exactly what was saved - selection, hidden and deleted
+gaussians, bit for bit - and the settings are there for the next edit.
+Measured after a reload: bypassing the delete node, and setting the
+decimate node to another fraction, give the same gaussians as the same
+edit gave before the save.
+
+The nodes go back in in the order they were in. Transform, relight and
+debug view nodes used to go in kind by kind, which was their order only
+as long as there was one kind; now each stored node carries its place in
+the history (`at`) and they are added in that order, state nodes among
+them. A debug view node that was switched off is stored too; it was
+dropped.
+
+An object keeps its nodes only if they account for its state: applied in
+order to an object with nothing selected, hidden or deleted, the stored
+sets have to give exactly the state it is in. Where they do not - a node
+of a kind `doc-nodes.ts` does not know, one that did not apply - the
+object is stored as before: a PLY without its deleted gaussians and
+without the nodes, a 4D model with its state file.
+
+Traps:
+
+- Undo still stops at the loaded project (`edit.markLoaded`). A loaded
+  node is taken back by bypassing or removing it; what is added after
+  opening undoes as usual.
+- A project no longer shrinks when gaussians are deleted. The deleted
+  ones stay in the file for as long as a node holds them; removing them
+  for good is an export.
+- A new kind of `StateOp` has to be added to `packSettings` and
+  `restoreStateNode`. Until it is, an object with such a node saves the
+  old way, silently: its nodes do not come back.
+- A node in the redo tail - undone when the project was saved - is not
+  stored.
+- A node inside a group (a separate's delete, an unhide over several
+  objects) comes back as a node of its own.
+- A select node feeding a light comes back, but the light is not wired
+  to it again: it keeps the emitters it last took, as before.
+- Colour nodes are still baked: the object's grade into the object, a
+  scoped grade into the colours.
+
+## A project keeps a 4D model as a 4D model
+
+A project stored a 4D model as a PLY of the frame shown. Opened again it
+was a still: no motion, every frame the same picture, a dead timeline.
+Now the model is stored whole and comes back playing - the same
+gaussians in the same rows, the same frame count and frame rate, standing
+on the same turn onto the engine's up axis, at the frame it was saved on.
+
+What is stored is the file the model was read from, unchanged:
+`splat_<i>.npz` or `splat_<i>.gsv` in the place of `splat_<i>.ply`
+(`TghFrameSource.origin` keeps the blob; `doc.ts` copies it into the zip
+piece by piece). The lossless GSV writer was the other candidate and
+loses on three counts:
+
+- It cannot write every model. One read from a compact GSV is in the
+  motion form and holds no 4D rotations, so the f32 writer refuses it,
+  and the compact writer would quantise it a second time.
+- It puts the rows in another order - block by block, and the static set
+  first when that is on. Everything a project keeps per gaussian is by
+  row: what is deleted and hidden, the grades on a debug view's false
+  colour, a frozen selection. All of it would have to go through that
+  permutation, and nothing would say so if one of them did not.
+- It has to build the file. The compact encoding clusters on the GPU,
+  which is where an earlier save of the 3.3M model lost the device, and
+  either encoding holds a second copy of the model while it writes. The
+  source file is already there and already the right bytes.
+
+So saving a 4D model encodes nothing and touches no GPU, and the reload
+is exact: the 1.87M-gaussian alley checkpoint and the 3.3M-gaussian
+compact GSV both render pixel for pixel the same at two frames after a
+save and a load (the still came back at 31-35 dB).
+
+Beside the file, in the object's `motion` entry of `document.json`:
+
+- The frame count, because a checkpoint without a timeline has only the
+  one the user typed in.
+- `splat_<i>.state`, a byte per row: what the model has deleted or
+  hidden. The model's file holds every gaussian.
+- `splat_<i>.grades`, a palette entry per row: the grades that colour
+  nodes scoped to a selection left on the gaussians. A PLY has those
+  baked into its colours; the model's file is not rewritten.
+
+Old projects load as they did: an object without `motion` is read from
+its PLY. The format's version is 2 now.
+
+Traps:
+
+- The project is as large as the model's file, whatever was deleted from
+  it: 299 MB for the alley checkpoint, 60 MB for the compact two-layer
+  GSV.
+- Opening reads that file out of the zip into memory before the model is
+  built from it, so for a moment the model is there twice over.
+- A 4D model whose source file is not at hand is stored as before, a
+  still of the frame shown. That is a model conditioned per frame on the
+  CPU, and a PLY sequence - which is still stored as the one frame.
+- Only one 4D model plays at a time (sequence.ts), so a project holds at
+  most one.
+- A scoped colour node on a 4D model comes back as its colours, not as a
+  node, and not at all while a debug view node is applied: that node has
+  set the model's own grades aside. A move of selected gaussians is not
+  kept on a 4D model either; it too was only ever baked into the PLY.
+- A build from before this cannot open a project with a 4D model in it:
+  it looks for `splat_<i>.ply`.
+
 ## Transform and delete nodes
 
 Two nodes that only ever appeared as the trace of something done in the

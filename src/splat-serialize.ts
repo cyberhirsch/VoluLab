@@ -63,6 +63,7 @@ type SerializeSettings = {
     keepWorldTransform?: boolean;   // don't apply the world transform when resolving splat transforms
     keepColorTint?: boolean;        // refrain from applying the object's own color grade (colour nodes scoped to a selection are still baked: nothing else stores them)
     keepSHBands?: boolean;          // write every band the data has, ignoring sh-band node limits (the document stores the limit itself)
+    keepDeleted?: boolean;          // write the deleted gaussians too, in their rows (the document stores the nodes that delete them)
     ownColor?: boolean;             // write the object's own colour where a debug view node shows a false one (implied by keepColorTint)
 };
 
@@ -93,6 +94,7 @@ class GaussianFilter {
         const onlySelected = serializeSettings.selected ?? false;
         const minOpacity = serializeSettings.minOpacity ?? 0;
         const removeInvalid = serializeSettings.removeInvalid ?? false;
+        const keepDeleted = serializeSettings.keepDeleted ?? false;
 
         // properties where +Infinity and -Infinity are valid values
         const infOk = new Set(['opacity']);
@@ -100,8 +102,8 @@ class GaussianFilter {
         const negInfOk = new Set(['scale_0', 'scale_1', 'scale_2']);
 
         this.test = (i: number) => {
-            // splat is deleted, always removed
-            if ((state[i] & State.deleted) !== 0) {
+            // splat is deleted: removed, unless the document keeps its rows
+            if (!keepDeleted && (state[i] & State.deleted) !== 0) {
                 return false;
             }
 

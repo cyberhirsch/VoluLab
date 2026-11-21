@@ -335,7 +335,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         events.fire('startSpinner');
         try {
             const blob: Blob = file.contents ?? await (await fetch(file.url)).blob();
-            const model = file.filename.toLowerCase().endsWith('.gsv') ?
+            const format = file.filename.toLowerCase().endsWith('.gsv') ? 'gsv' : 'npz';
+            const model = format === 'gsv' ?
                 await readGsv(blob) :
                 await TghModel.fromNpz(blob);
 
@@ -357,7 +358,10 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             }
 
             const name = file.filename.replace(/\.(npz|gsv)$/i, '');
-            events.fire('sequence.setSource', new TghFrameSource(model, frames, scene, name));
+            const source = new TghFrameSource(model, frames, scene, name);
+            // kept for the project, which stores the model as this file
+            source.origin = { blob, format };
+            events.fire('sequence.setSource', source);
             if (model.meta.fps) {
                 events.fire('timeline.setFrameRate', model.meta.fps);
             }

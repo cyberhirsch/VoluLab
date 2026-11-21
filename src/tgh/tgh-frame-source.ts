@@ -31,6 +31,12 @@ class TghFrameSource implements FrameSource {
     // the per-gaussian motion for GPU playback, built with the rest frame
     private motion: SplatMotion | null = null;
 
+    // The file the model was read from, where there is one. A project
+    // stores the model as this file, unchanged: read again it gives the
+    // same model with the same rows, whichever form it holds, and nothing
+    // has to be encoded to save it.
+    origin: { blob: Blob, format: 'npz' | 'gsv' } | null = null;
+
     constructor(model: TghModel, frameCount: number, scene: Scene, name: string, gpu = true) {
         this.model = model;
         this.frames = Math.max(1, Math.floor(frameCount));
