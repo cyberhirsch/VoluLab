@@ -1,6 +1,6 @@
 /**
- * The editor's side of the combining nodes: making merge nodes and
- * keeping their objects up to date.
+ * The editor's side of the combining nodes: making merge and switch nodes
+ * and keeping their objects up to date.
  *
  * A merged object is made of its inputs as their lanes leave them - which
  * is what the graph draws: the wire into a merge comes from the end of the
@@ -11,7 +11,7 @@
  * is kept, so a change to one input re-bakes that input alone.
  */
 
-import { CombineOp, MergeOp, type CombineContext, type MergeSettings } from './combine-ops';
+import { CombineOp, MergeOp, SwitchOp, type CombineContext, type MergeSettings, type SwitchSettings } from './combine-ops';
 import type { EditOp } from './edit-ops';
 import { ElementType } from './element';
 import { Events } from './events';
@@ -29,7 +29,7 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
     };
     const allSplats = () => scene.getElementsByType(ElementType.splat) as Splat[];
 
-    // ---- merge ----
+    // ---- merge and switch ----
 
     const context: CombineContext = {
         rate: () => events.invoke('timeline.frameRate') ?? 30,
@@ -44,22 +44,24 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
         setTimeout(resolve, 30);
     });
 
-    const nameOf = (inputs: Splat[]) => {
+    const nameOf = (inputs: Splat[], kind: string) => {
         const names = inputs.map(s => s.name ?? 'object');
-        return names.length <= 2 ? names.join(' + ') : `merge of ${names.length}`;
+        return names.length <= 2 ? names.join(` ${kind === 'switch' ? '/' : '+'} `) : `${kind} of ${names.length}`;
     };
 
-    /** Make a merge node's object, and then the node. */
-    const makeCombine = async (inputs: Splat[], settings?: Partial<MergeSettings>, open = true) => {
+    /** Make a merge or switch node's object, and then the node. */
+    const makeCombine = async (kind: 'merge' | 'switch', inputs: Splat[], settings?: Partial<MergeSettings & SwitchSettings>, open = true) => {
         const unique = inputs.filter((s, i) => s instanceof Splat && inputs.indexOf(s) === i);
-        if (unique.length < 2) return null;
+        if (unique.length < (kind === 'merge' ? 2 : 1)) return null;
 
         events.fire('startSpinner');
         try {
             await breathe();
-            const op: CombineOp = new MergeOp(scene, unique, null, context, settings);
+            const op: CombineOp = kind === 'merge' ?
+                new MergeOp(scene, unique, null, context, settings) :
+                new SwitchOp(scene, unique, null, context, settings);
             const built = op.build();
-            const output = new Splat(context.asset(built, nameOf(unique)), mergedRotation());
+            const output = new Splat(context.asset(built, nameOf(unique, kind)), mergedRotation());
             if (built.motion) output.setMotion(built.motion);
             op.output = output;
             if (open) {
@@ -83,10 +85,10 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
         if (untouched && !(ops[index] as MergeOp).inputs.includes(a)) {
             return events.invoke('graph.mergeInput', index, a);
         }
-        return makeCombine([a, b]);
+        return makeCombine('merge', [a, b]);
     });
 
-    // an object as one more input of a merge node
+    // an object as one more input of a merge or switch node
     events.function('graph.mergeInput', (index: number, splat: Splat) => {
         const op = history().ops[index];
         if (!(op instanceof CombineOp) || !splat || op.inputs.includes(splat) || splat === op.output) return null;
@@ -96,13 +98,17 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
         });
     });
 
-    // an input taken out of a merge node; it keeps at least two
+    // an input taken out of a merge or switch node; it keeps at least one (merge: two)
     events.function('graph.mergeRemoveInput', (index: number, input: number) => {
         const op = history().ops[index];
-        if (!(op instanceof CombineOp) || op.inputs.length <= 2) return null;
+        if (!(op instanceof CombineOp) || op.inputs.length <= (op instanceof MergeOp ? 2 : 1)) return null;
         return events.invoke('edit.refresh', index, () => {
             const [gone] = op.inputs.splice(input, 1);
             if (op instanceof MergeOp) op.settings.names.splice(input, 1);
+            if (op instanceof SwitchOp) {
+                op.settings.index = Math.min(op.settings.index, op.inputs.length - 1);
+                op.settings.cuts = op.settings.cuts.filter(c => c.input !== input).map(c => ({ ...c, input: c.input > input ? c.input - 1 : c.input }));
+            }
             // it was hidden by the merge; undo of the merge brings it back,
             // and so does leaving it
             if (gone) gone.visible = true;
@@ -118,22 +124,28 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
     };
 
     events.on('graph.addMergeNode', (target?: Splat) => {
-        makeCombine(shownWith(target));
+        makeCombine('merge', shownWith(target));
     });
 
-    // a merge node from a script: its inputs, by object, and its settings
-    events.function('combine.addNode', (kind: 'merge', inputs: Splat[], settings?: Partial<MergeSettings>, bypassed = false) => {
-        return makeCombine(inputs, settings, false).then((op) => {
+    events.on('graph.addSwitchNode', (target?: Splat) => {
+        makeCombine('switch', shownWith(target));
+    });
+
+    // a merge or switch node from a project: its inputs, by object, and its settings
+    events.function('combine.addNode', (kind: 'merge' | 'switch', inputs: Splat[], settings?: Partial<MergeSettings & SwitchSettings>, bypassed = false) => {
+        return makeCombine(kind, inputs, settings, false).then((op) => {
             if (op) op.bypassed = bypassed;
             return op;
         });
     });
 
-    // A merge node from a project, with the object it makes there already
-    // (empty: it is made again once the history has settled).
-    events.function('combine.restoreNode', (kind: 'merge', inputs: Splat[], output: Splat, settings?: Partial<MergeSettings>, bypassed = false) => {
+    // A merge or switch node from a project, with the object it makes there
+    // already (empty: it is made again once the history has settled).
+    events.function('combine.restoreNode', (kind: 'merge' | 'switch', inputs: Splat[], output: Splat, settings?: Partial<MergeSettings & SwitchSettings>, bypassed = false) => {
         if (!output || !inputs.length) return null;
-        const op: CombineOp = new MergeOp(scene, inputs, output, context, settings);
+        const op: CombineOp = kind === 'switch' ?
+            new SwitchOp(scene, inputs, output, context, settings) :
+            new MergeOp(scene, inputs, output, context, settings);
         op.bypassed = bypassed;
         // the merge hid them; it hides them again when it applies
         inputs.forEach((s) => {

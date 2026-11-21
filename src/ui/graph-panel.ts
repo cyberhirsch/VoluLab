@@ -90,6 +90,7 @@ const OP_LABELS: Record<string, string> = {
     addSplat: 'add object',
     splatRename: 'rename',
     merge: 'merge',
+    switch: 'switch',
     splitNode: 'split',
     voxelise: 'voxelise',
     addVoxels: 'import voxels',
@@ -1180,6 +1181,10 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addMergeNode', splat)
                     },
                     {
+                        label: 'switch',
+                        action: () => this.events.fire('graph.addSwitchNode', splat)
+                    },
+                    {
                         label: 'cleanup',
                         action: () => this.events.fire('graph.addCleanupNode', splat)
                     },
@@ -1492,6 +1497,13 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addMergeNode')
+            },
+            {
+                // one of the selected object and the others shown at a time
+                label: 'add switch node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addSwitchNode')
             },
             {
                 label: 'add cleanup node',

@@ -9,6 +9,30 @@ months finds out why before they change it.
 
 ---
 
+## A switch node: one input at a time, or cut between them
+
+The switch node shows one of its inputs. With no cuts it is the input
+picked, built as a merge of that input alone, so it carries the input's
+transform, colour and time nodes like a merge does. With cuts
+(`frame:input`, 1-based in the face, e.g. `0:1, 48:2`) it changes input
+at each cut's frame.
+
+Why cuts build every input into one object (`SwitchOp.options`,
+`MergeBuildOptions.pick`). A switch that swapped which object is shown at
+a cut would rebuild or re-upload at every cut while playing. Instead the
+build bakes all the inputs once and gives each one time windows: an input
+is drawn only in the frames the cuts give it, through the sort worker's
+level windows that the merge node added. A cut then costs nothing when it
+plays. A 3D input with cuts becomes still rows that have windows, so a
+switch between 3D objects is a 4D object. It is as long as the timeline,
+or as long as the last cut needs (`minFrames`). The timeline length is
+part of the build's signature only when there are cuts.
+
+The settings are plain numbers: the index, and the cuts as a list.
+Keyframing the index belongs to the keyframe work of the time nodes.
+
+---
+
 ## A merge node for 3D and 4D objects
 
 The merge node made two 3D objects into one by writing both out as a PLY

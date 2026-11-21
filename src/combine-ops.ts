@@ -1,7 +1,7 @@
 /**
- * The nodes that combine objects.
+ * The nodes that combine objects: merge and switch.
  *
- * Merge makes one object out of several (merge-build.ts). The
+ * Merge and switch make one object out of several (merge-build.ts). The
  * object is made before the node exists - the first build is the node's
  * reason to be - and then again whenever what it is made from has changed
  * by the time the node applies: an edit upstream of an input, a time node
@@ -35,6 +35,16 @@ type MergeSettings = {
     names: string[];
 };
 
+/** A cut of a switch: from this frame on, this input (0-based). */
+type SwitchCut = { frame: number, input: number };
+
+type SwitchSettings = {
+    /** the input shown where no cut says otherwise (0-based) */
+    index: number;
+    cuts: SwitchCut[];
+    sh: ShMode;
+};
+
 // a motion that moves nothing: for an object that had one and is built still
 const stillMotion = (count: number): SplatMotion => ({
     velocityTime: new Float32Array(Math.max(1, count) * 4),
@@ -42,8 +52,8 @@ const stillMotion = (count: number): SplatMotion => ({
 });
 
 /**
- * Several inputs, one object. The base of the nodes that make one object
- * of others; what a kind adds is which of the inputs a frame shows.
+ * Merge and switch: several inputs, one object. What differs is which
+ * inputs a frame shows - all of them, or the one a switch picks.
  */
 abstract class CombineOp {
     abstract name: string;
@@ -203,9 +213,76 @@ class MergeOp extends CombineOp {
     }
 }
 
+/**
+ * Switch: one of its inputs at a time. Which one is an index, and cuts
+ * change it from a frame on - takes, A/B comparisons, a cut from one
+ * capture to another. The inputs are built into one object, each drawn
+ * only in the frames it is picked for, so a cut costs nothing when it is
+ * played. With no cuts only the input picked is built.
+ */
+class SwitchOp extends CombineOp {
+    name = 'switch';
+    settings: SwitchSettings;
+
+    constructor(scene: Scene, inputs: Splat[], output: Splat, context: CombineContext, settings?: Partial<SwitchSettings>) {
+        super(scene, inputs, output, context);
+        this.settings = {
+            index: Math.max(0, Math.min(inputs.length - 1, Math.round(settings?.index ?? 0) || 0)),
+            cuts: (settings?.cuts ?? []).filter(c => Number.isFinite(c?.frame) && Number.isFinite(c?.input)).map(c => ({
+                frame: Math.max(0, Math.round(c.frame)),
+                input: Math.max(0, Math.round(c.input))
+            })),
+            sh: settings?.sh === 'truncate' ? 'truncate' : 'pad'
+        };
+    }
+
+    get sourceLabel() {
+        const { cuts } = this.settings;
+        return cuts.length ? `${this.inputs?.length ?? 0} inputs, ${cuts.length} cuts` : `input ${this.settings.index + 1}`;
+    }
+
+    /** the input shown at a frame of the timeline */
+    indexAt(frame: number) {
+        let index = this.settings.index;
+        let from = -1;
+        this.settings.cuts.forEach((cut) => {
+            if (cut.frame <= frame && cut.frame >= from) {
+                from = cut.frame;
+                index = cut.input;
+            }
+        });
+        return Math.max(0, Math.min(this.inputs.length - 1, index));
+    }
+
+    protected options(): MergeBuildOptions {
+        const cuts = this.settings.cuts.filter(c => c.input < this.inputs.length);
+        const base = {
+            sh: this.settings.sh,
+            rate: this.context.rate(),
+            timelineFrames: this.context.timelineFrames()
+        };
+        if (!cuts.length) {
+            // one input, as it is
+            return { ...base, include: this.inputs.map((_, i) => i === this.indexAt(0)) };
+        }
+        return {
+            ...base,
+            pick: (input, frame) => this.indexAt(frame) === input,
+            minFrames: Math.max(...cuts.map(c => c.frame)) + 1
+        };
+    }
+
+    protected extra() {
+        return this.settings;
+    }
+}
+
 export {
     CombineOp,
     MergeOp,
+    SwitchOp,
     type CombineContext,
-    type MergeSettings
+    type MergeSettings,
+    type SwitchSettings,
+    type SwitchCut
 };

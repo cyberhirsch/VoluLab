@@ -1,7 +1,7 @@
 /**
  * How a project keeps the combining nodes.
  *
- * A merge node is stored as the node: its kind, its inputs by
+ * A merge or switch node is stored as the node: its kind, its inputs by
  * their places in the project's list of objects, and its settings. Its
  * object is not written - it is made again from the inputs when the
  * project opens, as it would be after any edit to them. In the object
@@ -11,7 +11,7 @@
  *
  */
 
-import { CombineOp, MergeOp } from './combine-ops';
+import { CombineOp, MergeOp, SwitchOp } from './combine-ops';
 import type { EditOp } from './edit-ops';
 import { Events } from './events';
 import { mergedRotation } from './merge-build';
@@ -37,10 +37,10 @@ const storeCombine = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: P
             if (inputs.some(i => i < 0)) return;
             if (output >= 0) outputs.add(output);
             combine.push({
-                kind: 'merge',
+                kind: op instanceof SwitchOp ? 'switch' : 'merge',
                 output,
                 inputs,
-                settings: JSON.parse(JSON.stringify((op as MergeOp).settings)),
+                settings: JSON.parse(JSON.stringify((op as MergeOp | SwitchOp).settings)),
                 bypassed: !!op.bypassed,
                 ...placeOf(op)
             });
@@ -50,7 +50,7 @@ const storeCombine = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: P
     return { outputs, document: { combine } };
 };
 
-/** The objects of a project that a merge node makes: they have no file. */
+/** The objects of a project that a merge or switch node makes: they have no file. */
 const combineOutputs = (document: any) => {
     const out = new Set<number>();
     (Array.isArray(document?.combine) ? document.combine : []).forEach((c: any) => {
@@ -67,7 +67,7 @@ const placeholderSplat = (scene: Scene, name: string) => {
 
 type Later = (stored: any, add: () => EditOp | null) => void;
 
-/** Put the merge nodes back, in their places in the history. */
+/** Put the combining nodes back, in their places in the history. */
 const restoreCombine = (document: any, loaded: Splat[], later: Later, events: Events) => {
     (Array.isArray(document?.combine) ? document.combine : []).forEach((stored: any) => {
         const inputs = (stored.inputs ?? []).map((i: number) => loaded[i]);

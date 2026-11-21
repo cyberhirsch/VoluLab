@@ -1,12 +1,12 @@
 /**
- * The node pane's faces for the combining nodes. In a file of their own
- * so the node pane only dispatches to them; they use its rows and classes
- * (node-panel.scss).
+ * The node pane's faces for the combining nodes: merge and
+ * switch. In a file of their own so the node pane only dispatches to
+ * them; they use its rows and classes (node-panel.scss).
  */
 
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
-import { CombineOp, MergeOp } from '../combine-ops';
+import { CombineOp, MergeOp, SwitchOp, type SwitchCut } from '../combine-ops';
 import type { EditOp } from '../edit-ops';
 import { Events } from '../events';
 
@@ -166,6 +166,27 @@ const buildMerge = (face: Face, op: MergeOp) => {
     if (op.built?.copies.some(c => c > 1)) face.note(i18n.t('node.merge.note-copies'));
 };
 
+// "0:1, 48:2" - from frame 0 input 1, from frame 48 input 2 (1-based, as shown)
+const formatCuts = (cuts: SwitchCut[]) => cuts.map(c => `${c.frame}:${c.input + 1}`).join(', ');
+const parseCuts = (text: string, inputs: number): SwitchCut[] => text.split(/[,;\s]+/).filter(Boolean).map((part) => {
+    const [f, i] = part.split(':').map(v => parseInt(v, 10));
+    return { frame: f, input: i - 1 };
+}).filter(c => Number.isFinite(c.frame) && c.frame >= 0 && Number.isFinite(c.input) && c.input >= 0 && c.input < inputs)
+.sort((a, b) => a.frame - b.frame);
+
+const buildSwitch = (face: Face, op: SwitchOp) => {
+    face.choice(i18n.t('node.switch.index'), op.inputs.map((s, i) => [`${i}`, `${i + 1} ${s.name ?? ''}`.trim()] as [string, string]), `${op.settings.index}`, (v) => {
+        op.settings.index = parseInt(v, 10) || 0;
+    });
+    face.text(i18n.t('node.switch.cuts'), formatCuts(op.settings.cuts), (v) => {
+        op.settings.cuts = parseCuts(v, op.inputs.length);
+    }).placeholder = '0:1, 48:2';
+    const frame = face.events.invoke('timeline.frame') ?? 0;
+    face.stat(i18n.t('node.switch.now'), `${op.indexAt(frame) + 1}`);
+    buildInputs(face, op);
+    face.note(i18n.t('node.switch.note'));
+};
+
 /**
  * Build the face of a combining node into the node pane's body. False when
  * `op` is none of them.
@@ -173,6 +194,7 @@ const buildMerge = (face: Face, op: MergeOp) => {
 const buildCombineFace = (op: EditOp, index: number, body: HTMLElement, events: Events) => {
     const face = new Face(body, events, index);
     if (op instanceof MergeOp) buildMerge(face, op);
+    else if (op instanceof SwitchOp) buildSwitch(face, op);
     else return false;
     return true;
 };
