@@ -9,6 +9,39 @@ months finds out why before they change it.
 
 ---
 
+## Render passes node
+
+Renders the scene as it stands at the node, frame by frame, into one image
+sequence per pass for Nuke, Resolve or After Effects: beauty and alpha (PNG),
+depth and velocity (EXR), the selection matte (PNG), named
+`<name>_<pass>.<frame>.<ext>`. Like an output node it winds the history to
+itself and back. The files go into a folder picked with the File System Access
+API, or into one zip download without it. Code: `render-passes.ts`; the nodes
+of this group are in `inspect-ops.ts`, what they do in `inspect-nodes.ts`, their
+faces in `ui/inspect-panel.ts`, their project entries (`inspectNodes`) in
+`doc-inspect.ts`.
+
+- Beauty is what the video export renders, through the camera node's lens, on
+  a transparent background; alpha is its alpha channel.
+- Depth, velocity and matte come from the picker's blended pass, extended with
+  `pickMode` 2 and 3 in `splat-shader.ts`: rendered into an RGBA16F target of
+  their own with the picker's blend (colour adds weight * value, alpha keeps
+  the light left), then divided by the coverage - the way the picker's depth
+  already works. They see the gaussians sharp: no depth of field, no lens.
+- Depth: view depth in scene units, channel `Z`, 0 where nothing is drawn.
+  Half-float accumulation, about 11 bits of relative precision.
+- Velocity: the screen motion of each centre to the next timeline frame,
+  through the object's time nodes (`passMotionStep`, set per object), in
+  pixels, R = x right, G = y up. The objects' own motion only - the camera's is
+  not in it - and 0 for a 3D object or a PLY sequence.
+- The read-back of the data target resolves with a frame's submit, so one is
+  rendered for it; waiting for it without one hangs in the locked render mode.
+- `encodeExr` writes uncompressed scanline float32. Its rows start at any byte
+  offset after the header, so they are copied in as bytes (a Float32Array view
+  there throws).
+
+---
+
 ## Time nodes and a split node
 
 The graph can now edit time. Five nodes for a 4D model - trim, retime,

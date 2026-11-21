@@ -1,0 +1,33 @@
+import type { EditOp } from './edit-ops';
+import type { Events } from './events';
+import { RenderPassesOp } from './inspect-ops';
+import type { Splat } from './splat';
+
+/**
+ * How a project keeps the output and inspection nodes: as nodes, with their
+ * settings. What they hold - a cache's frames, a stats node's figures - is
+ * worked out again, not stored; a cache's folder is not stored either, so
+ * it comes back keeping its frames in memory until one is picked.
+ */
+
+type Place = (op: EditOp | undefined) => { at?: number, pos?: number[] };
+
+const storeInspectNodes = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: Place) => {
+    return ops.slice(0, cursor).flatMap((op): object[] => {
+        const splat = splats.indexOf((op as any).splat);
+        if (splat < 0) return [];
+        const common = { splat, ...(op.bypassed ? { bypassed: true } : {}), ...placeOf(op) };
+        if (op instanceof RenderPassesOp) return [{ type: 'renderPasses', settings: { ...op.settings, passes: { ...op.settings.passes } }, ...common }];
+        return [];
+    });
+};
+
+const restoreInspectNode = (stored: any, splat: Splat, events: Events): EditOp | null => {
+    const bypassed = !!stored?.bypassed;
+    switch (stored?.type) {
+        case 'renderPasses': return events.invoke('renderPasses.addNode', splat, stored.settings, bypassed);
+        default: return null;
+    }
+};
+
+export { storeInspectNodes, restoreInspectNode };
