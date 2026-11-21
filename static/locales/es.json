@@ -414,6 +414,8 @@
     "node.denoise.smooth": "suavizar aparición (frames)",
     "node.denoise.keep": "conservar movimiento por encima de",
     "node.denoise.note": "Las gaussianas que, mientras se dibujan, se mueven menos que esta cantidad de veces su eje más delgado se toman como vibración: se amortigua su velocidad y su aparición y desaparición se reparten en más frames. El movimiento más rápido queda como está.",
+    "node.flicker.frames": "más corto que (frames)",
+    "node.flicker.note": "Elimina las gaussianas dibujadas con al menos la mitad de su opacidad durante menos frames que estos, la forma 4D de los floaters. Solo añade a lo eliminado.",
     "light.delight-deleted": "quitar iluminación: contar eliminados",
     "light.yes": "sí",
     "light.no": "no",

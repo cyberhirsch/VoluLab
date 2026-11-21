@@ -414,6 +414,8 @@
     "node.denoise.smooth": "suavizar aparecimento (frames)",
     "node.denoise.keep": "manter movimento acima de",
     "node.denoise.note": "Gaussianas que, enquanto desenhadas, se movem menos que esta quantidade de vezes seu eixo mais fino são tomadas como tremor: sua velocidade é amortecida e seu aparecer e sumir espalhados por mais frames. O movimento mais rápido fica como está.",
+    "node.flicker.frames": "mais curto que (frames)",
+    "node.flicker.note": "Exclui gaussianas desenhadas com pelo menos metade da opacidade por menos frames que isso, a forma 4D dos floaters. Só acrescenta ao que está excluído.",
     "light.delight-deleted": "remover iluminação: contar excluídos",
     "light.yes": "sim",
     "light.no": "não",

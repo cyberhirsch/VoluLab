@@ -414,6 +414,8 @@
     "node.denoise.smooth": "平滑淡入淡出（帧）",
     "node.denoise.keep": "保留运动下限",
     "node.denoise.note": "在绘制期间移动不到其最细轴该倍数的高斯被视为抖动：其速度被衰减，淡入淡出分散到更多帧。更快的运动保持不变。",
+    "node.flicker.frames": "短于（帧）",
+    "node.flicker.note": "删除以至少一半不透明度绘制的帧数少于该值的高斯，即浮点的 4D 形式。只会增加删除的内容。",
     "light.delight-deleted": "去光照计入已删除",
     "light.yes": "是",
     "light.no": "否",

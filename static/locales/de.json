@@ -414,6 +414,8 @@
     "node.denoise.smooth": "Ein-/Ausblenden glätten (Frames)",
     "node.denoise.keep": "Bewegung behalten ab",
     "node.denoise.note": "Gaussians, die sich, während sie gezeichnet werden, weniger als so oft ihre dünnste Achse bewegen, gelten als Jitter: Ihre Geschwindigkeit wird gedämpft und ihr Ein- und Ausblenden über mehr Frames verteilt. Schnellere Bewegung bleibt, wie sie ist.",
+    "node.flicker.frames": "kürzer als (Frames)",
+    "node.flicker.note": "Löscht Gaussians, die weniger als so viele Frames mit mindestens halber Opacity gezeichnet werden, die 4D-Form von Floaters. Fügt dem Gelöschten nur hinzu.",
     "light.delight-deleted": "Licht entfernen: Gelöschte zählen",
     "light.yes": "ja",
     "light.no": "nein",

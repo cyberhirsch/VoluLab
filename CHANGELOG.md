@@ -9,6 +9,17 @@ months finds out why before they change it.
 
 ---
 
+## Flicker removal
+
+Deletes what pops in and out: the gaussians of a 4D model drawn at half
+their peak opacity or more for fewer than `frames` frames - counted within
+the sequence and within the segment the hierarchy draws them in. A
+`StateOp` like cleanup, so it only adds to what is deleted, and a project
+stores it with the other state nodes (`doc-nodes.ts`) with the set it
+deleted. On the alley sample, under 2 frames is 284,885 gaussians (15 %)
+and the picture moves by 55 to 59 dB; under 6 frames 424,414 (23 %).
+Nothing on a 3D object.
+
 ## Temporal denoise
 
 Smooths what flickers in a 4D model and keeps what moves. A gaussian whose

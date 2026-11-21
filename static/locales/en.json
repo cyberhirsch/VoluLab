@@ -414,6 +414,8 @@
     "node.denoise.smooth": "fade smoothing (frames)",
     "node.denoise.keep": "keep motion above",
     "node.denoise.note": "Gaussians that move less than this many times their thinnest axis while drawn are taken as jitter: their velocity is damped and their fade in and out spread over more frames. Faster motion is left as it is.",
+    "node.flicker.frames": "shorter than (frames)",
+    "node.flicker.note": "Deletes gaussians drawn at half their opacity or more for fewer than this many frames, the 4D form of floaters. Only ever adds to what is deleted.",
     "light.delight-deleted": "de-light counts deleted",
     "light.yes": "yes",
     "light.no": "no",

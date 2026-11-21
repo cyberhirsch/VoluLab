@@ -19,6 +19,7 @@ import {
     UnhideAllOp
 } from './edit-ops';
 import { IndexRanges } from './index-ranges';
+import { FlickerRemovalOp } from './look/flicker-removal';
 import { ScenePrimitive } from './scene-primitive';
 import { SelectQuery } from './select-query';
 import { Splat } from './splat';
@@ -198,6 +199,9 @@ const packSettings = (op: StateOp, words: Words, primitives: ScenePrimitive[]): 
     if (op instanceof CleanupOp) {
         return { type: 'cleanup', neighbours: op.neighbours, deviations: op.deviations };
     }
+    if (op instanceof FlickerRemovalOp) {
+        return { type: 'flickerRemoval', frames: op.frames };
+    }
     // exactly these classes: a node made from one of them with more to it
     // would come back as less
     return plain[op.name] && op.constructor === plain[op.name] ? { type: op.name } : null;
@@ -291,6 +295,9 @@ const restoreStateNode = (stored: StoredNode, splat: Splat, primitives: ScenePri
             break;
         case 'cleanup':
             op = new CleanupOp(splat, stored.neighbours ?? 16, stored.deviations ?? 1.5);
+            break;
+        case 'flickerRemoval':
+            op = new FlickerRemovalOp(splat, stored.frames ?? 2);
             break;
         default: {
             const Plain = plain[stored.type];
