@@ -9,6 +9,21 @@ months finds out why before they change it.
 
 ---
 
+## Freeze background
+
+Replaces the still part with one frame of it. Set to a frame (the frame of
+the model shown when the node is made), the still gaussians drawn at that
+frame at half their peak or more get zero velocity and no falloff - they
+stand at their peak for the whole sequence - and the rest are moved to a
+temporal centre outside the sequence with a steep falloff, so they are
+never drawn. Set to everything, every still gaussian is held. Both are
+motion edits only: positions stay where each gaussian is at its temporal
+centre (a still gaussian moves less than a tenth of its size by default),
+nothing is deleted, and the sort worker now finds the held rows still and
+sorts them once per view. The PRD's median over frames is not built: in
+this model a gaussian has one opacity bump, and holding it at its peak is
+what is left of a median.
+
 ## Fill hole
 
 Where a frame lost coverage, the frames around it fill it: every still
