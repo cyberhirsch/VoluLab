@@ -423,6 +423,8 @@
     "node.freezeBg.sequence": "everything",
     "node.freezeBg.frame": "frame",
     "node.freezeBg.note": "Holds the still part. With one frame, the still gaussians drawn at that frame of the model stay for the whole sequence and the others are hidden; with everything, every still gaussian stays. The background stops flickering; what moves is not touched.",
+    "node.opacity.value": "opacity",
+    "node.opacity.note": "Scales the opacity of the gaussians the select nodes above have selected, or of the whole object. A saved project keeps the result, not the node.",
     "light.delight-deleted": "de-light counts deleted",
     "light.yes": "yes",
     "light.no": "no",

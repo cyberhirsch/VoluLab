@@ -423,6 +423,8 @@
     "node.freezeBg.sequence": "tout",
     "node.freezeBg.frame": "frame",
     "node.freezeBg.note": "Fige la partie immobile. Avec une frame, les gaussiennes immobiles dessinées à cette frame du modèle restent toute la séquence et les autres sont masquées ; avec tout, chaque gaussienne immobile reste. Le fond ne scintille plus ; ce qui bouge n'est pas touché.",
+    "node.opacity.value": "opacité",
+    "node.opacity.note": "Met à l'échelle l'opacité des gaussiennes sélectionnées par les nœuds de sélection au-dessus, ou de tout l'objet. Un projet enregistré garde le résultat, pas le nœud.",
     "light.delight-deleted": "retirer l'éclairage : compter les supprimés",
     "light.yes": "oui",
     "light.no": "non",

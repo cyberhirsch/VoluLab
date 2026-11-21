@@ -423,6 +423,8 @@
     "node.freezeBg.sequence": "alles",
     "node.freezeBg.frame": "Frame",
     "node.freezeBg.note": "Hält den stillen Teil. Bei einem Frame bleiben die stillen Gaussians, die in diesem Frame des Modells gezeichnet werden, die ganze Sequenz über, die anderen werden versteckt; bei alles bleibt jeder stille Gaussian. Der Hintergrund flackert nicht mehr; was sich bewegt, bleibt unberührt.",
+    "node.opacity.value": "Opacity",
+    "node.opacity.note": "Skaliert die Opacity der Gaussians, die die Select-Nodes darüber ausgewählt haben, oder des ganzen Objekts. Ein gespeichertes Projekt behält das Ergebnis, nicht den Node.",
     "light.delight-deleted": "Licht entfernen: Gelöschte zählen",
     "light.yes": "ja",
     "light.no": "nein",

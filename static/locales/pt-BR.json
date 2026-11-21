@@ -423,6 +423,8 @@
     "node.freezeBg.sequence": "tudo",
     "node.freezeBg.frame": "frame",
     "node.freezeBg.note": "Mantém a parte parada. Com um frame, as gaussianas paradas desenhadas nesse frame do modelo ficam a sequência toda e as outras são ocultadas; com tudo, cada gaussiana parada fica. O fundo para de piscar; o que se move não é tocado.",
+    "node.opacity.value": "opacidade",
+    "node.opacity.note": "Escala a opacidade das gaussianas que os nós de seleção acima selecionaram, ou do objeto inteiro. Um projeto salvo mantém o resultado, não o nó.",
     "light.delight-deleted": "remover iluminação: contar excluídos",
     "light.yes": "sim",
     "light.no": "não",

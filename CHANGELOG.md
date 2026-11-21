@@ -9,6 +9,21 @@ months finds out why before they change it.
 
 ---
 
+## Opacity
+
+Scales opacity, of what the select nodes above selected or of the whole
+object, for fades. A plain number, for the keyframe work to make keyable.
+
+It is the first node on the grade palette (`look/grade-rows.ts`): every
+gaussian in scope goes to a new slot holding the slot it was on composed
+with this node's grade - here an alpha scale - one slot per distinct old
+slot, the way a scoped colour node does it, so it stacks with colour
+nodes and with the nodes after it. Undo puts the slot indices back and
+frees the slots, which were the newest. A project keeps what it did and
+not the node, as for a scoped colour node: baked into a PLY's opacity,
+stored beside a 4D model as its grades. Stored as a node as well, it would
+apply twice on open.
+
 ## Freeze background
 
 Replaces the still part with one frame of it. Set to a frame (the frame of
