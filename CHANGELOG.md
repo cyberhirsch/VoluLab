@@ -252,6 +252,94 @@ Traps:
 - A build from before this cannot open a project with a 4D model in it:
   it looks for `splat_<i>.ply`.
 
+## A turning camera no longer waits for the still rows
+
+Orbiting while a 4D model plays gave 17 to 19 fresh orders a second on a
+30 fps timeline, where a still camera gave 30. A turn changes the view
+direction, and for a new direction the sort worker sorted the still rows
+again before it answered: 31 ms of keys and radix passes for the alley's
+1.29M on top of the 29 ms a request costs anyway.
+
+The worker does not wait for that any more. A second worker, the helper
+(the same code in its other role, joined by a `MessageChannel`), sorts
+the still rows for a direction and hands the result over. Until it has,
+the worker answers with the still order it holds: the moving rows are
+keyed by that order's direction too, so every answer is still one sort
+of the whole active set at its own time by one key - by a direction a
+little behind the camera's. Such an answer says `exact: false`. When the
+camera rests the next answer is by its direction and exact, as before.
+
+The helper is asked for where the camera is turning to, not where it
+is: the direction the measured turn reaches in the time one helper sort
+and one request take. Without that the order drawn was 3.1 degrees
+behind a camera orbiting at 34 degrees a second; with it 1.1.
+
+The merge went from two fingers to a scatter. The helper sends with the
+order a table of how many still rows have a key up to k; the worker
+counts the moving keys below k. Still row i goes to i + moving keys
+below its key, moving row j to j + still rows up to its key. The order
+is the same one, ties included; there is no branch to mispredict and
+the merge takes 9 ms where it took 14.
+
+Why this and not the others. Sharing the centres between workers by
+`SharedArrayBuffer` needs a cross-origin isolated page, and GitHub
+Pages cannot send the headers; the buffers here change hands by
+transfer instead, each in turn. Fewer key bits or a larger radix gain
+nothing: the key arithmetic is the cost, not the passes (measured on
+its own: packing the data did not help, fused passes were slower). A
+sort on the GPU is not needed to reach the playhead's rate.
+
+Measured in headless Chrome with WebGPU on the RTX 3090 (2017
+Threadripper, Chrome at idle priority, other sessions using the GPU at
+30 to 60 %), 30 fps timeline, before and after:
+
+| | alley .gsv, 3.30M rows | alley_s2_100.npz, 1.87M rows |
+|---|---|---|
+| sort results per second, camera still | 29.5 -> 29.8 | 29.9 -> 29.9 |
+| the same, camera orbiting | 17.2 -> 35.1 | 18.2 -> 53.3 |
+| the same, paused and orbiting | 15.8 -> 21.5 | 18.6 -> 28.0 |
+| frames the picture is behind the playhead | 1.2 -> 1.07 | 1.0 -> 0.55 |
+| the same, camera orbiting | 2.84 -> 1.46 | 2.72 -> 0.92 |
+| one sort in the worker | 29 ms, 57 ms after a turn -> 25 ms, 27 ms | 21 ms, 54 ms -> 13 ms, 16 ms |
+| one helper sort (keys + radix) | 46 ms | 34 ms |
+| sort direction behind the orbiting camera, mean / max | 1.9 / 2.3 -> 1.1 / 4.5 degrees | 1.9 / 2.8 -> 1.7 / 6.8 degrees |
+| main thread per frame asked for | 0.03 -> 0.05 ms | 0.06 -> 0.04 ms |
+| requestAnimationFrame rate | 60 -> 60 | 60 -> 60 |
+
+Orders checked at fixed poses, after play and pause, after a delete and
+its undo: every one holds exactly the active undeleted rows; no
+gaussian that is not faded out comes more than 0.00088 units (alley
+.gsv) or 0.00028 (npz) before one it should follow, the figures from
+before. A 30-frame video shows frames 0 to 29. The same on WebGL2
+(37 results a second orbiting).
+
+To read the rate in the browser: `motionSort.rate` in the console is
+the number of orders that arrived in the last second,
+`motionSort.exactRate` those by the camera's own direction.
+
+Traps:
+
+- **While the camera turns, almost no order is exact.** The worst
+  direction error measured is 6.8 degrees for one result, at 34 degrees
+  a second. The old worker's was 2.8, at half the rate. A faster turn
+  is further behind; the prediction is capped at 0.15 rad.
+- **`'updated'` fires only for an exact order of the newest request.**
+  The export waits on it, so a frame with a moved camera takes a
+  provisional and an exact answer. Under `1 << 17` still rows there is
+  no helper round trip: the worker sorts them itself, as before.
+- **Paused and turning is bound by the helper**, not by the worker: a
+  new order needs a new still order, one per 34 to 46 ms.
+- **Two workers per 4D model**, and the still rows twice: about 55 MB
+  more for the alley.
+- **The messages of the worker changed, the class did not.** New in a
+  result: `exact`, `direction`, `times`, `stillTimes`, `posted`. New
+  from the worker: `{id, t, same: true, exact: false}` (the order
+  would be the one already sent; none comes) and `{again: id}` (the
+  still order owed is in; ask again). New to the worker: `helper` (a
+  port, with the model), `serve` (a port, makes it the helper), `at`
+  in a request (when it was sent, for the turn). `MotionSorter` has
+  the constructor and methods it had.
+
 ## Transform and delete nodes
 
 Two nodes that only ever appeared as the trace of something done in the
