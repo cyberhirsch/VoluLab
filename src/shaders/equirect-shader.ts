@@ -58,28 +58,34 @@ const fragmentShader = /* glsl*/ `
 
         vec3 d = vec3(sin(lon) * cos(lat), sin(lat), -cos(lon) * cos(lat));
 
+        // texture2DLod, not texture2D: the samples sit inside conditionals, and
+        // WGSL forbids implicit-derivative sampling in non-uniform control
+        // flow. The transpile succeeds, pipeline creation fails without a word
+        // and the quad is never drawn - on WebGPU every 360 export came out
+        // empty. The faces have no mips, so level 0 is what was wanted anyway.
+        // (The same trap as in lens-shader.ts.)
         vec4 acc = vec4(0.0);
         float wsum = 0.0;
         vec2 st;
         float w;
 
         w = faceWeight(d, vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, -1.0), st);
-        if (w > 0.0) { acc += w * texture2D(uFace0, st); wsum += w; }
+        if (w > 0.0) { acc += w * texture2DLod(uFace0, st, 0.0); wsum += w; }
 
         w = faceWeight(d, vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), st);
-        if (w > 0.0) { acc += w * texture2D(uFace1, st); wsum += w; }
+        if (w > 0.0) { acc += w * texture2DLod(uFace1, st, 0.0); wsum += w; }
 
         w = faceWeight(d, vec3(-1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), st);
-        if (w > 0.0) { acc += w * texture2D(uFace2, st); wsum += w; }
+        if (w > 0.0) { acc += w * texture2DLod(uFace2, st, 0.0); wsum += w; }
 
         w = faceWeight(d, vec3(0.0, 0.0, -1.0), vec3(0.0, 1.0, 0.0), vec3(-1.0, 0.0, 0.0), st);
-        if (w > 0.0) { acc += w * texture2D(uFace3, st); wsum += w; }
+        if (w > 0.0) { acc += w * texture2DLod(uFace3, st, 0.0); wsum += w; }
 
         w = faceWeight(d, vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), st);
-        if (w > 0.0) { acc += w * texture2D(uFace4, st); wsum += w; }
+        if (w > 0.0) { acc += w * texture2DLod(uFace4, st, 0.0); wsum += w; }
 
         w = faceWeight(d, vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, -1.0), vec3(0.0, -1.0, 0.0), st);
-        if (w > 0.0) { acc += w * texture2D(uFace5, st); wsum += w; }
+        if (w > 0.0) { acc += w * texture2DLod(uFace5, st, 0.0); wsum += w; }
 
         gl_FragColor = acc / max(wsum, 1e-5);
     }

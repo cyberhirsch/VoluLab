@@ -9,6 +9,32 @@ months finds out why before they change it.
 
 ---
 
+## 360 exports are no longer empty on WebGPU
+
+A 360 image or video came out black - fully transparent, in fact, alpha 0
+in every pixel - on WebGPU, which is the default, in headless and in
+windowed Chrome alike. The camera was not inside anything and the sort was
+waited for: read back one by one, all six cube faces were rendered and lit
+(4.5 to 14.3 % of their pixels on the test model). What never ran was the
+pass that projects them to the panorama.
+
+Its fragment shader sampled each face inside `if (w > 0.0) { ... }` with
+`texture2D`. WGSL forbids implicit-derivative sampling in non-uniform
+control flow; the GLSL transpiles without complaint, pipeline creation
+then fails without a word, and the quad is not drawn. It is the trap
+`lens-shader.ts` already describes, and the cure is the same:
+`texture2DLod(..., 0.0)`, which needs no derivatives. The faces have no
+mips, so nothing else changes, and WebGL2 takes the same source.
+
+Measured on every 40th gaussian of `mira_alley_2layer.npz`, 1024 x 512,
+frame 120: the 360 still went from 2,112 bytes of nothing to 8.6 % lit
+pixels, the 360 video (12 frames, h264) from 3,385 bytes to 72,102 with
+8.4 % lit; the same numbers in headless and in a windowed, minimised
+Chrome. On WebGL2 (`?device=webgl2`) the still has 8.4 % lit, as it should:
+that path never failed.
+
+---
+
 ## Compact GSV: a gaussian at rest is stored at rest
 
 The compact encoding stores a velocity as a 16-bit code between the page's
