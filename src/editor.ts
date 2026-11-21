@@ -5,7 +5,7 @@ import { registerCameraEffects } from './camera-effects';
 import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
+import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, TrimOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -618,6 +618,43 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // A delete node removes what the select nodes above it leave selected.
     events.on('graph.addDeleteNode', (target?: Splat) => {
         addTarget(target).forEach(splat => appendAndOpen(new DeleteNodeOp(splat)));
+    });
+
+    // Time nodes. Every 4D model played on the GPU follows the timeline
+    // through its own time nodes (Splat.showFrame). The model the sequence
+    // plays is told each frame by the sequence too; one that came off it
+    // by a split node only from here. The video export moves the time
+    // without moving the frame, so both are followed.
+    const movingSplats = () => (scene.getElementsByType(ElementType.splat) as Splat[]).filter(s => s.motion && s.motionFrames > 0);
+    events.on('timeline.frame', (frame: number) => {
+        movingSplats().forEach(s => s.showFrame(frame));
+    });
+    events.on('timeline.time', (time: number) => {
+        const frame = Math.floor(time + 1e-4);
+        movingSplats().forEach(s => s.showFrame(frame));
+    });
+
+    // The timeline is as long as the longest 4D object, as its time nodes
+    // leave it; a shorter one holds its last frame (or is hidden, if a time
+    // offset node on it says so). Taken once the history has settled: a
+    // replay takes the nodes off and puts them back, and the timeline
+    // following every step of that would strand the playhead.
+    let timeMapsChanged = false;
+    events.on('splat.timeMaps', () => {
+        timeMapsChanged = true;
+    });
+    events.on('edit.changed', () => {
+        if (!timeMapsChanged) return;
+        timeMapsChanged = false;
+        const spans = movingSplats().map(s => s.timeSpan);
+        if (spans.length) {
+            events.fire('timeline.setFrames', Math.max(...spans));
+        }
+    });
+
+    // A trim node starts as the whole sequence: something to tighten.
+    events.on('graph.addTrimNode', (target?: Splat) => {
+        addTarget(target).forEach(splat => appendAndOpen(new TrimOp(splat)));
     });
 
     events.on('graph.addCleanupNode', (target?: Splat) => {

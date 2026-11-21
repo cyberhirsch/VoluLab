@@ -18,6 +18,7 @@ import { SphereShape } from './sphere-shape';
 import { Splat } from './splat';
 import type { DebugView } from './splat-debug';
 import { State } from './splat-state';
+import { TimeMap, TrimMap, timeSpan } from './time-map';
 import { Transform } from './transform';
 import { Voxels } from './voxels';
 
@@ -662,6 +663,95 @@ class DeleteNodeOp extends StateOp {
     setWhat(what: DeleteWhat) {
         this.what = what;
         this.invalidate();
+    }
+}
+
+/**
+ * A time node: changes which frame of a 4D model a frame of the timeline
+ * shows.
+ *
+ * The node holds a map (time-map.ts) and puts it on the object while it is
+ * applied. The object keeps the maps of its time nodes in the order of its
+ * chain and sends every timeline frame through them (Splat.showFrame), so
+ * several compose in that order, and undoing or bypassing one takes its
+ * map off again and leaves the mapping as it is without it. Nothing of the
+ * model's data changes.
+ *
+ * Only a 4D model played on the GPU has a time to map. On a 3D model the
+ * node is carried and does nothing.
+ */
+class TimeOp {
+    name: string;
+    splat: Splat;
+    map: TimeMap;
+    bypassed?: boolean;
+
+    constructor(splat: Splat, map: TimeMap) {
+        this.splat = splat;
+        this.map = map;
+    }
+
+    /** whether the object has a time for the node to change */
+    get moving() {
+        return !!this.splat.motion;
+    }
+
+    get applied() {
+        return this.splat.timeMaps.includes(this.map);
+    }
+
+    /** How long the sequence the node is given is, in frames; -1 while it is not applied. */
+    get framesIn() {
+        const at = this.splat.timeMaps.indexOf(this.map);
+        return at < 0 || !this.moving ? -1 : timeSpan(this.splat.timeMaps.slice(0, at), this.splat.motionFrames);
+    }
+
+    /** And how long the one it leaves is. */
+    get framesOut() {
+        const at = this.splat.timeMaps.indexOf(this.map);
+        return at < 0 || !this.moving ? -1 : timeSpan(this.splat.timeMaps.slice(0, at + 1), this.splat.motionFrames);
+    }
+
+    do() {
+        this.splat.timeMaps.push(this.map);
+        this.splat.retime();
+    }
+
+    undo() {
+        const at = this.splat.timeMaps.indexOf(this.map);
+        if (at < 0) return;
+        this.splat.timeMaps.splice(at, 1);
+        this.splat.retime();
+    }
+
+    destroy() {
+        this.splat = null;
+    }
+}
+
+/**
+ * Trim: the object's sequence becomes frames in..out of what it was. The
+ * frames are counted in the sequence the node is given, so after a retime
+ * above it they are frames of the retimed sequence.
+ */
+class TrimOp extends TimeOp {
+    name = 'trimNode';
+    declare map: TrimMap;
+
+    constructor(splat: Splat, inFrame = 0, outFrame = Infinity) {
+        super(splat, new TrimMap(inFrame, outFrame));
+    }
+
+    /** the range as it holds now, or as it was typed while there is nothing to hold it against */
+    get range() {
+        const frames = this.framesIn;
+        return frames > 0 ? this.map.range(frames) : [this.map.in, this.map.out];
+    }
+
+    /** what the graph writes under the node's title */
+    get sourceLabel() {
+        const [a, b] = this.range;
+        return Number.isFinite(b) ? `${a} - ${b}` : `${a} -`;
     }
 }
 
@@ -2222,6 +2312,8 @@ export {
     TransformNodeOp,
     DeleteNodeOp,
     type DeleteWhat,
+    TimeOp,
+    TrimOp,
     SplatsTransformOp,
     PlacePivotOp,
     SetLocalFrameOp,

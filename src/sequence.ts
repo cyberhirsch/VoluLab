@@ -137,7 +137,9 @@ const registerSequenceEvents = (events: Events, scene: Scene) => {
     };
 
     const setFrame = async (frame: number) => {
-        if (!source || frame < 0 || frame >= source.frameCount) {
+        // a model played on the GPU is asked for every frame: its time
+        // nodes may make its sequence longer than the source's own
+        if (!source || frame < 0 || (frame >= source.frameCount && !source.showFrame)) {
             return;
         }
 
@@ -240,7 +242,7 @@ const registerSequenceEvents = (events: Events, scene: Scene) => {
             await loadingPromise.catch((): void => undefined);
         }
 
-        if (!source || frame < 0 || frame >= source.frameCount) {
+        if (!source || frame < 0 || (frame >= source.frameCount && !source.showFrame)) {
             return null;
         }
 

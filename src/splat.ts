@@ -27,6 +27,7 @@ import { Serializer } from './serializer';
 import { vertexShader, fragmentShader, gsplatCenter, gsplatModify, vertexShaderWGSL, fragmentShaderWGSL, gsplatCenterWGSL, gsplatModifyWGSL } from './shaders/splat-shader';
 import { DebugResolved, DebugStash, DebugView, debugChannelAvailable, resolveDebugView } from './splat-debug';
 import { State, SplatState } from './splat-state';
+import { TimeMap, resolveTime, timeSpan } from './time-map';
 import { Transform } from './transform';
 import { TransformPalette } from './transform-palette';
 
@@ -150,6 +151,19 @@ class Splat extends Element {
     // time it shows gaussians outside the segment they were trained in.
     // The sorter says which time each order is of
     private shaderTime = 0;
+
+    /**
+     * The time nodes applied to this object, in the order of its chain; the
+     * nodes add and remove themselves (see time-map.ts, TimeOp). They decide
+     * which frame of the model a frame of the timeline shows.
+     */
+    timeMaps: TimeMap[] = [];
+    // how many frames the model's own sequence has; 0 until it is shown
+    motionFrames = 0;
+    // the timeline frame asked for last
+    timelineFrame = 0;
+    // a time node shows nothing of the object at that frame
+    timeHidden = false;
 
     /**
      * The debug view nodes applied to this object, in the order of its
@@ -503,6 +517,37 @@ class Splat extends Element {
     showTime(t: number) {
         this.motionTime = t;
         this.motionSorter.show(t);
+    }
+
+    /** How many frames the object's sequence has, as its time nodes leave it. */
+    get timeSpan() {
+        return timeSpan(this.timeMaps, this.motionFrames);
+    }
+
+    /**
+     * Show the 4D model at a frame of the timeline. This is where the time
+     * nodes apply: the frame goes through them and comes out as a frame of
+     * the model, which is the time the shader and the sort worker get.
+     * Asked for the time it already shows, it does nothing.
+     */
+    showFrame(frame: number, frames = this.motionFrames) {
+        this.motionFrames = frames;
+        this.timelineFrame = frame;
+        if (!this.motion || !(frames > 0)) return;
+        const at = resolveTime(this.timeMaps, frames, frame);
+        if ((at === null) !== this.timeHidden) {
+            this.timeHidden = at === null;
+            if (this.scene) this.scene.forceRender = true;
+        }
+        if (at !== null && at / frames !== this.motionTime) {
+            this.showTime(at / frames);
+        }
+    }
+
+    /** The time nodes changed: show the frame again through them, and say so. */
+    retime() {
+        this.showFrame(this.timelineFrame);
+        this.scene?.events.fire('splat.timeMaps', this);
     }
 
     /**
@@ -998,7 +1043,7 @@ class Splat extends Element {
             }
         }
 
-        this.entity.enabled = this.visible;
+        this.entity.enabled = this.visible && !this.timeHidden;
     }
 
     focalPoint() {

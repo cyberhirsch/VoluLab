@@ -76,7 +76,9 @@ class TghFrameSource implements FrameSource {
         if (!splat.motion) {
             splat.setMotion(this.motion);
         }
-        splat.showTime(this.timeOf(index));
+        // through the object's time nodes (Splat.showFrame); without any
+        // this is showTime(timeOf(index))
+        splat.showFrame(index, this.frames);
     }
 
     get frameCount() {

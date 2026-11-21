@@ -3,7 +3,7 @@ import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
-import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -198,6 +198,12 @@ class NodePanel extends Container {
         if (op instanceof DeleteNodeOp) {
             this.empty.hidden = true;
             this.buildDelete(op, index);
+            return;
+        }
+
+        if (op instanceof TimeOp) {
+            this.empty.hidden = true;
+            this.buildTime(op, index);
             return;
         }
 
@@ -775,6 +781,78 @@ class NodePanel extends Container {
         note.className = 'nd-note';
         note.textContent = i18n.t(n >= 0 && op.selectedIn === 0 ? 'node.delete.none' : 'node.delete.note');
         this.body.appendChild(note);
+    }
+
+    /** A number typed into a node; the change replays the node. */
+    private replayNumber(label: string, value: number, step: number, neutral: number, index: number, apply: (v: number) => void) {
+        const row = this.row(label);
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'nd-num';
+        input.step = String(step);
+        input.value = `${+value.toFixed(4)}`;
+        fieldDefault(input, neutral);
+        input.addEventListener('keydown', e => e.stopPropagation());
+        input.addEventListener('change', () => {
+            const v = parseFloat(input.value);
+            if (Number.isFinite(v)) this.events.invoke('edit.refresh', index, () => apply(v));
+        });
+        row.appendChild(input);
+        this.body.appendChild(row);
+    }
+
+    /** One of a few named settings; picking another replays the node. */
+    private replayChoice<T extends string>(label: string, options: [T, string][], value: T, index: number, apply: (v: T) => void) {
+        const row = this.row(label);
+        const choices = document.createElement('div');
+        choices.className = 'nd-choices';
+        options.forEach(([option, text]) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'nd-choice';
+            b.textContent = text;
+            if (option === value) b.classList.add('nd-choice-active');
+            b.addEventListener('click', () => {
+                if (option !== value) this.events.invoke('edit.refresh', index, () => apply(option));
+            });
+            choices.appendChild(b);
+        });
+        row.appendChild(choices);
+        this.body.appendChild(row);
+    }
+
+    /**
+     * A time node: its settings, how long the sequence it is given is and
+     * how long the one it leaves, and what it does. On a 3D model it says
+     * that it does nothing.
+     */
+    private buildTime(op: TimeOp, index: number) {
+        const frames = op.framesIn;
+
+        if (op instanceof TrimOp) {
+            const [a, b] = op.range;
+            this.replayNumber(i18n.t('node.trim.in'), a, 1, 0, index, (v) => {
+                op.map.in = Math.max(0, Math.round(v));
+            });
+            this.replayNumber(i18n.t('node.trim.out'), Number.isFinite(b) ? b : 0, 1, Math.max(0, frames - 1), index, (v) => {
+                op.map.out = Math.max(0, Math.round(v));
+            });
+        }
+
+        const note = (key: string) => {
+            const el = document.createElement('div');
+            el.className = 'nd-note';
+            el.textContent = i18n.t(key);
+            this.body.appendChild(el);
+        };
+
+        if (!op.moving) {
+            note('node.time.still');
+            return;
+        }
+        this.stat(i18n.t('node.time.frames'), frames < 0 ? i18n.t('node.time.not-applied') : `${frames} \u2192 ${op.framesOut}`);
+        note(`node.${op.name.replace(/Node$/, '')}.note`);
+        note('node.time.note');
     }
 
     private row(label: string): HTMLElement {
