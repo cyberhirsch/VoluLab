@@ -4,6 +4,7 @@
  * The shadow catcher is a setting of the relight node (relight/relighter.ts).
  */
 
+import { colourMatch } from './colour-match';
 import { type LookSpec } from './fields';
 import { fillHole } from './fill-hole';
 import { flickerRemoval } from './flicker-removal';
@@ -18,7 +19,8 @@ const LOOK_NODES: LookSpec[] = [
     flickerRemoval,
     fillHole,
     freezeBackground,
-    opacity
+    opacity,
+    colourMatch
 ];
 
 /** what the graph calls each of them, by op name */

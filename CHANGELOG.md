@@ -9,6 +9,24 @@ months finds out why before they change it.
 
 ---
 
+## Colour match
+
+Merged captures should read as one scene: this grades an object's colours
+- the selection's, or all of them - so their mean per channel, and with
+"mean and contrast" their spread, are the reference's. The reference is
+another object, or what is selected on it, wired into the node's
+`reference` port or picked in the node pane; with none it does nothing.
+The grade is a per-channel gain and offset on the palette, blended by
+`strength`.
+
+Both sides are measured opacity weighted on the colour each gaussian has
+as the palette leaves it (`gradedColour`): what colour nodes above
+already did counts, the objects' own grades - which apply after the
+palette, in the shader as in the export - do not. On the alley sample,
+the moving part matched to the still part goes from a mean of
+(0.391, 0.389, 0.396) to (0.479, 0.441, 0.418), the still part's to four
+places; unwired it goes back.
+
 ## Opacity
 
 Scales opacity, of what the select nodes above selected or of the whole
