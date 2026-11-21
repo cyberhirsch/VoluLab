@@ -1,0 +1,97 @@
+@use 'colors.scss' as *;
+
+// Keyframe controls in the node pane (ui/keyframe-ui.ts): a key button
+// beside a keyable field, and a curve that opens under its row.
+
+.kf-key,
+.kf-curve-toggle {
+    flex: 0 0 auto;
+    width: $h-row;
+    height: $h-row;
+    padding: 0;
+    border: $border-width solid transparent;
+    border-radius: 0;
+    outline: none;
+    background: none;
+    color: $ink-3;
+    font-family: $font-mono;
+    font-size: $font-size-sm;
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover {
+        border-color: $ink-4;
+        color: $ink-6;
+    }
+}
+
+// keyed, no key on this frame
+.kf-key.kf-keyed {
+    color: $ink-5;
+}
+
+// a key on this frame
+.kf-key.kf-here {
+    color: $ink-7;
+}
+
+.kf-curve-toggle.kf-open {
+    color: $ink-7;
+    border-color: $ink-4;
+}
+
+// a row's several fields: a key button under each
+.kf-keys {
+    display: flex;
+    gap: $gap-sm;
+    padding: 0 $pad-x 0 calc(64px + #{$pad-x} + #{$gap});
+    margin-top: -$pad-y;
+
+    & > .kf-key,
+    & > .kf-curve-toggle {
+        flex: 1 1 0;
+        width: auto;
+    }
+}
+
+.kf-grow {
+    flex: 1 1 auto;
+}
+
+.kf-editor {
+    --kf-grid: #{$ink-2};
+    --kf-now: #{$ink-4};
+    --kf-line: #{$ink-6};
+    --kf-dot: #{$ink-7};
+    --kf-pick: #{$ink-7};
+
+    display: flex;
+    flex-direction: column;
+    gap: $gap-sm;
+    margin: 0 $pad-x $pad-y;
+    padding: $pad-y $pad-x-sm;
+    border: $border-width solid $ink-3;
+    background-color: $ink-0;
+}
+
+.kf-title {
+    font-family: $font-mono;
+    font-size: $font-size-xs;
+    color: $ink-5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kf-canvas {
+    width: 100%;
+    height: 96px;
+    cursor: crosshair;
+    touch-action: none;
+}
+
+.kf-tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+}

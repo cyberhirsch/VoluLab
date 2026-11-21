@@ -19,6 +19,7 @@ import {
     UnhideAllOp
 } from './edit-ops';
 import { IndexRanges } from './index-ranges';
+import { packKeys, unpackKeys } from './keyframes';
 import { ScenePrimitive } from './scene-primitive';
 import { SelectQuery } from './select-query';
 import { Splat } from './splat';
@@ -228,6 +229,9 @@ const storeStateNodes = (history: EditOp[], cursor: number, splat: Splat, index:
             if (!settings) return null;
 
             const node: StoredNode = { ...settings, type: settings.type, splat: index, at };
+            // keyed parameters (keyframes.ts), whatever the node
+            const keys = packKeys(op);
+            if (keys) node.keys = keys;
             if (outer.bypassed) {
                 node.bypassed = true;
             } else {
@@ -300,6 +304,7 @@ const restoreStateNode = (stored: StoredNode, splat: Splat, primitives: ScenePri
     }
 
     if (stored.bypassed) (op as EditOp).bypassed = true;
+    unpackKeys(op, stored.keys);
     if (stored.ranges) {
         op.restore(IndexRanges.fromData(words.slice(stored.ranges[0], stored.ranges[0] + stored.ranges[1])));
     }

@@ -11,6 +11,7 @@ import { Events } from './events';
 import { IndexRanges } from './index-ranges';
 import type { GridPlane } from './infinite-grid';
 import { MappedReadFileSystem, loadGSplatData } from './io';
+import { unpackKeys } from './keyframes';
 import { registerLightViewEvents } from './light-view';
 import { registerPrimitiveViewEvents } from './primitive-view';
 import { defaultRelightSettings, normalizeRelightSettings, RelightSettings, registerRelighting } from './relight/relighter';
@@ -612,6 +613,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         };
         const op = new TransformNodeOp(splat, vec(stored?.position, 0), vec(stored?.rotation, 0), vec(stored?.scale, 1));
         op.bypassed = !!stored?.bypassed;
+        unpackKeys(op, (stored as any)?.keys);
         events.fire('edit.add', op);
         return op;
     });

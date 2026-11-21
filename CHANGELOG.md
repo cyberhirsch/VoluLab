@@ -9,6 +9,49 @@ months finds out why before they change it.
 
 ---
 
+## Keyframes on node parameters
+
+Any numeric parameter of a node can now be keyed over time: a key button
+beside the field (a diamond: dim when not keyed, outlined when keyed, filled
+on a key), and a curve under the row with linear, ease and step between keys.
+Transform (position, rotation, scale per axis), crop (centre, size) and both
+colour nodes (temperature, saturation, exposure, brightness, black and white
+point, transparency) are keyed this way.
+
+Keys are not a node. The PRD's first open question - a property of every
+parameter, or a node in the chain - is settled as a property: a keyed node is
+still one node, it bypasses, undoes and stores as before, and its keys go
+with it. They live on the op (`op.keys`, by parameter id), so undoing the node
+takes them and redoing brings them back.
+
+A node does not know it is keyed. What knows is the parameter's description
+(`ParamSpec` in `keyframes.ts`): how to read the value from the op and write
+it back. A node class opts in once with `keyable(Class, [...specs])`
+(`keyframe-params.ts` for the nodes that were there before), and its fields
+in the node pane name the parameter (`replayNumber(..., { op, param })`).
+The driver (`keyframe-driver.ts`) does the rest: as the timeline moves it
+writes each keyed value into its node and replays the node through the
+history (`edit.refresh`), so everything after it follows. Replaying a
+transform node with nothing after it that places the object would be all
+cost and no use, so a class can also say how to show new values in place
+(`keyableLive`): the transform node moves the object, the colour nodes write
+their palette slots or the object's grade. A crop has no such shortcut; it
+re-resolves, which is the price of a moving crop.
+
+A value typed into a keyed field becomes a key on the frame shown, without
+the field knowing: the driver remembers what it put into each node and takes
+anything else it finds there as an edit. The keys are timeline frames, and
+evaluated between frames too - the video export steps the time between
+frames, and a keyed move follows it smoothly.
+
+Projects store the keys with the node: transform nodes in `transforms`, the
+nodes that select and delete (crop among them) in `nodes`, as
+`keys: { id: [[frame, value, interp], ...] }`. A colour node with a selection
+is still baked into the object's grades in a project rather than stored as a
+node, so its keys are not kept; that is how colour nodes were stored before.
+
+---
+
 ## Time nodes and a split node
 
 The graph can now edit time. Five nodes for a 4D model - trim, retime,

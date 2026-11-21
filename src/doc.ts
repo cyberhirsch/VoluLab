@@ -8,6 +8,7 @@ import { Events } from './events';
 import { Grade } from './grade-palette';
 import { IndexRanges } from './index-ranges';
 import { BrowserFileSystem, BlobReadSource } from './io';
+import { packKeys } from './keyframes';
 import { recentFiles } from './recent-files';
 import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
@@ -612,6 +613,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     rotation: pack3(node.euler),
                     scale: pack3(node.newt.scale),
                     bypassed: !!node.bypassed,
+                    // keyed parameters (keyframes.ts); the values above are
+                    // the frame the project was saved on
+                    ...(packKeys(node) ? { keys: packKeys(node) } : {}),
                     ...placeOf(node)
                 }))),
 
