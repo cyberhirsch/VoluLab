@@ -9,6 +9,42 @@ months finds out why before they change it.
 
 ---
 
+## Still / moving split, and the cleanup and look nodes' frame
+
+The first of the PRD's "cleanup and quality" and "look and grading" nodes.
+A still / moving split is a split node (`SplitOp`) whose rows are picked
+by motion instead of by a selection: `SplitOp.pickRows` is the one hook
+it needed, and the editor's split builder is handed out as
+`graph.buildSplit`, so the part that leaves is built exactly as a split
+node's is - its rows with their motion and hierarchy, a sort worker of its
+own, the time nodes its source had.
+
+The rule is the one the compact GSV export moves gaussians to its static
+page by (`tgh/gsv.ts`, `standsStill`): in the global set, drifting less
+than 0.001 of its thinnest axis over the sequence, and never fading.
+`look/measure.ts` works it out from what the object has - velocity,
+temporal centre and falloff from `Splat.motion`, the log scales from the
+data, the hierarchy from `motion.layout()` - so it holds for a part split
+off a 4D model as well, which has no `TghModel` of its own. The threshold
+scales the drift; with "fading is moving" off a gaussian that fades but
+does not move counts as still. Most of what moves in the alley sample is
+in the hierarchy's segments, so a looser drift changes little
+(558,059 -> 557,296 moving at drift 1).
+
+What the later nodes share comes with it. Each kind is a file in
+`src/look/` and a `LookSpec` in `look/nodes.ts` (menu label, how it is
+made, how a project brings it back). A node lists its settings as fields
+(`look/fields.ts`) and the node pane draws them with the same replaying
+sliders, numbers and choices the other nodes use, so no node adds a face
+of its own. A project keeps the kinds marked `stored` in a `looks` list
+(`doc-looks.ts`); the others are kept as what they did.
+
+Measured on the alley sample (1,866,310 gaussians, 100 frames, headless
+Chrome on WebGPU): 558,059 move; the two parts drawn together match the
+whole at 38.6 and 40.0 dB at frames 10 and 60 (the two are sorted apart,
+as with any split); the split takes 4.7 s. Bypass and undo rejoin them.
+A 3D object is all still and makes no new object.
+
 ## Time nodes and a split node
 
 The graph can now edit time. Five nodes for a 4D model - trim, retime,

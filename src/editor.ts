@@ -12,6 +12,7 @@ import { IndexRanges } from './index-ranges';
 import type { GridPlane } from './infinite-grid';
 import { MappedReadFileSystem, loadGSplatData } from './io';
 import { registerLightViewEvents } from './light-view';
+import { registerCleanupLook } from './look/register';
 import { registerPrimitiveViewEvents } from './primitive-view';
 import { defaultRelightSettings, normalizeRelightSettings, RelightSettings, registerRelighting } from './relight/relighter';
 import { VolumeSource, emittersFromGaussians, emittersFromPrimitive, emittersFromSelection, splatWithSelection } from './relight/volume-light';
@@ -1290,6 +1291,9 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         addTarget(target).forEach(splat => events.invoke('graph.split', splat));
     });
 
+    // for the nodes that split an object by rows of their own (look/register.ts)
+    events.function('graph.buildSplit', () => buildSplit);
+
     /**
      * Import a parsed voxel model. Unlike splats, whose import nodes the
      * graph synthesises from the scene, voxels enter the graph through
@@ -1746,6 +1750,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     registerLightViewEvents(events, scene);
     registerPrimitiveViewEvents(events, scene);
     registerRelighting(events, scene);
+    registerCleanupLook(events, scene);
 
     /**
      * Resample an object onto a grid.

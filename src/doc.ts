@@ -1,6 +1,7 @@
 import { ZipFileSystem, ZipReadFileSystem } from '@playcanvas/splat-transform';
 import { Vec3 } from 'playcanvas';
 
+import { storeLookNodes } from './doc-looks';
 import { restoreStateNode, storeStateNodes } from './doc-nodes';
 import { DebugViewOp, EditOp, LightOp, PrimitiveOp, RelightOp, TransformNodeOp } from './edit-ops';
 import { ElementType } from './element';
@@ -388,6 +389,14 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 }
             }
 
+            // the cleanup and look nodes kept as nodes (doc-looks.ts)
+            if (Array.isArray(document.looks)) {
+                for (const stored of document.looks) {
+                    const splat = loaded[stored?.splat];
+                    if (splat) later(stored, () => events.invoke('look.restoreNode', stored, splat, (i: number) => loaded[i] ?? null));
+                }
+            }
+
             // the nodes that select, hide and delete: each with its settings
             // and the gaussians it applied to, which are in the object's
             // nodes file (see doc-nodes.ts)
@@ -676,6 +685,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     const i = o instanceof DebugViewOp && o.bypassed ? splats.indexOf(o.splat) : -1;
                     return i < 0 ? [] : [{ splat: i, channel: (o as DebugViewOp).view.channel, bypassed: true, ...placeOf(o) }];
                 })),
+
+                // the cleanup and look nodes that are kept as nodes (doc-looks.ts)
+                looks: storeLookNodes(allOps, cursor, splats, placeOf),
 
                 // the session around the scene, so a project reopens in the
                 // workspace it was authored in
