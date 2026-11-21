@@ -4,9 +4,11 @@ import { AnimTrackEditOp, DatasetOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp,
 import { Events } from '../events';
 import { SceneLight } from '../scene-light';
 import { ScenePrimitive } from '../scene-primitive';
+import { SelectionNodeOp } from '../select-nodes';
 import { describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
 import { MenuEntry, contributeMenuItems, showContextMenu } from './context-menu';
+import { SELECTION_NODE_LABELS, selectionNodeAddItems, selectionNodeItems } from './select-nodes-face';
 
 
 /**
@@ -106,7 +108,8 @@ const OP_LABELS: Record<string, string> = {
     decimate: 'decimate',
     setShBands: 'sh bands',
     debugView: 'debug view',
-    output: 'output'
+    output: 'output',
+    ...SELECTION_NODE_LABELS
 };
 
 // A bundled edit is named by the member that does the work, not by the fact
@@ -731,6 +734,7 @@ class GraphPanel extends Container {
             // a selection shows what it selects by, not merely that it selected
             const select = op instanceof SelectOp ? op : null;
             const steps = select?.steps ?? [];
+            const rule = op instanceof SelectionNodeOp;
             add(key, {
                 index: i,
                 kind: select ? 'select' : opLabel(op),
@@ -739,7 +743,7 @@ class GraphPanel extends Container {
                 name: select ? describeSelect(select) : ((op as any).sourceLabel ?? ''),
                 applied: i < cursor,
                 splat,
-                select: !!select,
+                select: !!select || rule,
                 terminal: op.name === 'output',
                 bypassed: !!op.bypassed,
                 // frozen only when nothing in it can be re-run
@@ -1195,6 +1199,7 @@ class GraphPanel extends Container {
                         label: 'debug view',
                         action: () => this.events.fire('graph.addDebugViewNode', splat)
                     },
+                    ...selectionNodeItems(this.events, splat),
                     {
                         label: 'voxelise',
                         action: () => this.events.invoke('graph.voxelise', splat)
@@ -1414,6 +1419,7 @@ class GraphPanel extends Container {
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addSelectNode')
             },
+            ...selectionNodeAddItems(this.events, splat),
             {
                 label: 'add colour node',
                 disabled: !splat,

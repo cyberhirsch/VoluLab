@@ -9,6 +9,32 @@ months finds out why before they change it.
 
 ---
 
+## Select nodes that select by a rule
+
+Select nodes that pick gaussians by a rule instead of a gesture, in both
+add menus of the graph. They are select nodes in every way the rest of the
+editor knows (`select-nodes.ts`): each is a StateOp that writes only the
+selected bit and states what the selection is afterwards, applied as a
+toggle of the difference like the select node. So delete, split, colour
+and the other nodes after one act on what it leaves selected, and undo,
+bypass and replay work as for a select node. Each has a mode for how what
+it catches combines with the selection coming in (set, add, remove, keep)
+and a name, and its graph wire offers a selection like a select node's.
+
+Every numeric setting is a plain number in `params`, read through
+`value(key, frame)`; the keyframe work hooks `SelectionNodeOp.keyed` to
+key them. A project keeps each node as its settings beside the set it
+applied to, like the other state nodes (`select-nodes-store.ts`, hooked
+into `doc-nodes.ts`).
+
+- **select by motion**: by speed (units per frame) or by distance travelled
+  over a range of frames, from the velocity the model plays with, the one
+  the debug view's speed channel shows. A gaussian not drawn in the range
+  is not caught. The node pane draws a histogram of the measure (log
+  scale); a drag across it sets the range. On a 3D object every speed is 0.
+
+---
+
 ## Time nodes and a split node
 
 The graph can now edit time. Five nodes for a 4D model - trim, retime,

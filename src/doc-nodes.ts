@@ -20,6 +20,7 @@ import {
 } from './edit-ops';
 import { IndexRanges } from './index-ranges';
 import { ScenePrimitive } from './scene-primitive';
+import { noteRestored, packSelectionNode, restoreSelectionNode } from './select-nodes-store';
 import { SelectQuery } from './select-query';
 import { Splat } from './splat';
 
@@ -167,7 +168,9 @@ const plain: Record<string, new (splat: Splat) => StateOp> = {
 };
 
 /** A node's settings, or null for a kind of node that is not known here. */
-const packSettings = (op: StateOp, words: Words, primitives: ScenePrimitive[]): Record<string, any> | null => {
+const packSettings = (op: StateOp, words: Words, primitives: ScenePrimitive[], history: EditOp[] = []): Record<string, any> | null => {
+    const rule = packSelectionNode(op, history);
+    if (rule) return rule;
     if (op instanceof SelectOp) {
         const primitive = op.mesh ? primitives.indexOf(op.mesh.source) : -1;
         return {
@@ -224,7 +227,7 @@ const storeStateNodes = (history: EditOp[], cursor: number, splat: Splat, index:
         for (const op of parts) {
             if (!(op instanceof StateOp) || op.splat !== splat) continue;
 
-            const settings = packSettings(op, words, primitives);
+            const settings = packSettings(op, words, primitives, history);
             if (!settings) return null;
 
             const node: StoredNode = { ...settings, type: settings.type, splat: index, at };
@@ -293,11 +296,17 @@ const restoreStateNode = (stored: StoredNode, splat: Splat, primitives: ScenePri
             op = new CleanupOp(splat, stored.neighbours ?? 16, stored.deviations ?? 1.5);
             break;
         default: {
+            const rule = restoreSelectionNode(stored, splat);
+            if (rule) {
+                op = rule;
+                break;
+            }
             const Plain = plain[stored.type];
             if (!Plain) return null;
             op = new Plain(splat);
         }
     }
+    noteRestored(splat, stored.at, op);
 
     if (stored.bypassed) (op as EditOp).bypassed = true;
     if (stored.ranges) {
