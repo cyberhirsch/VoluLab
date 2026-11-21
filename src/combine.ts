@@ -1,6 +1,7 @@
 /**
- * The editor's side of the combining nodes: making merge and switch nodes
- * and keeping their objects up to date.
+ * The editor's side of the combining nodes: making merge and switch nodes,
+ * keeping their objects up to date, and working out what the layer nodes
+ * come to.
  *
  * A merged object is made of its inputs as their lanes leave them - which
  * is what the graph draws: the wire into a merge comes from the end of the
@@ -8,16 +9,19 @@
  * after it, so leaves the merged object stale, and once the history has
  * settled it is made again, in place, and the nodes standing on it are
  * applied again to the new data (edit.reapplyAll). Each input's baked part
- * is kept, so a change to one input re-bakes that input alone.
+ * is kept, so a change to one input or to a layer re-bakes that input
+ * alone.
  */
 
-import { CombineOp, MergeOp, SwitchOp, type CombineContext, type MergeSettings, type SwitchSettings } from './combine-ops';
+import { CombineOp, LayerOp, MergeOp, SwitchOp, defaultLayerSettings, type CombineContext, type LayerSettings, type MergeSettings, type SwitchSettings } from './combine-ops';
 import type { EditOp } from './edit-ops';
 import { ElementType } from './element';
 import { Events } from './events';
 import { mergedRotation, type MergeBuilt } from './merge-build';
 import { Scene } from './scene';
 import { Splat } from './splat';
+
+type LayerState = { hidden: boolean, opacity: number, locked: boolean };
 
 const registerCombineEvents = (events: Events, scene: Scene) => {
     const history = () => (events.invoke('edit.history') ?? { ops: [], cursor: 0 }) as { ops: EditOp[], cursor: number };
@@ -29,13 +33,137 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
     };
     const allSplats = () => scene.getElementsByType(ElementType.splat) as Splat[];
 
+    // ---- layers ----
+
+    /**
+     * What the layer nodes come to, per object. An object's own layers
+     * compose: hidden if any is, the opacities multiplied, locked if any
+     * is. Solo on any layer hides every object not in a soloed branch: an
+     * object is in one when it is soloed, when what it feeds into is (a
+     * merge soloed shows all of its inputs), or when it has a soloed input
+     * (a merge with a soloed input shows - with only that input in it).
+     */
+    const layerStates = () => {
+        const { ops, cursor } = history();
+        // by whether each is applied, not by the cursor: a layer being redone
+        // runs before the cursor moves past it
+        const layers = ops.filter(o => o instanceof LayerOp && !o.bypassed && o.applied) as LayerOp[];
+        const own = new Map<Splat, LayerState & { solo: boolean }>();
+        layers.forEach((layer) => {
+            const s = layer.settings;
+            const was = own.get(layer.splat) ?? { hidden: false, opacity: 1, locked: false, solo: false };
+            own.set(layer.splat, {
+                hidden: was.hidden || !s.visible,
+                opacity: was.opacity * Math.max(0, Math.min(1, s.opacity)),
+                locked: was.locked || s.locked,
+                solo: was.solo || s.solo
+            });
+        });
+        const anySolo = [...own.values()].some(l => l.solo);
+
+        // what feeds what, through the nodes that make objects of others
+        const inputsOf = new Map<Splat, Splat[]>();
+        const consumersOf = new Map<Splat, Splat[]>();
+        ops.slice(0, cursor).forEach((op) => {
+            const o = op as any;
+            if (op.bypassed || !(o.output instanceof Splat) || !Array.isArray(o.inputs)) return;
+            (o.inputs as Splat[]).forEach((input) => {
+                if (!(input instanceof Splat)) return;
+                inputsOf.set(o.output, [...(inputsOf.get(o.output) ?? []), input]);
+                consumersOf.set(input, [...(consumersOf.get(input) ?? []), o.output]);
+            });
+        });
+        const within = (s: Splat, seen = new Set<Splat>()): boolean => {
+            if (seen.has(s)) return false;
+            seen.add(s);
+            return !!own.get(s)?.solo || (consumersOf.get(s) ?? []).some(c => within(c, seen));
+        };
+        const holds = (s: Splat, seen = new Set<Splat>()): boolean => {
+            if (seen.has(s)) return false;
+            seen.add(s);
+            return within(s) || (inputsOf.get(s) ?? []).some(i => holds(i, seen));
+        };
+
+        return (s: Splat): LayerState => {
+            const mine = own.get(s);
+            return {
+                hidden: !!mine?.hidden || (anySolo && !holds(s)),
+                opacity: mine?.opacity ?? 1,
+                locked: !!mine?.locked
+            };
+        };
+    };
+
+    let layersDirty = false;
+    const applyLayers = () => {
+        const stateOf = layerStates();
+        allSplats().forEach((s) => {
+            const state = stateOf(s);
+            s.layerHidden = state.hidden;
+            s.layerOpacity = state.opacity;
+            s.layerLocked = state.locked;
+        });
+        scene.forceRender = true;
+        layersDirty = true;
+        events.fire('layers.changed');
+    };
+
+    // an object added later (a merge's output) takes the layers too
+    events.on('scene.elementAdded', (element: any) => {
+        if (element?.type === ElementType.splat) applyLayers();
+    });
+
+    events.function('layers.stateOf', (s: Splat) => layerStates()(s));
+
+    // the layer nodes there are, in the order of the history, with where they stand
+    events.function('layers.list', () => {
+        const { ops, cursor } = history();
+        return ops.map((op, index) => ({ op, index })).filter(({ op, index }) => op instanceof LayerOp && index < cursor);
+    });
+
+    // a change made from the layer list: the node's settings, replayed
+    events.function('layers.set', (index: number, change: Partial<LayerSettings>) => {
+        const op = history().ops[index];
+        if (!(op instanceof LayerOp)) return null;
+        return events.invoke('edit.refresh', index, () => Object.assign(op.settings, change));
+    });
+
+    const newLayer = (splat: Splat, settings: LayerSettings) => new LayerOp(splat, settings, applyLayers);
+
+    events.on('graph.addLayerNode', (target?: Splat) => {
+        const splats = target ? [target] : [events.invoke('selection') as Splat].filter(Boolean);
+        splats.forEach((splat) => {
+            const count = history().ops.filter(o => o instanceof LayerOp).length;
+            appendAndOpen(newLayer(splat, defaultLayerSettings(splat.name ? `${splat.name}` : `layer ${count + 1}`)));
+        });
+    });
+
+    // a layer node for an object with these settings: a project's come back through here
+    events.function('layer.addNode', (splat: Splat, stored?: Partial<LayerSettings> & { bypassed?: boolean }) => {
+        if (!splat) return null;
+        const settings = { ...defaultLayerSettings(splat.name ?? 'layer'), ...(stored ?? {}) };
+        const op = newLayer(splat, {
+            name: String(settings.name ?? 'layer'),
+            visible: settings.visible !== false,
+            solo: !!settings.solo,
+            locked: !!settings.locked,
+            opacity: Number.isFinite(settings.opacity) ? Math.max(0, Math.min(1, settings.opacity)) : 1
+        });
+        op.bypassed = !!stored?.bypassed;
+        events.fire('edit.add', op);
+        return op;
+    });
+
     // ---- merge and switch ----
 
     const context: CombineContext = {
         rate: () => events.invoke('timeline.frameRate') ?? 30,
         timelineFrames: () => events.invoke('timeline.frames') ?? 1,
         frame: () => events.invoke('timeline.frame') ?? 0,
-        layer: () => ({ included: true, opacity: 1 }),
+        layer: (s: Splat) => {
+            const state = layerStates()(s);
+            return { included: !state.hidden, opacity: state.opacity };
+        },
         asset: (built: MergeBuilt, name: string) => scene.assetLoader.createGSplatAsset(built.data, name)
     };
 
@@ -119,7 +247,7 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
     // every other object that is shown
     const shownWith = (target?: Splat) => {
         const first = target ?? events.invoke('selection') as Splat;
-        const shown = allSplats().filter(s => s.visible);
+        const shown = allSplats().filter(s => s.visible && !s.layerHidden);
         return first ? [first, ...shown.filter(s => s !== first)] : shown;
     };
 
@@ -190,6 +318,7 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
                 console.error(error);
             } finally {
                 checking = false;
+                layersDirty = false;
                 if (again) {
                     again = false;
                     setTimeout(check, 0);
@@ -201,7 +330,9 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
     let pending: ReturnType<typeof setTimeout> | null = null;
     events.on('edit.changed', () => {
         const { ops, cursor } = history();
-        if (!ops.slice(0, cursor).some(o => o instanceof CombineOp)) return;
+        // what feeds what may have changed with the history: solo follows it
+        if (ops.some(o => o instanceof LayerOp)) applyLayers();
+        if (!ops.slice(0, cursor).some(o => o instanceof CombineOp) && !layersDirty) return;
         if (pending) clearTimeout(pending);
         pending = setTimeout(() => {
             pending = null;

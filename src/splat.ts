@@ -165,6 +165,13 @@ class Splat extends Element {
     // a time node shows nothing of the object at that frame
     timeHidden = false;
 
+    // What the layer nodes come to for this object (combine.ts): hidden by
+    // a layer or by another's solo, its opacity multiplied, and locked
+    // against the viewport's selection tools. `visible` stays the user's.
+    layerHidden = false;
+    layerOpacity = 1;
+    layerLocked = false;
+
     /**
      * The debug view nodes applied to this object, in the order of its
      * chain. The last one decides what is drawn; the nodes add and remove
@@ -999,7 +1006,7 @@ class Splat extends Element {
 
         material.setParameter('clrMatrix', grade.m);
         material.setParameter('clrOffset', [grade.t, grade.t, grade.t]);
-        material.setParameter('clrAlpha', grade.alpha);
+        material.setParameter('clrAlpha', grade.alpha * this.layerOpacity);
 
         material.setParameter('transformPalette', this.transformPalette.texture);
         material.setParameter('gradePalette', this.gradePalette.texture);
@@ -1045,7 +1052,7 @@ class Splat extends Element {
             }
         }
 
-        this.entity.enabled = this.visible && !this.timeHidden;
+        this.entity.enabled = this.visible && !this.timeHidden && !this.layerHidden;
     }
 
     focalPoint() {

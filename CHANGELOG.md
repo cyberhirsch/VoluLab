@@ -9,6 +9,39 @@ months finds out why before they change it.
 
 ---
 
+## Layer nodes and the layer list
+
+A layer node names the branch up to it. It has a visibility, a solo, a
+lock and an opacity multiplier, and it shows as one row of the layer list
+in the graph pane's corner. It changes no data. `combine.ts` works out
+what all the layers come to and sets each object's `layerHidden`,
+`layerOpacity` and `layerLocked`. Hidden objects are not drawn. The
+opacity scales the grade's alpha. A locked object is left out of
+`selectedSplats`, so the viewport's selection tools do not touch it.
+
+Composition. An object's own layers combine: it is hidden if any of them
+is, the opacities multiply, and it is locked if any of them is. Solo is
+worked out through the merges, because that is what makes it useful in a
+composite. An object is in a soloed branch when it is soloed itself
+(`within`), when a merge it feeds into is soloed (`within` again, through
+the consumers), or when it is a merge with a soloed input (`holds`). That
+last merge stays visible but holds only the soloed input. Anything else is
+hidden while any solo is on.
+
+A merge or switch takes the layers of its inputs in. A hidden input adds
+no rows, and an input's opacity is baked into its part. So a layer change
+upstream makes the merge stale and rebuilds it. On large inputs that
+takes seconds, the cost of keeping the merged object one sorted set.
+
+Trap: a layer's state is read by whether the layer is applied, not by the
+history cursor. During a redo the op runs before the cursor moves past
+it, so counting layers below the cursor left out the layer being
+reapplied. A refresh of a layer on a merged object (lock, hide) then
+lost its own change. The flags are also set again on every history
+change, because solo depends on what feeds what.
+
+---
+
 ## A switch node: one input at a time, or cut between them
 
 The switch node shows one of its inputs. With no cuts it is the input

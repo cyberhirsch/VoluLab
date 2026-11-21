@@ -1,12 +1,12 @@
 /**
- * The node pane's faces for the combining nodes: merge and
- * switch. In a file of their own so the node pane only dispatches to
+ * The node pane's faces for the combining nodes: merge, switch and
+ * layer. In a file of their own so the node pane only dispatches to
  * them; they use its rows and classes (node-panel.scss).
  */
 
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
-import { CombineOp, MergeOp, SwitchOp, type SwitchCut } from '../combine-ops';
+import { CombineOp, LayerOp, MergeOp, SwitchOp, type SwitchCut } from '../combine-ops';
 import type { EditOp } from '../edit-ops';
 import { Events } from '../events';
 
@@ -187,6 +187,26 @@ const buildSwitch = (face: Face, op: SwitchOp) => {
     face.note(i18n.t('node.switch.note'));
 };
 
+const buildLayer = (face: Face, op: LayerOp) => {
+    const s = op.settings;
+    face.text(i18n.t('node.layer.name'), s.name, (v) => {
+        s.name = v || s.name;
+    });
+    face.toggle(i18n.t('node.layer.visible'), s.visible, s.visible ? i18n.t('node.layer.shown') : i18n.t('node.layer.hidden'), () => {
+        s.visible = !s.visible;
+    });
+    face.toggle(i18n.t('node.layer.solo'), s.solo, s.solo ? i18n.t('node.layer.on') : i18n.t('node.layer.off'), () => {
+        s.solo = !s.solo;
+    });
+    face.toggle(i18n.t('node.layer.lock'), s.locked, s.locked ? i18n.t('node.layer.on') : i18n.t('node.layer.off'), () => {
+        s.locked = !s.locked;
+    });
+    face.number(i18n.t('node.layer.opacity'), s.opacity, 0.05, 1, (v) => {
+        s.opacity = Math.max(0, Math.min(1, v));
+    });
+    face.note(i18n.t('node.layer.note'));
+};
+
 /**
  * Build the face of a combining node into the node pane's body. False when
  * `op` is none of them.
@@ -195,6 +215,7 @@ const buildCombineFace = (op: EditOp, index: number, body: HTMLElement, events: 
     const face = new Face(body, events, index);
     if (op instanceof MergeOp) buildMerge(face, op);
     else if (op instanceof SwitchOp) buildSwitch(face, op);
+    else if (op instanceof LayerOp) buildLayer(face, op);
     else return false;
     return true;
 };

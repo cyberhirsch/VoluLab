@@ -9,9 +9,10 @@
  * entry with its name, placement and grade and no file; it opens as an
  * empty object, which the node fills once the history has settled.
  *
+ * A layer node is stored with its settings on the object it is on.
  */
 
-import { CombineOp, MergeOp, SwitchOp } from './combine-ops';
+import { CombineOp, LayerOp, MergeOp, SwitchOp } from './combine-ops';
 import type { EditOp } from './edit-ops';
 import { Events } from './events';
 import { mergedRotation } from './merge-build';
@@ -28,6 +29,7 @@ type Place = (op: EditOp | undefined) => { at?: number, pos?: number[] };
 const storeCombine = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: Place) => {
     const outputs = new Set<number>();
     const combine: any[] = [];
+    const layers: any[] = [];
 
     ops.slice(0, cursor).forEach((op) => {
         if (op instanceof CombineOp) {
@@ -44,10 +46,14 @@ const storeCombine = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: P
                 bypassed: !!op.bypassed,
                 ...placeOf(op)
             });
+        } else if (op instanceof LayerOp) {
+            const splat = splats.indexOf(op.splat);
+            if (splat < 0) return;
+            layers.push({ splat, settings: { ...op.settings }, bypassed: !!op.bypassed, ...placeOf(op) });
         }
     });
 
-    return { outputs, document: { combine } };
+    return { outputs, document: { combine, layers } };
 };
 
 /** The objects of a project that a merge or switch node makes: they have no file. */
@@ -74,6 +80,11 @@ const restoreCombine = (document: any, loaded: Splat[], later: Later, events: Ev
         const output = loaded[stored.output];
         if (!output || !inputs.length || inputs.some((s: Splat) => !s)) return;
         later(stored, () => events.invoke('combine.restoreNode', stored.kind, inputs, output, stored.settings, !!stored.bypassed));
+    });
+    (Array.isArray(document?.layers) ? document.layers : []).forEach((stored: any) => {
+        const splat = loaded[stored.splat];
+        if (!splat) return;
+        later(stored, () => events.invoke('layer.addNode', splat, { ...(stored.settings ?? {}), bypassed: !!stored.bypassed }));
     });
 };
 

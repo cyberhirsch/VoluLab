@@ -1,5 +1,5 @@
 /**
- * The nodes that combine objects: merge and switch.
+ * The nodes that combine objects: merge, switch and layer.
  *
  * Merge and switch make one object out of several (merge-build.ts). The
  * object is made before the node exists - the first build is the node's
@@ -9,6 +9,11 @@
  * the way a delete node follows its selection, and stays the same object
  * for the nodes after it to stand on. Undo and bypass take it out and
  * show the inputs again.
+ *
+ * A layer node names a branch and switches it: visibility, solo, lock and
+ * an opacity multiplier. It changes no data; what the layers come to is
+ * worked out over all of them at once (combine.ts), since solo on one
+ * hides the others.
  */
 
 import { Asset } from 'playcanvas';
@@ -277,12 +282,79 @@ class SwitchOp extends CombineOp {
     }
 }
 
+type LayerSettings = {
+    name: string;
+    visible: boolean;
+    solo: boolean;
+    locked: boolean;
+    /** multiplies the opacity of every gaussian of the branch */
+    opacity: number;
+};
+
+const defaultLayerSettings = (name = 'layer'): LayerSettings => ({ name, visible: true, solo: false, locked: false, opacity: 1 });
+
+/**
+ * Layer: the branch up to here, under a name, with a visibility, a solo,
+ * a lock and an opacity multiplier - one row of the layer list beside the
+ * graph. It changes no data: it says what it says, and combine.ts works
+ * out what all the layers come to and tells the objects (Splat.layer*).
+ * A merge downstream of a layer takes it in: a hidden layer's input
+ * contributes nothing, and the opacity scales its gaussians'.
+ */
+class LayerOp {
+    name = 'layer';
+    splat: Splat;
+    settings: LayerSettings;
+    bypassed?: boolean;
+
+    private onChange: () => void;
+    private on = false;
+
+    constructor(splat: Splat, settings: LayerSettings, onChange: () => void) {
+        this.splat = splat;
+        this.settings = settings;
+        this.onChange = onChange;
+    }
+
+    get applied() {
+        return this.on;
+    }
+
+    get sourceLabel() {
+        const { settings } = this;
+        const flags = [
+            !settings.visible ? 'hidden' : '',
+            settings.solo ? 'solo' : '',
+            settings.locked ? 'locked' : '',
+            settings.opacity !== 1 ? `${Math.round(settings.opacity * 100)}%` : ''
+        ].filter(Boolean);
+        return [settings.name, ...flags].join(' · ');
+    }
+
+    do() {
+        this.on = true;
+        this.onChange();
+    }
+
+    undo() {
+        this.on = false;
+        this.onChange();
+    }
+
+    destroy() {
+        this.splat = null;
+    }
+}
+
 export {
     CombineOp,
     MergeOp,
     SwitchOp,
+    LayerOp,
+    defaultLayerSettings,
     type CombineContext,
     type MergeSettings,
     type SwitchSettings,
-    type SwitchCut
+    type SwitchCut,
+    type LayerSettings
 };

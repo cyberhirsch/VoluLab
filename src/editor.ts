@@ -48,7 +48,8 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // get the list of selected splats (currently limited to just a single one)
     const selectedSplats = () => {
         const selected = events.invoke('selection') as Splat;
-        return selected?.visible ? [selected] : [];
+        // a locked layer keeps the viewport's tools off its object
+        return selected?.visible && !selected.layerLocked ? [selected] : [];
     };
 
     let lastExportCursor = 0;

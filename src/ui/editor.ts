@@ -12,6 +12,7 @@ import { ExportPopup } from './export-popup';
 import { GraphPanel } from './graph-panel';
 import { ImageSettingsDialog } from './image-settings-dialog';
 import { ImportFace } from './import-face';
+import { LayerList } from './layer-list';
 import { LightFace } from './light-face';
 import { i18n } from './localization';
 import { Menu } from './menu';
@@ -134,6 +135,8 @@ class EditorUI {
         const timelinePanel = new TimelinePanel(events, tooltips);
         const dataPanel = new DataPanel(events, tooltips);
         const graphPanel = new GraphPanel(events);
+        // the layer nodes' list, in the graph pane's corner
+        graphPanel.dom.appendChild(new LayerList(events).dom);
         const nodePanel = new NodePanel(events);
         // training is a node now: its controls are the train node's face,
         // mounted in the node pane the way the colour panel is. The dataset
