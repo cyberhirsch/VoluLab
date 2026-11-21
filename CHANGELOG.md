@@ -57,6 +57,17 @@ into `doc-nodes.ts`).
   average, worked out from the middle 96% of the centres per axis: from the
   bound, a few far floaters made the alley's cell 1.55 units and up to
   252000 gaussians a cell, against 0.24 units now.
+- **grow / shrink selection**: grows the selection coming in by the
+  gaussians within a distance of it, or shrinks it by those of it within
+  that distance of the rest, a number of times over. The smaller side is
+  walked and the larger put in a hashed grid of cells a distance wide, so a
+  step costs about the size of the smaller side; it runs on the main
+  thread. On a 4D model two gaussians are neighbours only when their
+  lifetimes meet, widened by a number of frames to reach across frames;
+  each is where it is at its temporal centre. The distance starts at twice
+  the object's typical spacing, taken from the middle 96% of its centres
+  (on the alley 0.24; from the bound it was 1.6, which grew a seed of 1842
+  gaussians to 692417).
 
 ---
 

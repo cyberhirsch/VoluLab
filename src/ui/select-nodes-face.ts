@@ -4,7 +4,7 @@ import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
 import { SelectMode } from '../edit-ops';
 import { Events } from '../events';
-import { Attribute, AttributeSelectOp, ColourSelectOp, ColourSpace, MotionMetric, MotionSelectOp, RegionSelectOp, RegionShape, modelFrames, SELECTION_NODE_KINDS, SELECTION_NODE_NAMES, SelectionNodeOp } from '../select-nodes';
+import { Attribute, AttributeSelectOp, ColourSelectOp, ColourSpace, GrowDirection, GrowSelectOp, MotionMetric, MotionSelectOp, RegionSelectOp, RegionShape, modelFrames, SELECTION_NODE_KINDS, SELECTION_NODE_NAMES, SelectionNodeOp } from '../select-nodes';
 import { Splat } from '../splat';
 
 /**
@@ -255,7 +255,7 @@ const common = (face: Face, op: SelectionNodeOp) => {
     face.text(t('node.selnode.name'), op.label, (v) => {
         op.label = v;
     });
-    if (op.kind !== 'combine') {
+    if (op.kind !== 'combine' && op.kind !== 'grow') {
         face.choice(t('node.selnode.mode'), MODES.map(([m, label]) => [m, t(`node.selnode.mode-${label}`)] as [SelectMode, string]), op.mode, (m) => {
             op.setMode(m);
         });
@@ -461,6 +461,20 @@ const buildAttribute = (face: Face, op: AttributeSelectOp) => {
     face.note(t(`node.selattr.note-${op.attribute}`));
 };
 
+const buildGrow = (face: Face, op: GrowSelectOp) => {
+    face.choice<GrowDirection>(t('node.selgrow.direction'), [
+        ['grow', t('node.selgrow.grow')],
+        ['shrink', t('node.selgrow.shrink')]
+    ], op.direction, d => op.setDirection(d));
+    face.number(t('node.selgrow.radius'), op.params.radius, 0.05, 0.001, v => op.setParam('radius', Math.max(0, v)));
+    face.number(t('node.selgrow.steps'), op.params.steps, 1, 1, v => op.setParam('steps', Math.max(1, Math.round(v))));
+    if (op.splat.motion) {
+        face.number(t('node.selgrow.frames'), op.params.frames, 0, 1, v => op.setParam('frames', Math.max(0, Math.round(v))));
+    }
+    outcome(face, op);
+    face.note(t(op.splat.motion ? 'node.selgrow.note-4d' : 'node.selgrow.note'));
+};
+
 /**
  * Fill the node pane for one of these nodes. False for an op that is not
  * one, so the pane carries on with its own kinds.
@@ -473,6 +487,7 @@ const buildSelectionNodeFace = (body: HTMLElement, events: Events, op: unknown, 
     if (op instanceof ColourSelectOp) buildColour(face, op);
     if (op instanceof RegionSelectOp) buildRegion(face, op);
     if (op instanceof AttributeSelectOp) buildAttribute(face, op);
+    if (op instanceof GrowSelectOp) buildGrow(face, op);
     return true;
 };
 

@@ -62,6 +62,26 @@ const worldCenters = (splat: Splat): Float32Array => {
     return out;
 };
 
+/**
+ * How far apart an object's gaussians typically are, in world units: the
+ * side of the cube each would have to itself in the middle 96% of the
+ * centres along each axis. Not from the bound, which a few far floaters
+ * make many times too large (the alley's spacing is 0.8 by the bound, 0.12 so).
+ */
+const typicalSpacing = (splat: Splat) => {
+    const p = worldCenters(splat);
+    const n = splat.splatData.numSplats;
+    const step = Math.max(1, Math.floor(n / 100000));
+    let volume = 1;
+    for (let k = 0; k < 3; ++k) {
+        const v: number[] = [];
+        for (let i = 0; i < n; i += step) v.push(p[i * 3 + k]);
+        v.sort((a, b) => a - b);
+        volume *= Math.max(1e-6, v[Math.floor(v.length * 0.98)] - v[Math.floor(v.length * 0.02)]);
+    }
+    return Math.cbrt(volume * 0.96 / Math.max(1, n));
+};
+
 /** How many frames a 4D model's own sequence has, at least 1. */
 const modelFrames = (splat: Splat) => Math.max(1, splat.motionFrames || 1);
 
@@ -607,25 +627,9 @@ class AttributeSelectOp extends SelectionNodeOp {
         this.invalidate();
     }
 
-    /**
-     * The grid cell the density is counted in: the setting, or about 8
-     * gaussians a cell. The volume is that of the middle 96% of the
-     * centres along each axis, not the bound, which a few far floaters
-     * make many times too large.
-     */
+    /** the grid cell the density is counted in: the setting, or about 8 gaussians a cell */
     cellSize(splat: Splat) {
-        if (this.params.cell > 0) return this.params.cell;
-        const p = worldCenters(splat);
-        const n = splat.splatData.numSplats;
-        const step = Math.max(1, Math.floor(n / 100000));
-        let volume = 1;
-        for (let k = 0; k < 3; ++k) {
-            const v: number[] = [];
-            for (let i = 0; i < n; i += step) v.push(p[i * 3 + k]);
-            v.sort((a, b) => a - b);
-            volume *= Math.max(1e-6, v[Math.floor(v.length * 0.98)] - v[Math.floor(v.length * 0.02)]);
-        }
-        return Math.cbrt(volume * 0.96 / Math.max(1, n) * 8);
+        return this.params.cell > 0 ? this.params.cell : typicalSpacing(splat) * 2;
     }
 
     /** the measure per gaussian: what the node selects on, and the histogram's data */
@@ -702,10 +706,197 @@ class AttributeSelectOp extends SelectionNodeOp {
 }
 
 // ---------------------------------------------------------------------------
+// grow / shrink selection
+
+type GrowDirection = 'grow' | 'shrink';
+
+/**
+ * For each gaussian of `from`, mark the gaussians of `to` within `radius`
+ * of it (and near it in time, for a 4D model). The pair is symmetric, so
+ * the smaller set is walked and the larger put in a hashed grid of cells a
+ * radius wide: every neighbour is then in one of 27 cells.
+ */
+const markNear = (
+    centers: Float32Array,
+    from: Uint8Array,
+    to: Uint8Array,
+    radius: number,
+    near: (i: number, j: number) => boolean
+): Uint8Array => {
+    const n = from.length;
+    const marked = new Uint8Array(n);
+    let nf = 0, nt = 0;
+    for (let i = 0; i < n; ++i) {
+        nf += from[i];
+        nt += to[i];
+    }
+    if (!nf || !nt || !(radius > 0)) return marked;
+
+    // walk the smaller set; the grid holds the larger
+    const walkFrom = nf <= nt;
+    const walk = walkFrom ? from : to;
+    const grid = walkFrom ? to : from;
+    const m = walkFrom ? nf : nt;
+    const gridCount = walkFrom ? nt : nf;
+
+    let size = 1;
+    while (size < gridCount * 2) size <<= 1;
+    const mask = size - 1;
+    const head = new Int32Array(size).fill(-1);
+    const next = new Int32Array(n).fill(-1);
+    const cellOf = (v: number) => Math.floor(v / radius);
+    const hash = (x: number, y: number, z: number) => (Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791)) & mask;
+
+    for (let i = 0; i < n; ++i) {
+        if (!grid[i]) continue;
+        const h = hash(cellOf(centers[i * 3]), cellOf(centers[i * 3 + 1]), cellOf(centers[i * 3 + 2]));
+        next[i] = head[h];
+        head[h] = i;
+    }
+
+    const r2 = radius * radius;
+
+    // the grid's gaussians near gaussian i, each handed to `visit` until it
+    // says it has seen enough
+    const around = (i: number, visit: (j: number) => boolean) => {
+        const x = centers[i * 3], y = centers[i * 3 + 1], z = centers[i * 3 + 2];
+        const cx = cellOf(x), cy = cellOf(y), cz = cellOf(z);
+        for (let dx = -1; dx <= 1; ++dx) {
+            for (let dy = -1; dy <= 1; ++dy) {
+                for (let dz = -1; dz <= 1; ++dz) {
+                    for (let j = head[hash(cx + dx, cy + dy, cz + dz)]; j !== -1; j = next[j]) {
+                        const ex = centers[j * 3] - x, ey = centers[j * 3 + 1] - y, ez = centers[j * 3 + 2] - z;
+                        if (ex * ex + ey * ey + ez * ez <= r2 && near(i, j) && visit(j)) return;
+                    }
+                }
+            }
+        }
+    };
+
+    let walked = 0;
+    for (let i = 0; i < n && walked < m; ++i) {
+        if (!walk[i]) continue;
+        walked++;
+        if (walkFrom) {
+            // the members of `to` near this one of `from`
+            around(i, (j) => {
+                marked[j] = 1;
+                return false;
+            });
+        } else {
+            // whether this member of `to` is near any of `from`
+            around(i, () => {
+                marked[i] = 1;
+                return true;
+            });
+        }
+    }
+    return marked;
+};
+
+/**
+ * Grows the selection coming in by the gaussians within a distance of it,
+ * or shrinks it by those of it within that distance of the rest, a number
+ * of times over. On a 4D model two gaussians are neighbours only when
+ * their lifetimes meet, widened by a number of frames to reach across
+ * frames; each is where it is at its own temporal centre.
+ */
+class GrowSelectOp extends SelectionNodeOp {
+    name = 'growSelection';
+    readonly kind = 'grow';
+
+    direction: GrowDirection;
+
+    constructor(splat: Splat, direction: GrowDirection = 'grow', params: Record<string, number> = {}) {
+        super(splat, { radius: 0.05, steps: 1, frames: 0, ...params });
+        this.direction = direction;
+    }
+
+    /** a node whose distance suits the object: twice its typical spacing */
+    static forObject(splat: Splat) {
+        return new GrowSelectOp(splat, 'grow', { radius: +(typicalSpacing(splat) * 2).toPrecision(2) });
+    }
+
+    setDirection(direction: GrowDirection) {
+        this.direction = direction;
+        this.invalidate();
+    }
+
+    protected hits(splat: Splat) {
+        const n = splat.splatData.numSplats;
+        const state = splat.splatData.getProp('state') as Uint8Array;
+        const centers = worldCenters(splat);
+
+        let near = (_i: number, _j: number) => true;
+        if (splat.motion) {
+            const tc = new Float32Array(n);
+            const reach = new Float32Array(n);
+            for (let i = 0; i < n; ++i) {
+                const l = lifetime(splat, i);
+                tc[i] = l.tc;
+                reach[i] = Math.min(l.reach, 1e6);
+            }
+            const widen = Math.max(0, this.value('frames')) / modelFrames(splat);
+            near = (i, j) => Math.abs(tc[i] - tc[j]) <= reach[i] + reach[j] + widen;
+        }
+
+        const selected = new Uint8Array(n);
+        const rest = new Uint8Array(n);
+        for (let i = 0; i < n; ++i) {
+            if (!reachable(state, i)) continue;
+            if (state[i] & State.selected) selected[i] = 1;
+            else rest[i] = 1;
+        }
+
+        const radius = this.value('radius');
+        const steps = Math.max(1, Math.min(20, Math.round(this.value('steps'))));
+        for (let s = 0; s < steps; ++s) {
+            if (this.direction === 'grow') {
+                const added = markNear(centers, selected, rest, radius, near);
+                let any = 0;
+                for (let i = 0; i < n; ++i) {
+                    if (added[i]) {
+                        selected[i] = 1;
+                        rest[i] = 0;
+                        any++;
+                    }
+                }
+                if (!any) break;
+            } else {
+                const dropped = markNear(centers, rest, selected, radius, near);
+                let any = 0;
+                for (let i = 0; i < n; ++i) {
+                    if (dropped[i]) {
+                        selected[i] = 0;
+                        rest[i] = 1;
+                        any++;
+                    }
+                }
+                if (!any) break;
+            }
+        }
+        return selected;
+    }
+
+    describe() {
+        const steps = Math.round(this.params.steps);
+        return `${this.direction} ${+this.params.radius.toPrecision(3)}${steps > 1 ? ` ×${steps}` : ''}`;
+    }
+
+    protected extra() {
+        return { direction: this.direction };
+    }
+
+    restoreExtra(stored: Record<string, any>) {
+        this.direction = stored.direction === 'shrink' ? 'shrink' : 'grow';
+    }
+}
+
+// ---------------------------------------------------------------------------
 // the nodes, by kind
 
 // the kinds built, in menu order
-const SELECTION_NODE_KINDS: SelectionNodeKind[] = ['motion', 'colour', 'region', 'attribute'];
+const SELECTION_NODE_KINDS: SelectionNodeKind[] = ['motion', 'colour', 'region', 'attribute', 'grow'];
 
 /** the op name each kind goes by, for the graph's labels */
 const SELECTION_NODE_NAMES: Record<SelectionNodeKind, string> = {
@@ -729,6 +920,7 @@ const makeSelectionNode = (kind: string, splat: Splat): SelectionNodeOp | null =
         case 'colour': return new ColourSelectOp(splat);
         case 'region': return RegionSelectOp.around(splat);
         case 'attribute': return AttributeSelectOp.fromView(splat);
+        case 'grow': return GrowSelectOp.forObject(splat);
         default: return null;
     }
 };
@@ -757,6 +949,8 @@ export {
     type RegionShape,
     AttributeSelectOp,
     type Attribute,
+    GrowSelectOp,
+    type GrowDirection,
     SELECTION_NODE_KINDS,
     SELECTION_NODE_NAMES,
     isSelectionSource,
