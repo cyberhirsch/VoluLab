@@ -285,10 +285,119 @@ class MotionSelectOp extends SelectionNodeOp {
 }
 
 // ---------------------------------------------------------------------------
+// select by colour
+
+type ColourSpace = 'rgb' | 'hsv';
+
+/** hue in degrees, saturation and value 0..1 */
+const toHsv = (r: number, g: number, b: number): [number, number, number] => {
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const d = max - min;
+    let h = 0;
+    if (d > 0) {
+        if (max === r) h = ((g - b) / d) % 6;
+        else if (max === g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        h *= 60;
+        if (h < 0) h += 360;
+    }
+    return [h, max > 0 ? d / max : 0, max];
+};
+
+const decodeDc = (v: number) => Math.min(1, Math.max(0, 0.5 + v * SH_C0));
+
+/**
+ * Selects by how close a gaussian's colour is to a picked one: as a
+ * distance in RGB, or by tolerances on hue, saturation and value apart, for
+ * keying out a backdrop or isolating something by its colour. The colour
+ * is the gaussian's own base colour, before the view-dependent part and
+ * before any colour node. A 4D model is selected over all its time.
+ */
+class ColourSelectOp extends SelectionNodeOp {
+    name = 'selectByColour';
+    readonly kind = 'colour';
+
+    space: ColourSpace;
+
+    /** the mean colour of what came in selected, when it last ran */
+    incomingMean: [number, number, number] | null = null;
+
+    constructor(splat: Splat, space: ColourSpace = 'rgb', params: Record<string, number> = {}) {
+        super(splat, { r: 0, g: 1, b: 0, tolerance: 0.2, hue: 20, saturation: 0.3, brightness: 0.3, ...params });
+        this.space = space;
+    }
+
+    setSpace(space: ColourSpace) {
+        this.space = space;
+        this.invalidate();
+    }
+
+    protected hits(splat: Splat) {
+        const data = splat.splatData;
+        const n = data.numSplats;
+        const out = new Uint8Array(n);
+        const R = data.getProp('f_dc_0') as Float32Array;
+        const G = data.getProp('f_dc_1') as Float32Array;
+        const B = data.getProp('f_dc_2') as Float32Array;
+        if (!R || !G || !B) return out;
+
+        // the colour of what comes in selected, for "take from selection"
+        const state = data.getProp('state') as Uint8Array;
+        let sr = 0, sg = 0, sb = 0, sn = 0;
+        for (let i = 0; i < n; ++i) {
+            if (state[i] === State.selected) {
+                sr += decodeDc(R[i]);
+                sg += decodeDc(G[i]);
+                sb += decodeDc(B[i]);
+                sn++;
+            }
+        }
+        this.incomingMean = sn ? [sr / sn, sg / sn, sb / sn] : null;
+
+        const r = this.value('r'), g = this.value('g'), b = this.value('b');
+        if (this.space === 'rgb') {
+            const tol = this.value('tolerance');
+            const tol2 = tol * tol;
+            for (let i = 0; i < n; ++i) {
+                const dr = decodeDc(R[i]) - r, dg = decodeDc(G[i]) - g, db = decodeDc(B[i]) - b;
+                out[i] = dr * dr + dg * dg + db * db <= tol2 ? 1 : 0;
+            }
+            return out;
+        }
+
+        const [h0, s0, v0] = toHsv(r, g, b);
+        const ht = this.value('hue'), st = this.value('saturation'), vt = this.value('brightness');
+        for (let i = 0; i < n; ++i) {
+            const [h, s, v] = toHsv(decodeDc(R[i]), decodeDc(G[i]), decodeDc(B[i]));
+            let dh = Math.abs(h - h0);
+            if (dh > 180) dh = 360 - dh;
+            // hue means little where there is hardly any colour
+            const hueOk = dh <= ht || (s < 0.05 && s0 < 0.05);
+            out[i] = hueOk && Math.abs(s - s0) <= st && Math.abs(v - v0) <= vt ? 1 : 0;
+        }
+        return out;
+    }
+
+    describe() {
+        const hex = [this.params.r, this.params.g, this.params.b].map(v => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join('');
+        return this.space === 'rgb' ? `#${hex} ±${+this.params.tolerance.toFixed(3)}` : `#${hex} hsv`;
+    }
+
+    protected extra() {
+        return { space: this.space };
+    }
+
+    restoreExtra(stored: Record<string, any>) {
+        this.space = stored.space === 'hsv' ? 'hsv' : 'rgb';
+    }
+}
+
+// ---------------------------------------------------------------------------
 // the nodes, by kind
 
 // the kinds built, in menu order
-const SELECTION_NODE_KINDS: SelectionNodeKind[] = ['motion'];
+const SELECTION_NODE_KINDS: SelectionNodeKind[] = ['motion', 'colour'];
 
 /** the op name each kind goes by, for the graph's labels */
 const SELECTION_NODE_NAMES: Record<SelectionNodeKind, string> = {
@@ -309,6 +418,7 @@ const isSelectionSource = (op: unknown): op is SelectOp | SelectionNodeOp => {
 const makeSelectionNode = (kind: string, splat: Splat): SelectionNodeOp | null => {
     switch (kind) {
         case 'motion': return new MotionSelectOp(splat);
+        case 'colour': return new ColourSelectOp(splat);
         default: return null;
     }
 };
@@ -331,6 +441,8 @@ export {
     type SelectionNodeKind,
     MotionSelectOp,
     type MotionMetric,
+    ColourSelectOp,
+    type ColourSpace,
     SELECTION_NODE_KINDS,
     SELECTION_NODE_NAMES,
     isSelectionSource,

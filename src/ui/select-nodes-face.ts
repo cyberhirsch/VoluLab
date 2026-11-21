@@ -2,7 +2,7 @@ import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
 import { SelectMode } from '../edit-ops';
 import { Events } from '../events';
-import { MotionMetric, MotionSelectOp, SELECTION_NODE_KINDS, SELECTION_NODE_NAMES, SelectionNodeOp } from '../select-nodes';
+import { ColourSelectOp, ColourSpace, MotionMetric, MotionSelectOp, SELECTION_NODE_KINDS, SELECTION_NODE_NAMES, SelectionNodeOp } from '../select-nodes';
 import { Splat } from '../splat';
 
 /**
@@ -297,6 +297,52 @@ const buildMotion = (face: Face, op: MotionSelectOp) => {
     face.note(t(op.metric === 'speed' ? 'node.selmotion.note-speed' : 'node.selmotion.note-distance'));
 };
 
+const hex = (r: number, g: number, b: number) => `#${[r, g, b].map(v => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join('')}`;
+
+const buildColour = (face: Face, op: ColourSelectOp) => {
+    const row = face.row(t('node.selcolour.colour'));
+    const pick = document.createElement('input');
+    pick.type = 'color';
+    pick.className = 'nd-colour';
+    pick.value = hex(op.params.r, op.params.g, op.params.b);
+    pick.addEventListener('change', () => {
+        const v = pick.value;
+        const c = [1, 3, 5].map(i => parseInt(v.slice(i, i + 2), 16) / 255);
+        face.refresh(() => {
+            op.setParam('r', c[0]);
+            op.setParam('g', c[1]);
+            op.setParam('b', c[2]);
+        });
+    });
+    row.appendChild(pick);
+
+    // the colour of what the nodes above leave selected: pick a patch with
+    // a select node, then take its colour here
+    const mean = op.incomingMean;
+    face.button(t('node.selcolour.from-selection'), () => {
+        face.refresh(() => {
+            op.setParam('r', mean[0]);
+            op.setParam('g', mean[1]);
+            op.setParam('b', mean[2]);
+        });
+    }, !mean);
+
+    face.choice<ColourSpace>(t('node.selcolour.space'), [
+        ['rgb', 'RGB'],
+        ['hsv', 'HSV']
+    ], op.space, s => op.setSpace(s));
+
+    if (op.space === 'rgb') {
+        face.number(t('node.selcolour.tolerance'), op.params.tolerance, 0.2, 0.01, v => op.setParam('tolerance', Math.max(0, v)));
+    } else {
+        face.number(t('node.selcolour.hue'), op.params.hue, 20, 1, v => op.setParam('hue', Math.max(0, v)));
+        face.number(t('node.selcolour.saturation'), op.params.saturation, 0.3, 0.01, v => op.setParam('saturation', Math.max(0, v)));
+        face.number(t('node.selcolour.brightness'), op.params.brightness, 0.3, 0.01, v => op.setParam('brightness', Math.max(0, v)));
+    }
+    outcome(face, op);
+    face.note(t('node.selcolour.note'));
+};
+
 /**
  * Fill the node pane for one of these nodes. False for an op that is not
  * one, so the pane carries on with its own kinds.
@@ -306,6 +352,7 @@ const buildSelectionNodeFace = (body: HTMLElement, events: Events, op: unknown, 
     const face = new Face(body, events, index);
     common(face, op);
     if (op instanceof MotionSelectOp) buildMotion(face, op);
+    if (op instanceof ColourSelectOp) buildColour(face, op);
     return true;
 };
 

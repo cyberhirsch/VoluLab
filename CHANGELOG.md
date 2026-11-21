@@ -32,6 +32,11 @@ into `doc-nodes.ts`).
   the debug view's speed channel shows. A gaussian not drawn in the range
   is not caught. The node pane draws a histogram of the measure (log
   scale); a drag across it sets the range. On a 3D object every speed is 0.
+- **select by colour**: by the distance of a gaussian's base colour (before
+  the view-dependent part and any colour node) to a picked colour, in RGB,
+  or by tolerances on hue, saturation and value apart. "Take colour from
+  selection" takes the mean colour of what the nodes above leave selected,
+  so a patch picked with a select node gives the key colour.
 
 ---
 
