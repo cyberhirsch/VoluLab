@@ -681,6 +681,21 @@ class DeleteNodeOp extends StateOp {
  * Only a 4D model played on the GPU has a time to map. On a 3D model the
  * node is carried and does nothing.
  */
+type TimeNodeSettings = {
+    kind: 'trim' | 'retime' | 'loop' | 'freeze' | 'offset';
+    in?: number;
+    /** null: to the end */
+    out?: number | null;
+    speed?: number;
+    reverse?: boolean;
+    mode?: LoopMode;
+    count?: number;
+    frame?: number;
+    frames?: number;
+    outside?: OffsetOutside;
+    bypassed?: boolean;
+};
+
 class TimeOp {
     name: string;
     splat: Splat;
@@ -690,6 +705,11 @@ class TimeOp {
     constructor(splat: Splat, map: TimeMap) {
         this.splat = splat;
         this.map = map;
+    }
+
+    /** what a project has to keep of the node: its kind and what was set on it */
+    get settings(): TimeNodeSettings {
+        return null;
     }
 
     /** whether the object has a time for the node to change */
@@ -754,6 +774,10 @@ class TrimOp extends TimeOp {
         const [a, b] = this.range;
         return Number.isFinite(b) ? `${a} - ${b}` : `${a} -`;
     }
+
+    get settings(): TimeNodeSettings {
+        return { kind: 'trim', in: this.map.in, out: Number.isFinite(this.map.out) ? this.map.out : null };
+    }
 }
 
 /**
@@ -775,6 +799,10 @@ class RetimeOp extends TimeOp {
     get sourceLabel() {
         return `${+this.map.factor.toFixed(3)}x${this.map.reverse ? ' reversed' : ''}`;
     }
+
+    get settings(): TimeNodeSettings {
+        return { kind: 'retime', speed: this.map.factor, reverse: this.map.reverse };
+    }
 }
 
 /**
@@ -795,6 +823,10 @@ class LoopOp extends TimeOp {
         if (this.map.mode === 'none') return 'none';
         return `${this.map.mode === 'pingpong' ? 'ping-pong' : 'loop'} x${this.map.repeats}`;
     }
+
+    get settings(): TimeNodeSettings {
+        return { kind: 'loop', mode: this.map.mode, count: this.map.repeats };
+    }
 }
 
 /**
@@ -813,6 +845,10 @@ class FreezeOp extends TimeOp {
     /** what the graph writes under the node's title */
     get sourceLabel() {
         return `frame ${Math.round(this.map.frame) || 0}`;
+    }
+
+    get settings(): TimeNodeSettings {
+        return { kind: 'freeze', frame: Math.round(this.map.frame) || 0 };
     }
 }
 
@@ -835,7 +871,23 @@ class OffsetOp extends TimeOp {
         const n = this.map.shift;
         return `${n < 0 ? '' : '+'}${n}, ${this.map.outside}`;
     }
+
+    get settings(): TimeNodeSettings {
+        return { kind: 'offset', frames: this.map.shift, outside: this.map.outside };
+    }
 }
+
+/** A time node of the kind and with the settings stored, for an object. */
+const timeNodeFrom = (splat: Splat, stored: TimeNodeSettings): TimeOp | null => {
+    switch (stored?.kind) {
+        case 'trim': return new TrimOp(splat, stored.in ?? 0, stored.out ?? Infinity);
+        case 'retime': return new RetimeOp(splat, stored.speed ?? 1, !!stored.reverse);
+        case 'loop': return new LoopOp(splat, stored.mode ?? 'loop', stored.count ?? 2);
+        case 'freeze': return new FreezeOp(splat, stored.frame ?? 0);
+        case 'offset': return new OffsetOp(splat, stored.frames ?? 0, stored.outside ?? 'hide');
+        default: return null;
+    }
+};
 
 const mat = new Mat4();
 
@@ -2551,6 +2603,8 @@ export {
     DeleteNodeOp,
     type DeleteWhat,
     TimeOp,
+    type TimeNodeSettings,
+    timeNodeFrom,
     TrimOp,
     RetimeOp,
     LoopOp,
