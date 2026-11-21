@@ -1,7 +1,8 @@
 import { ZipFileSystem, ZipReadFileSystem } from '@playcanvas/splat-transform';
 import { Vec3 } from 'playcanvas';
 
-import { EditOp, LightOp, PrimitiveOp, TransformNodeOp } from './edit-ops';
+import { restoreStateNode, storeStateNodes } from './doc-nodes';
+import { DebugViewOp, EditOp, LightOp, PrimitiveOp, RelightOp, TransformNodeOp } from './edit-ops';
 import { ElementType } from './element';
 import { Events } from './events';
 import { Grade } from './grade-palette';
@@ -48,6 +49,12 @@ type FilePickerAcceptType = unknown;
  * and put its rows in another order - and because saving then encodes
  * nothing: no clustering on the GPU, and no second copy of the model in
  * memory. What it costs is the size of that file in every project.
+ *
+ * The nodes that select, hide and delete gaussians are stored as nodes
+ * (doc-nodes.ts), so an object's file holds every gaussian it came with,
+ * the deleted ones too, each in its row. Every stored node carries its
+ * place in the history (`at`) and, where it was dragged somewhere in the
+ * graph, that place (`pos`); opened, the nodes go back in in that order.
  */
 const VLP_EXTENSION = '.vlp';
 
@@ -312,14 +319,23 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 }
             }
 
+            // The nodes on the objects' chains - transform, relight, debug
+            // view, and the ones that select and delete - go back in in the
+            // order they were in: each is stored with its place in the
+            // history. A project from before that has none, and its nodes go
+            // in kind by kind, as they always did.
+            const pending: { at: number, pos?: number[], add: () => EditOp | null }[] = [];
+            const later = (stored: any, add: () => EditOp | null) => {
+                pending.push({ at: Number.isFinite(stored?.at) ? stored.at : Infinity, pos: stored?.pos, add });
+            };
+
             // transform nodes come back on the objects they were on, on top of
             // the placement each object was stored with
             if (Array.isArray(document.transforms)) {
                 for (const stored of document.transforms) {
                     const splat = loaded[stored?.splat];
-                    if (splat) events.invoke('transform.addNode', splat, stored);
+                    if (splat) later(stored, () => events.invoke('transform.addNode', splat, stored));
                 }
-                events.fire('edit.changed');
             }
 
             // relight nodes come back on the objects they were on. A project
@@ -328,14 +344,12 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             if (Array.isArray(document.relights)) {
                 for (const stored of document.relights) {
                     const splat = loaded[stored?.splat];
-                    if (splat) events.invoke('relight.addNode', splat, stored.settings);
+                    if (splat) later(stored, () => events.invoke('relight.addNode', splat, stored.settings));
                 }
-                events.fire('edit.changed');
             } else if (Array.isArray(document.lights) && document.lights.length > 0) {
                 for (const splat of loaded) {
-                    events.invoke('relight.addNode', splat, document.lighting ?? {});
+                    later(null, () => events.invoke('relight.addNode', splat, document.lighting ?? {}));
                 }
-                events.fire('edit.changed');
             }
 
             // debug view nodes too: they change no data, so the project holds
@@ -348,7 +362,18 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 for (const stored of document.debugViews) {
                     const splat = loaded[stored?.splat];
                     if (!splat) continue;
-                    events.invoke('debugView.addNode', splat, stored.channel);
+                    if (stored.bypassed) {
+                        // one that was switched off: it shows nothing, and
+                        // goes back in switched off
+                        later(stored, () => {
+                            const op = new DebugViewOp(splat, { channel: stored.channel });
+                            op.bypassed = true;
+                            events.fire('edit.add', op);
+                            return op;
+                        });
+                        continue;
+                    }
+                    later(stored, () => events.invoke('debugView.addNode', splat, stored.channel));
                     if (stored.colour) {
                         let rows: Uint16Array | null = null;
                         if (stored.colour.palette?.length) {
@@ -361,8 +386,46 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                         debugGrades.push({ splat, stored: stored.colour, rows });
                     }
                 }
-                events.fire('edit.changed');
             }
+
+            // the nodes that select, hide and delete: each with its settings
+            // and the gaussians it applied to, which are in the object's
+            // nodes file (see doc-nodes.ts)
+            if (Array.isArray(document.nodes)) {
+                const wordsOf = new Map<number, Uint32Array>();
+                for (const stored of document.nodes) {
+                    const splat = loaded[stored?.splat];
+                    if (!splat) continue;
+                    if (!wordsOf.has(stored.splat)) {
+                        const name = document.splats[stored.splat]?.nodes;
+                        // copied so the typed array starts on an aligned offset
+                        wordsOf.set(stored.splat, name ? new Uint32Array((await readEntry(zipFs, name)).slice().buffer) : new Uint32Array(0));
+                    }
+                    const words = wordsOf.get(stored.splat);
+                    later(stored, () => {
+                        const op = restoreStateNode(stored, splat, primitiveOps.map(p => p?.output), words);
+                        if (op) {
+                            events.fire('edit.add', op);
+                        } else {
+                            console.warn(`project: a '${stored.type}' node is not known here and was left out`);
+                        }
+                        return op;
+                    });
+                }
+            }
+
+            // in, in order (the sort is stable, so nodes without a place
+            // keep the order they were listed in), and where they were put
+            // in the graph
+            pending.sort((a, b) => (a.at === b.at ? 0 : a.at - b.at));
+            const place = (key: object | null, pos: any) => {
+                if (key && Array.isArray(pos) && pos.length === 2 && pos.every(Number.isFinite)) {
+                    events.fire('graph.setPosition', key, { x: pos[0], y: pos[1] });
+                }
+            };
+            pending.forEach(({ pos, add }) => place(add(), pos));
+            loaded.forEach((splat, i) => place(splat, document.splats[i]?.pos));
+            events.fire('edit.changed');
 
             // the session around the scene. Preferences are applied inside a
             // suspend window already opened by the caller, so applying them
@@ -416,6 +479,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             const primitives = (events.invoke('primitive.list') ?? []) as ScenePrimitive[];
             const history = (events.invoke('edit.history')?.ops ?? []) as EditOp[];
             const voxels = scene.getElementsByType(ElementType.voxel) as Voxels[];
+            const { ops: allOps, cursor } = events.invoke('edit.history') as { ops: EditOp[], cursor: number };
+
             // A 4D model playing on the GPU is stored as the file it was read
             // from. Where that file is not at hand the object is stored as
             // it always was: a still of the frame shown.
@@ -425,10 +490,24 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 const source = s === sequenceSplat && sequenceSource instanceof TghFrameSource ? sequenceSource : null;
                 return source?.origin && s.motion && s.splatData.numSplats === source.model.numSplats ? source : null;
             });
-            // what such a model has deleted or hidden, a byte per row: its
-            // file holds every gaussian
+            // Where a node stands in the history and in the graph, stored
+            // with it so it goes back in the same place.
+            const placeOf = (op: EditOp | undefined) => {
+                const at = op ? allOps.indexOf(op) : -1;
+                if (at < 0) return {};
+                const pos = events.invoke('graph.position', op) as { x: number, y: number } | null;
+                return { at, ...(pos ? { pos: [pos.x, pos.y] } : {}) };
+            };
+
+            // The nodes that select, hide and delete, object by object - or
+            // null for an object they do not account for, which is stored
+            // the old way: without them, and without what they deleted.
+            const stateNodes = splats.map((s, i) => storeStateNodes(allOps, cursor, s, i, primitives));
+
+            // what a 4D model has deleted or hidden, a byte per row, where
+            // no nodes say it: its file holds every gaussian
             const motionStates = splats.map((s, i) => {
-                if (!motions[i]) return null;
+                if (!motions[i] || stateNodes[i]) return null;
                 const kept = s.state.data.map(v => v & (State.deleted | State.locked));
                 return kept.some(v => v !== 0) ? kept : null;
             });
@@ -462,8 +541,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             // the grades on each object's false colour, where a debug view shows one
             const debugGrades = splats.map((s, i) => {
                 const stored = s.docSerializeDebugGrade();
-                if (!stored?.rows || !motions[i]) return stored;
-                // the rows are those not deleted; a 4D model's file has them all
+                if (!stored?.rows || !(motions[i] || stateNodes[i])) return stored;
+                // the rows are those not deleted; the object's file has them all
                 const state = s.state.data;
                 const rows = new Uint16Array(state.length);
                 for (let row = 0, k = 0; row < state.length; row++) {
@@ -477,7 +556,6 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             // Where no such placement exists the object is stored as it
             // stands and its transform nodes are not kept.
             const pack3 = (v: Vec3) => [v.x, v.y, v.z];
-            const { ops: allOps, cursor } = events.invoke('edit.history') as { ops: EditOp[], cursor: number };
             const placements = splats.map((splat) => {
                 const nodes = allOps.slice(0, cursor).filter(o => o instanceof TransformNodeOp && o.splat === splat && (o.applied || o.bypassed)) as TransformNodeOp[];
                 const { entity } = splat;
@@ -502,8 +580,12 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 splats: splats.map((s, i) => {
                     const base = placements[i]?.base;
                     const source = motions[i];
+                    const at = events.invoke('graph.position', s) as { x: number, y: number } | null;
                     return {
                         ...s.docSerialize(),
+                        ...(at ? { pos: [at.x, at.y] } : {}),
+                        // the file the sets of its nodes are in
+                        ...(stateNodes[i]?.words ? { nodes: `nodes_${i}.bin` } : {}),
                         ...(base ? {
                             position: pack3(base.position),
                             rotation: [base.rotation.x, base.rotation.y, base.rotation.z, base.rotation.w],
@@ -529,8 +611,15 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     position: pack3(node.newt.position),
                     rotation: pack3(node.euler),
                     scale: pack3(node.newt.scale),
-                    bypassed: !!node.bypassed
+                    bypassed: !!node.bypassed,
+                    ...placeOf(node)
                 }))),
+
+                // each object's select, hide and delete nodes
+                nodes: stateNodes.flatMap(stored => (stored?.nodes ?? []).map((node) => {
+                    const pos = events.invoke('graph.position', allOps[node.at]) as { x: number, y: number } | null;
+                    return pos ? { ...node, pos: [pos.x, pos.y] } : node;
+                })),
 
                 // the camera objects: pose, lens, lock and their animation
                 cameras: cameras.map(c => c.docSerialize()),
@@ -562,7 +651,11 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
                 // each object's relight node, by the object's place in the list
                 relights: splats
-                .map((s, i) => (s.relight ? { splat: i, settings: { ...s.relight } } : null))
+                .map((s, i) => (s.relight ? {
+                    splat: i,
+                    settings: { ...s.relight },
+                    ...placeOf(allOps.find(o => o instanceof RelightOp && o.settings === s.relight))
+                } : null))
                 .filter(Boolean),
 
                 // each object's debug view nodes, in the order of its chain.
@@ -575,8 +668,13 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     return {
                         splat: i,
                         channel: view.channel,
-                        ...(colour ? { colour: { grade: colour.grade, palette: colour.palette } } : {})
+                        ...(colour ? { colour: { grade: colour.grade, palette: colour.palette } } : {}),
+                        ...placeOf(allOps.find(o => o instanceof DebugViewOp && o.view === view))
                     };
+                })).concat(allOps.slice(0, cursor).flatMap((o) => {
+                    // and the ones switched off, which the object does not hold
+                    const i = o instanceof DebugViewOp && o.bypassed ? splats.indexOf(o.splat) : -1;
+                    return i < 0 ? [] : [{ splat: i, channel: (o as DebugViewOp).view.channel, bypassed: true, ...placeOf(o) }];
                 })),
 
                 // the session around the scene, so a project reopens in the
@@ -612,7 +710,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             for (let i = 0; i < splats.length; ++i) {
                 const source = motions[i];
                 if (!source) {
-                    await writeSplatFile([splats[i]], serializeSettings, 'ply', `splat_${i}.ply`, {}, zipFs);
+                    // with its nodes stored, every gaussian: the nodes delete
+                    await writeSplatFile([splats[i]], { ...serializeSettings, keepDeleted: !!stateNodes[i] }, 'ply', `splat_${i}.ply`, {}, zipFs);
                     continue;
                 }
 
@@ -637,6 +736,16 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     const gradeWriter = await zipFs.createWriter(`splat_${i}.grades`);
                     await gradeWriter.write(new Uint8Array(rows.buffer, rows.byteOffset, rows.byteLength));
                     await gradeWriter.close();
+                }
+            }
+
+            // the sets each object's nodes applied to
+            for (let i = 0; i < splats.length; ++i) {
+                const words = stateNodes[i]?.words;
+                if (words) {
+                    const writer = await zipFs.createWriter(`nodes_${i}.bin`);
+                    await writer.write(words);
+                    await writer.close();
                 }
             }
 

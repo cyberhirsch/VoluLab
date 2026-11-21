@@ -331,6 +331,12 @@ class GraphPanel extends Container {
         });
         events.on('scene.elementAdded', refresh);
         events.on('scene.elementRemoved', refresh);
+
+        // where a node was dragged to, for a project to keep and put back
+        events.function('graph.position', (key: object) => this.positions.get(key) ?? null);
+        events.on('graph.setPosition', (key: object, at: { x: number, y: number }) => {
+            this.positions.set(key, { x: at.x, y: at.y });
+        });
         events.on('splat.name', refresh);
 
         // The panel is built before main.ts has registered the scene and

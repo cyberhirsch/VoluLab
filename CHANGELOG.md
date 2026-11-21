@@ -9,6 +9,78 @@ months finds out why before they change it.
 
 ---
 
+## A project keeps select, crop, cleanup, decimate and delete nodes
+
+Saving a project baked these in: the deleted gaussians were left out of
+the object's file and no node came back, so a crop could not be widened
+or a cleanup switched off once the project had been closed. Now every
+`StateOp` is stored as a node - select (all, none, invert and the select
+node with its steps and its mesh input), hide and unhide, the Delete
+key's node, the delete node, reset, crop, cleanup and decimate - with its
+settings, whether it is bypassed, its place in the chain and, where it
+was dragged somewhere in the graph, that place. The object's file holds
+every gaussian it came with, each in its row, and the nodes delete.
+
+Each node is stored twice over (`doc-nodes.ts`): as its settings, and as
+the set of gaussians it applied to, as `IndexRanges` words in
+`nodes_<i>.bin`. Opened, it applies that set again without asking
+(`StateOp.restore`) and asks - resolves from its settings - only once
+something invalidates it: its own settings edited, or a node ahead of it
+changed, bypassed or removed. It is not simply run again, for two
+reasons:
+
+- Some nodes have nothing to run. A brush stroke, a flood fill, a
+  ring-mode pick and a selection handed in as a mask are frozen hit sets;
+  their result is all there is, and it is what is stored. These are the
+  nodes that cannot be replayed from settings. Their rows hold now that
+  the file keeps every gaussian; before, a frozen set would have pointed
+  at other gaussians after a save.
+- The rest would be asking different data, or take too long. The file
+  holds the gaussians as the whole chain left them, so a sphere select
+  from before a move of selected gaussians would catch others now. And a
+  cleanup of 1.87M gaussians takes minutes; the project with it opens in
+  the time it takes to read the model.
+
+So what opens is exactly what was saved - selection, hidden and deleted
+gaussians, bit for bit - and the settings are there for the next edit.
+Measured after a reload: bypassing the delete node, and setting the
+decimate node to another fraction, give the same gaussians as the same
+edit gave before the save.
+
+The nodes go back in in the order they were in. Transform, relight and
+debug view nodes used to go in kind by kind, which was their order only
+as long as there was one kind; now each stored node carries its place in
+the history (`at`) and they are added in that order, state nodes among
+them. A debug view node that was switched off is stored too; it was
+dropped.
+
+An object keeps its nodes only if they account for its state: applied in
+order to an object with nothing selected, hidden or deleted, the stored
+sets have to give exactly the state it is in. Where they do not - a node
+of a kind `doc-nodes.ts` does not know, one that did not apply - the
+object is stored as before: a PLY without its deleted gaussians and
+without the nodes, a 4D model with its state file.
+
+Traps:
+
+- Undo still stops at the loaded project (`edit.markLoaded`). A loaded
+  node is taken back by bypassing or removing it; what is added after
+  opening undoes as usual.
+- A project no longer shrinks when gaussians are deleted. The deleted
+  ones stay in the file for as long as a node holds them; removing them
+  for good is an export.
+- A new kind of `StateOp` has to be added to `packSettings` and
+  `restoreStateNode`. Until it is, an object with such a node saves the
+  old way, silently: its nodes do not come back.
+- A node in the redo tail - undone when the project was saved - is not
+  stored.
+- A node inside a group (a separate's delete, an unhide over several
+  objects) comes back as a node of its own.
+- A select node feeding a light comes back, but the light is not wired
+  to it again: it keeps the emitters it last took, as before.
+- Colour nodes are still baked: the object's grade into the object, a
+  scoped grade into the colours.
+
 ## A project keeps a 4D model as a 4D model
 
 A project stored a 4D model as a PLY of the frame shown. Opened again it

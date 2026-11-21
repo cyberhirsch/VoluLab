@@ -133,6 +133,21 @@ class StateOp {
         this.ranges = null;
     }
 
+    /** What the op last applied to, or null if it has not run. */
+    get resolved(): IndexRanges | null {
+        return this.ranges;
+    }
+
+    /**
+     * Take a set resolved in an earlier session as this op's own. A project
+     * stores what each node applied to, and the node applies that again
+     * rather than asking: the data it would ask is the data as later edits
+     * left it. It asks again as soon as it is invalidated, like any other.
+     */
+    restore(ranges: IndexRanges) {
+        this.ranges = ranges;
+    }
+
     private apply(op: BitOp) {
         const { state } = this.splat;
         const { mask, ranges } = this;
