@@ -3,7 +3,7 @@ import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
-import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplitOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -205,6 +205,12 @@ class NodePanel extends Container {
         if (op instanceof TimeOp) {
             this.empty.hidden = true;
             this.buildTime(op, index);
+            return;
+        }
+
+        if (op instanceof SplitOp) {
+            this.empty.hidden = true;
+            this.buildSplit(op, index);
             return;
         }
 
@@ -897,6 +903,31 @@ class NodePanel extends Container {
         this.stat(i18n.t('node.time.frames'), frames < 0 ? i18n.t('node.time.not-applied') : `${frames} \u2192 ${op.framesOut}`);
         note(`node.${op.name.replace(/Node$/, '')}.note`);
         note('node.time.note');
+    }
+
+    /**
+     * A split node: whether the selection moves out of the source or is
+     * copied, and how many gaussians that came to.
+     */
+    private buildSplit(op: SplitOp, index: number) {
+        this.replayChoice(i18n.t('node.split.what'), [
+            ['move', i18n.t('node.split.move')],
+            ['copy', i18n.t('node.split.copy')]
+        ], op.mode, index, (v) => {
+            op.mode = v;
+        });
+
+        const n = op.selectedIn;
+        this.stat(i18n.t('node.split.count'), n < 0 ? i18n.t('node.split.not-applied') : n.toLocaleString());
+
+        const note = (key: string) => {
+            const el = document.createElement('div');
+            el.className = 'nd-note';
+            el.textContent = i18n.t(key);
+            this.body.appendChild(el);
+        };
+        note(n === 0 ? 'node.split.none' : 'node.split.note');
+        if (op.inputs?.[0]?.motion) note('node.split.note-4d');
     }
 
     private row(label: string): HTMLElement {

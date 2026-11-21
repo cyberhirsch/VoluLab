@@ -1,4 +1,4 @@
-import { Color, Mat4, Quat, Vec3 } from 'playcanvas';
+import { Asset, Color, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { AnimTrack } from './anim-track';
 import { BoxShape } from './box-shape';
@@ -15,9 +15,10 @@ import { SceneLight } from './scene-light';
 import { PrimitivePose, ScenePrimitive } from './scene-primitive';
 import { SelectQuery, ShapeQuery, resolveHits } from './select-query';
 import { SphereShape } from './sphere-shape';
-import { Splat } from './splat';
+import { Splat, type SplatMotion } from './splat';
 import type { DebugView } from './splat-debug';
 import { State } from './splat-state';
+import { sameRows, selectedRows } from './split';
 import { FreezeMap, LoopMap, LoopMode, OffsetMap, OffsetOutside, RetimeMap, TimeMap, TrimMap, timeSpan } from './time-map';
 import { Transform } from './transform';
 import { Voxels } from './voxels';
@@ -1748,6 +1749,162 @@ class MergeOp {
 }
 
 /**
+ * What a split node's object is made of: the data, how it is turned on the
+ * first bind, and for a 4D model its motion.
+ */
+type SplitBuilt = {
+    asset: Asset;
+    rotation: Quat;
+    motion: SplatMotion | null;
+};
+
+type SplitMode = 'move' | 'copy';
+
+/**
+ * Split: what the select nodes above it leave selected becomes an object
+ * of its own, in its own lane - the counterpart to merge. Set to move, the
+ * source keeps the rest; set to copy, the source keeps everything and the
+ * new object is a duplicate of the selection.
+ *
+ * Like the delete node it reads the selection when it applies, so a select
+ * node above it can change and the split follows: the new object stays the
+ * same object, for the nodes after it to stand on, and its data is made
+ * again (Splat.replaceData). Undo and bypass take the object out and give
+ * the source its gaussians back.
+ *
+ * The part split off a 4D model is a 4D model: it has the rows' motion and
+ * the time nodes its source had at the split, and follows the timeline
+ * through them. `build` makes the data - see editor.ts for the two ways.
+ */
+class SplitOp {
+    name = 'splitNode';
+
+    scene: Scene;
+    /** the object split - the graph draws an edge from it */
+    inputs: Splat[];
+    /** the object the selection becomes */
+    output: Splat;
+    mode: SplitMode;
+    bypassed?: boolean;
+
+    /** how many gaussians were selected when it last applied, or -1 */
+    selectedIn = -1;
+
+    private build: (source: Splat, rows: Uint32Array) => Promise<SplitBuilt>;
+    // what the output's data was made from: the rows, and the data they were rows of
+    private rows: Uint32Array;
+    private builtFrom: Asset;
+    // made with the node and not applied since: its data is what `build` just gave
+    private fresh = true;
+    // the source's rows taken out of it, while it is applied and set to move
+    private cut: StateOp | null = null;
+
+    constructor(
+        scene: Scene,
+        source: Splat,
+        output: Splat,
+        rows: Uint32Array,
+        build: (source: Splat, rows: Uint32Array) => Promise<SplitBuilt>,
+        mode: SplitMode = 'move'
+    ) {
+        this.scene = scene;
+        this.inputs = [source];
+        this.output = output;
+        this.rows = rows;
+        this.builtFrom = source.asset;
+        this.build = build;
+        this.mode = mode;
+    }
+
+    /** what the graph writes under the node's title */
+    get sourceLabel() {
+        return this.mode;
+    }
+
+    /** whether the new object is in the scene: with nothing selected there is none */
+    get applied() {
+        return !!this.output?.scene;
+    }
+
+    async do() {
+        const source = this.inputs[0];
+        const { output } = this;
+        if (!source?.scene) return;
+        const { fresh } = this;
+        this.fresh = false;
+
+        const rows = selectedRows(source);
+        this.selectedIn = rows.length;
+        // nothing selected: nothing to split off, and nothing leaves the source
+        if (!rows.length) return;
+
+        // A 4D model's rows are taken as they are, so the same rows of the
+        // same data are the same object. A 3D object's are baked with what
+        // the nodes above did to them, which may have changed with the rows
+        // the same - so that is made again each time.
+        const same = source.asset === this.builtFrom && sameRows(rows, this.rows);
+        const stale = !same || (!source.motion && !fresh);
+        const built = stale ? await this.build(source, rows) : null;
+
+        await this.scene.add(output);
+        if (built) {
+            // not drawn until the new data is whole: the motion textures
+            // follow the data by a step
+            output.timeHidden = true;
+            if (built.motion) output.motion = built.motion;
+            await output.replaceData(built.asset);
+            if (built.motion) output.setMotion(built.motion);
+            output.timeHidden = false;
+            this.rows = rows;
+            this.builtFrom = source.asset;
+        }
+
+        if (source.motion) {
+            // the rows are the model's own: placed, graded and timed as the
+            // model is where it is split
+            const { entity } = source;
+            output.move(entity.getLocalPosition(), entity.getLocalRotation(), entity.getLocalScale());
+            output.tintClr = source.tintClr;
+            output.temperature = source.temperature;
+            output.saturation = source.saturation;
+            output.exposure = source.exposure;
+            output.brightness = source.brightness;
+            output.blackPoint = source.blackPoint;
+            output.whitePoint = source.whitePoint;
+            output.transparency = source.transparency;
+            output.timeMaps = source.timeMaps.slice();
+            output.motionFrames = source.motionFrames;
+            output.timelineFrame = source.timelineFrame;
+            output.retime();
+        }
+
+        if (this.mode === 'move') {
+            this.cut = new StateOp(source, () => IndexRanges.fromSorted(rows), State.deleted, BitOp.SET, State.deleted);
+            await this.cut.do();
+        }
+    }
+
+    async undo() {
+        if (this.cut) {
+            await this.cut.undo();
+            this.cut = null;
+        }
+        if (this.output?.scene) {
+            this.output.timeMaps = [];
+            this.scene.remove(this.output);
+        }
+    }
+
+    destroy() {
+        this.output?.destroy();
+        this.inputs = null;
+        this.output = null;
+        this.rows = null;
+        this.builtFrom = null;
+    }
+}
+
+/**
  * Turn an object into a grid of voxels.
  *
  * Like merge, this produces a new element rather than changing one - and
@@ -2410,6 +2567,9 @@ export {
     AnimTrackEditOp,
     MultiOp,
     MergeOp,
+    SplitOp,
+    type SplitBuilt,
+    type SplitMode,
     VoxeliseOp,
     AddVoxelsOp,
     DatasetOp,

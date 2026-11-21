@@ -90,6 +90,7 @@ const OP_LABELS: Record<string, string> = {
     addSplat: 'add object',
     splatRename: 'rename',
     merge: 'merge',
+    splitNode: 'split',
     voxelise: 'voxelise',
     addVoxels: 'import voxels',
     dataset: 'import',
@@ -1165,6 +1166,10 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addOffsetNode', splat)
                     },
                     {
+                        label: 'split',
+                        action: () => this.events.fire('graph.addSplitNode', splat)
+                    },
+                    {
                         label: 'cleanup',
                         action: () => this.events.fire('graph.addCleanupNode', splat)
                     },
@@ -1463,6 +1468,13 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addOffsetNode')
+            },
+            {
+                // what the select nodes above selected, as an object of its own
+                label: 'add split node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addSplitNode')
             },
             {
                 label: 'add cleanup node',

@@ -5,12 +5,12 @@ import { registerCameraEffects } from './camera-effects';
 import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, TrimOp, RetimeOp, LoopOp, FreezeOp, OffsetOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
+import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, TrimOp, RetimeOp, LoopOp, FreezeOp, OffsetOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, SplitOp, SplitBuilt, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
 import type { GridPlane } from './infinite-grid';
-import { MappedReadFileSystem } from './io';
+import { MappedReadFileSystem, loadGSplatData } from './io';
 import { registerLightViewEvents } from './light-view';
 import { registerPrimitiveViewEvents } from './primitive-view';
 import { defaultRelightSettings, normalizeRelightSettings, RelightSettings, registerRelighting } from './relight/relighter';
@@ -24,6 +24,7 @@ import { Splat } from './splat';
 import { DEBUG_CHANNELS, DebugChannel, defaultDebugChannel } from './splat-debug';
 import { writeSplatFile } from './splat-serialize';
 import { State } from './splat-state';
+import { emptyData, selectedRows, subsetData, subsetMotion } from './split';
 import { registerTraining } from './training/train-run';
 import { VoxelGrid, Voxels, voxelise } from './voxels';
 
@@ -622,17 +623,17 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     // Time nodes. Every 4D model played on the GPU follows the timeline
     // through its own time nodes (Splat.showFrame). The model the sequence
-    // plays is told each frame by the sequence too; one that came off it
-    // by a split node only from here. The video export moves the time
-    // without moving the frame, so both are followed.
+    // plays is told each frame by the sequence, which the video export
+    // waits on; one that came off it by a split node is told from here.
+    // The video export moves the time without moving the frame, so both
+    // are followed.
     const movingSplats = () => (scene.getElementsByType(ElementType.splat) as Splat[]).filter(s => s.motion && s.motionFrames > 0);
-    events.on('timeline.frame', (frame: number) => {
-        movingSplats().forEach(s => s.showFrame(frame));
-    });
-    events.on('timeline.time', (time: number) => {
-        const frame = Math.floor(time + 1e-4);
-        movingSplats().forEach(s => s.showFrame(frame));
-    });
+    const followFrame = (frame: number) => {
+        const played = events.invoke('sequence.splat');
+        movingSplats().forEach(s => s !== played && s.showFrame(frame));
+    };
+    events.on('timeline.frame', followFrame);
+    events.on('timeline.time', (time: number) => followFrame(Math.floor(time + 1e-4)));
 
     // The timeline is as long as the longest 4D object, as its time nodes
     // leave it; a shorter one holds its last frame (or is hidden, if a time
@@ -1222,6 +1223,61 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         const index = history().cursor;
         events.fire('edit.add', new MergeOp(scene, [a, b], merged));
         openInGraph(index);
+    });
+
+    /**
+     * What a split node's object is made of: these rows of the source.
+     *
+     * A 4D model's rows are copied as they are, with their motion, so the
+     * part plays as the model did; what select-scoped colour and transform
+     * nodes above did to single gaussians is not in the rows and does not
+     * come along. A 3D object's rows go the way a duplicate's do - written
+     * out and read back - which bakes all of that in, and its placement.
+     */
+    const buildSplit = async (source: Splat, rows: Uint32Array): Promise<SplitBuilt> => {
+        const name = removeExtension(source.filename ?? source.name ?? 'object');
+        if (!rows.length) {
+            return { asset: scene.assetLoader.createGSplatAsset(emptyData(), `${name}-split`), rotation: new Quat(), motion: null };
+        }
+
+        if (source.motion) {
+            return {
+                asset: scene.assetLoader.createGSplatAsset(subsetData(source, rows), `${name}-split`),
+                rotation: source.entity.getLocalRotation().clone(),
+                motion: subsetMotion(source.motion, rows, source.splatData.numSplats)
+            };
+        }
+
+        const memFs = new MemoryFileSystem();
+        await writeSplatFile([source], { maxSHBands: 3, selected: true }, 'ply', 'output.ply', {}, memFs);
+        const data = memFs.results.get('output.ply');
+        const filename = `${name}-split.ply`;
+        const fileSystem = new MappedReadFileSystem();
+        fileSystem.addFile(filename, new Blob([data as BlobPart], { type: 'application/octet-stream' }));
+        const { gsplatData, transform } = await loadGSplatData(filename, fileSystem, true);
+        return { asset: scene.assetLoader.createGSplatAsset(gsplatData, filename), rotation: transform.rotation, motion: null };
+    };
+
+    /**
+     * Split what is selected on an object off into an object of its own.
+     * The object is built first, from the selection as it stands, and then
+     * the node exists - as with merge; the node makes it again when the
+     * selection above it has changed.
+     */
+    events.function('graph.split', async (source: Splat, mode: 'move' | 'copy' = 'move') => {
+        if (!source) return null;
+        const rows = selectedRows(source);
+        const built = await buildSplit(source, rows);
+        const output = new Splat(built.asset, built.rotation);
+        if (built.motion) output.setMotion(built.motion);
+
+        const op = new SplitOp(scene, source, output, rows, buildSplit, mode);
+        appendAndOpen(op);
+        return op;
+    });
+
+    events.on('graph.addSplitNode', (target?: Splat) => {
+        addTarget(target).forEach(splat => events.invoke('graph.split', splat));
     });
 
     /**
