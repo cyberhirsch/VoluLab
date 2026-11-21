@@ -17,7 +17,7 @@ import { defaultRelightSettings, RelightSettings } from '../relight/relighter';
  */
 
 type NumberField = {
-    key: 'capturedLight' | 'occlusionRange' | 'occlusionStrength' | 'delight' | 'delightFloor';
+    key: 'capturedLight' | 'occlusionRange' | 'occlusionStrength' | 'delight' | 'delightFloor' | 'shadowCatcher';
     label: string;
     step: number;
     min: number;
@@ -31,7 +31,9 @@ const FIELDS: NumberField[] = [
     { key: 'occlusionRange', label: 'light.occlusion-range', step: 0.01, min: 0.01, max: 1 },
     { key: 'occlusionStrength', label: 'light.occlusion-strength', step: 0.05, min: 0, max: 1 },
     { key: 'delight', label: 'light.delight', step: 0.05, min: 0, max: 1 },
-    { key: 'delightFloor', label: 'light.delight-floor', step: 0.05, min: 0.02, max: 1 }
+    { key: 'delightFloor', label: 'light.delight-floor', step: 0.05, min: 0.02, max: 1 },
+    // the object keeps its captured look and only takes the shadows cast on it
+    { key: 'shadowCatcher', label: 'light.shadow-catcher', step: 0.05, min: 0, max: 1 }
 ];
 
 const RESOLUTIONS = [64, 96, 128, 192, 256, 512, 768, 1024];
@@ -169,7 +171,7 @@ class RelightFace extends Container {
         const settings: RelightSettings | undefined = this.op?.settings;
         if (!settings) return;
         this.inputs.forEach((input, key) => {
-            input.value = String(settings[key]);
+            input.value = String(settings[key] ?? 0);
         });
         this.resolutionSelect.value = String(settings.resolution);
         this.seesDeletedSelect.value = settings.delightSeesDeleted ? 'yes' : 'no';

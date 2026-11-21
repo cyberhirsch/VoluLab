@@ -449,6 +449,7 @@
     "node.fog.high": "disparue au-dessus de",
     "node.fog.note-depth": "Mélange la couleur de l'objet vers la couleur du brouillard selon la distance à la caméra, en direct dans le viewport et l'export vidéo. Les fichiers écrits depuis l'objet ne la contiennent pas.",
     "node.fog.note-height": "Mélange la couleur de l'objet vers la couleur du brouillard là où il est bas dans le monde, en direct dans le viewport et l'export vidéo. Les fichiers écrits depuis l'objet ne la contiennent pas.",
+    "light.shadow-catcher": "capteur d'ombres",
     "light.delight-deleted": "retirer l'éclairage : compter les supprimés",
     "light.yes": "oui",
     "light.no": "non",

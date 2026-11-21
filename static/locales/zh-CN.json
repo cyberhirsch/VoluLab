@@ -449,6 +449,7 @@
     "node.fog.high": "消失高度以上",
     "node.fog.note-depth": "按与相机的距离把对象颜色混向雾色，在视口和视频导出中实时绘制。从对象写出的文件不包含它。",
     "node.fog.note-height": "对象在世界中位置越低，颜色越混向雾色，在视口和视频导出中实时绘制。从对象写出的文件不包含它。",
+    "light.shadow-catcher": "阴影捕捉",
     "light.delight-deleted": "去光照计入已删除",
     "light.yes": "是",
     "light.no": "否",

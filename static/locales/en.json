@@ -449,6 +449,7 @@
     "node.fog.high": "gone above",
     "node.fog.note-depth": "Blends the object's colour towards the fog colour by distance from the camera, drawn live in the viewport and the video export. Files written from the object do not carry it.",
     "node.fog.note-height": "Blends the object's colour towards the fog colour where it stands low in the world, drawn live in the viewport and the video export. Files written from the object do not carry it.",
+    "light.shadow-catcher": "shadow catcher",
     "light.delight-deleted": "de-light counts deleted",
     "light.yes": "yes",
     "light.no": "no",

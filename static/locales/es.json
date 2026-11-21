@@ -449,6 +449,7 @@
     "node.fog.high": "desaparece por encima de",
     "node.fog.note-depth": "Mezcla el color del objeto hacia el color de la niebla según la distancia a la cámara, en vivo en el viewport y en la exportación de vídeo. Los archivos escritos desde el objeto no la incluyen.",
     "node.fog.note-height": "Mezcla el color del objeto hacia el color de la niebla donde está bajo en el mundo, en vivo en el viewport y en la exportación de vídeo. Los archivos escritos desde el objeto no la incluyen.",
+    "light.shadow-catcher": "receptor de sombras",
     "light.delight-deleted": "quitar iluminación: contar eliminados",
     "light.yes": "sí",
     "light.no": "no",

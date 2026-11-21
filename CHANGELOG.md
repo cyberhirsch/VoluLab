@@ -9,6 +9,26 @@ months finds out why before they change it.
 
 ---
 
+## Relight: shadow catcher
+
+A relight node's "shadow catcher" (0..1) keeps the object's captured look
+and lets it only take shadows: each side of each gaussian is darkened by
+the share of the lights' light that is shut out of it, shadowed over
+unshadowed, at that strength. Ambient light and de-light do not come into
+it. The strength reaches the lighting kernel in the counts' spare w.
+
+The shadows have to be the other objects': traced through the scene's
+grid, a capture shadows itself a second time - on the alley sample under
+a sun that took the picture from a mean of 66 to 13. So while any object
+is a catcher the relighter builds a second density grid of every object
+but the catchers, over the same box, and a catcher's lighting reads that
+one. On the alley sample split into its still and moving parts, with the
+still part a catcher: 32 to 34 dB from the captured look where the relit
+picture is 19.6 dB from it. WebGPU only, as relighting is.
+
+The PRD's ground plane catcher is not built: a plane would have to be
+drawn, and the splat renderer draws gaussians.
+
 ## Fog / depth tint
 
 Sits an inserted object into a scene by fading it towards a fog colour:

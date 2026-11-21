@@ -449,6 +449,7 @@
     "node.fog.high": "weg über",
     "node.fog.note-depth": "Mischt die Farbe des Objekts nach Entfernung von der Kamera zur Nebelfarbe, live im Viewport und im Video-Export. Aus dem Objekt geschriebene Dateien enthalten ihn nicht.",
     "node.fog.note-height": "Mischt die Farbe des Objekts dort zur Nebelfarbe, wo es in der Welt tief steht, live im Viewport und im Video-Export. Aus dem Objekt geschriebene Dateien enthalten ihn nicht.",
+    "light.shadow-catcher": "Shadow Catcher",
     "light.delight-deleted": "Licht entfernen: Gelöschte zählen",
     "light.yes": "ja",
     "light.no": "nein",
