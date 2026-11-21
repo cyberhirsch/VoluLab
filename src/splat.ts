@@ -528,9 +528,11 @@ class Splat extends Element {
      * Show the 4D model at a frame of the timeline. This is where the time
      * nodes apply: the frame goes through them and comes out as a frame of
      * the model, which is the time the shader and the sort worker get.
-     * Asked for the time it already shows, it does nothing.
+     * Asked for the time it already shows, it does nothing - except in the
+     * video export, which waits for a sort of every frame it steps to.
      */
     showFrame(frame: number, frames = this.motionFrames) {
+        const stepped = frame !== this.timelineFrame || frames !== this.motionFrames;
         this.motionFrames = frames;
         this.timelineFrame = frame;
         if (!this.motion || !(frames > 0)) return;
@@ -539,7 +541,7 @@ class Splat extends Element {
             this.timeHidden = at === null;
             if (this.scene) this.scene.forceRender = true;
         }
-        if (at !== null && at / frames !== this.motionTime) {
+        if (at !== null && (at / frames !== this.motionTime || (stepped && this.scene?.lockedRenderMode))) {
             this.showTime(at / frames);
         }
     }
