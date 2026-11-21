@@ -68,6 +68,19 @@ into `doc-nodes.ts`).
   the object's typical spacing, taken from the middle 96% of its centres
   (on the alley 0.24; from the bound it was 1.6, which grew a seed of 1842
   gaussians to 692417).
+- **invert / combine selections**: union, intersection, difference (a
+  without b) and inversion (all but a) of what other select nodes of the
+  object selected - a select node's or one of these. Its inputs a and b take
+  a select node's wire in the graph, or are picked by name in the node pane
+  from the select nodes above it; an empty input is the selection coming
+  in. An input reads what its node left selected when it ran (`result`),
+  and counts as empty, with a note, while that node is undone, bypassed,
+  after this one or on another object. Changing an input's node re-runs the
+  combine, since the history follows a node's wired inputs. A project keeps
+  the wires by the inputs' places in the history, and now keeps each select
+  node's `result` beside its set (`doc-nodes.ts`): restored nodes apply
+  their stored set without running, so without it a combine run again after
+  loading read nothing.
 
 ---
 

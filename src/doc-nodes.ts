@@ -238,6 +238,10 @@ const storeStateNodes = (history: EditOp[], cursor: number, splat: Splat, index:
                 const ranges = op.resolved;
                 if (!ranges) return null;
                 node.ranges = words.add(ranges.data);
+                // what a select node left selected, which a combine node
+                // wired to it reads (select-nodes.ts)
+                const result = (op as any).result;
+                if (result instanceof IndexRanges) node.result = words.add(result.data);
                 // as StateOp.apply: set, clear, toggle
                 const { mask } = op;
                 const bit = op.op as number;
@@ -311,6 +315,9 @@ const restoreStateNode = (stored: StoredNode, splat: Splat, primitives: ScenePri
     if (stored.bypassed) (op as EditOp).bypassed = true;
     if (stored.ranges) {
         op.restore(IndexRanges.fromData(words.slice(stored.ranges[0], stored.ranges[0] + stored.ranges[1])));
+    }
+    if (stored.result && 'result' in op) {
+        (op as any).result = IndexRanges.fromData(words.slice(stored.result[0], stored.result[0] + stored.result[1]));
     }
     return op;
 };

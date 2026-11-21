@@ -2,9 +2,9 @@ import { Color, Mat4, Vec3 } from 'playcanvas';
 
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
-import { SelectMode } from '../edit-ops';
+import { EditOp, MultiOp, SelectMode, SelectOp } from '../edit-ops';
 import { Events } from '../events';
-import { Attribute, AttributeSelectOp, ColourSelectOp, ColourSpace, GrowDirection, GrowSelectOp, MotionMetric, MotionSelectOp, RegionSelectOp, RegionShape, modelFrames, SELECTION_NODE_KINDS, SELECTION_NODE_NAMES, SelectionNodeOp } from '../select-nodes';
+import { Attribute, AttributeSelectOp, ColourSelectOp, CombineOperation, CombineSelectOp, isSelectionSource, ColourSpace, GrowDirection, GrowSelectOp, MotionMetric, MotionSelectOp, RegionSelectOp, RegionShape, modelFrames, SELECTION_NODE_KINDS, SELECTION_NODE_NAMES, SelectionNodeOp } from '../select-nodes';
 import { Splat } from '../splat';
 
 /**
@@ -475,6 +475,50 @@ const buildGrow = (face: Face, op: GrowSelectOp) => {
     face.note(t(op.splat.motion ? 'node.selgrow.note-4d' : 'node.selgrow.note'));
 };
 
+const buildCombine = (face: Face, op: CombineSelectOp) => {
+    face.choice<CombineOperation>(t('node.selcombine.operation'), [
+        ['union', t('node.selcombine.union')],
+        ['intersect', t('node.selcombine.intersect')],
+        ['difference', t('node.selcombine.difference')],
+        ['invert', t('node.selcombine.invert')]
+    ], op.operation, o => op.setOperation(o));
+
+    // the select nodes of the object above this one, to pick an input from
+    const { ops } = face.events.invoke('edit.history') as { ops: EditOp[] };
+    const at = ops.indexOf(op);
+    const above = ops.slice(0, Math.max(0, at)).flatMap(o => (o instanceof MultiOp ? o.ops : [o]))
+    .filter(o => isSelectionSource(o) && (o as SelectionNodeOp).splat === op.splat) as (SelectOp | SelectionNodeOp)[];
+    const nameOf = (s: SelectOp | SelectionNodeOp) => {
+        const n = ops.findIndex(o => o === s || (o instanceof MultiOp && o.ops.includes(s)));
+        return `${n + 1}: ${s instanceof SelectionNodeOp ? (s.label || s.describe()) : 'select'}`;
+    };
+
+    (['a', 'b'] as const).forEach((port) => {
+        if (port === 'b' && op.operation === 'invert') return;
+        const row = face.row(port);
+        const select = document.createElement('select');
+        select.className = 'nd-text';
+        const none = document.createElement('option');
+        none.value = '-1';
+        none.textContent = t('node.selcombine.incoming');
+        select.appendChild(none);
+        above.forEach((s, i) => {
+            const o = document.createElement('option');
+            o.value = `${i}`;
+            o.textContent = nameOf(s);
+            if (op[port] === s) o.selected = true;
+            select.appendChild(o);
+        });
+        select.addEventListener('change', () => {
+            const i = parseInt(select.value, 10);
+            face.refresh(() => op.connect(port, i >= 0 ? above[i] : null));
+        });
+        row.appendChild(select);
+    });
+    outcome(face, op);
+    face.note(t('node.selcombine.note'));
+};
+
 /**
  * Fill the node pane for one of these nodes. False for an op that is not
  * one, so the pane carries on with its own kinds.
@@ -488,6 +532,7 @@ const buildSelectionNodeFace = (body: HTMLElement, events: Events, op: unknown, 
     if (op instanceof RegionSelectOp) buildRegion(face, op);
     if (op instanceof AttributeSelectOp) buildAttribute(face, op);
     if (op instanceof GrowSelectOp) buildGrow(face, op);
+    if (op instanceof CombineSelectOp) buildCombine(face, op);
     return true;
 };
 

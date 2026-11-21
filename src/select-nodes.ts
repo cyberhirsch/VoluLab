@@ -1,6 +1,6 @@
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { EditOp, SelectMode, SelectOp, StateOp } from './edit-ops';
+import { EditOp, PortSpec, SelectMode, SelectOp, StateOp } from './edit-ops';
 import { IndexRanges } from './index-ranges';
 import { Splat } from './splat';
 import { State } from './splat-state';
@@ -97,12 +97,12 @@ const lifetime = (splat: Splat, i: number) => {
 };
 
 type KeyedHook = (op: SelectionNodeOp, key: string, frame: number) => number | undefined;
-type AppliedHook = (op: EditOp) => boolean;
+type PositionHook = (op: EditOp) => { index: number, applied: boolean };
 
 // what the static hooks below hold. In an object of their own rather than
 // as static fields: a static never assigned inside the bundle is inlined as
 // its initial value by the minifier, and the hook set from outside ignored
-const hooks: { keyed: KeyedHook | null, applied: AppliedHook | null } = { keyed: null, applied: null };
+const hooks: { keyed: KeyedHook | null, position: PositionHook | null } = { keyed: null, position: null };
 
 abstract class SelectionNodeOp extends StateOp {
     /**
@@ -118,13 +118,13 @@ abstract class SelectionNodeOp extends StateOp {
         return hooks.keyed;
     }
 
-    /** whether an op is applied in the history now: set by the editor */
-    static set applied(hook: AppliedHook | null) {
-        hooks.applied = hook;
+    /** where an op stands in the history and whether it is applied now: set by the editor */
+    static set position(hook: PositionHook | null) {
+        hooks.position = hook;
     }
 
-    static get applied() {
-        return hooks.applied;
+    static get position() {
+        return hooks.position;
     }
 
     abstract readonly kind: SelectionNodeKind;
@@ -234,6 +234,11 @@ abstract class SelectionNodeOp extends StateOp {
         this.result = null;
     }
 }
+
+/** a select node of either sort: a gesture's, or one of these */
+const isSelectionSource = (op: unknown): op is SelectOp | SelectionNodeOp => {
+    return op instanceof SelectOp || op instanceof SelectionNodeOp;
+};
 
 // ---------------------------------------------------------------------------
 // select by motion
@@ -893,10 +898,142 @@ class GrowSelectOp extends SelectionNodeOp {
 }
 
 // ---------------------------------------------------------------------------
+// invert / combine selections
+
+type CombineOperation = 'union' | 'intersect' | 'difference' | 'invert';
+
+type SelectionSource = SelectOp | SelectionNodeOp;
+
+/**
+ * Combines the selections of other select nodes of the object: union,
+ * intersection, difference (a without b) and inversion (all but a). Its
+ * two inputs, a and b, take the wire of a select node - a gesture's or a
+ * rule's - or are picked from the named select nodes above it in the pane.
+ * An input left empty is the selection coming in, so with only b wired a
+ * union adds b to what is selected, and an inversion with nothing wired
+ * inverts what is selected. What a wired node selected is what it left
+ * selected when it ran; an input whose node is undone, bypassed, after
+ * this one or on another object counts as empty.
+ */
+class CombineSelectOp extends SelectionNodeOp {
+    name = 'combineSelections';
+    readonly kind = 'combine';
+
+    operation: CombineOperation;
+    a: SelectionSource | null = null;
+    b: SelectionSource | null = null;
+
+    constructor(splat: Splat, operation: CombineOperation = 'union') {
+        super(splat, {});
+        this.operation = operation;
+    }
+
+    get ports(): PortSpec[] {
+        return [
+            { name: 'a', label: 'a', accepts: ['selection'], source: this.a },
+            { name: 'b', label: 'b', accepts: ['selection'], source: this.b }
+        ];
+    }
+
+    setOperation(operation: CombineOperation) {
+        this.operation = operation;
+        this.invalidate();
+    }
+
+    connect(port: string, source: SelectionSource | null) {
+        if (port === 'a') this.a = source;
+        if (port === 'b') this.b = source;
+        this.invalidate();
+    }
+
+    /** whether a wired node's selection can be read: applied, ahead of this one, same object */
+    usable(source: SelectionSource | null) {
+        if (!source || source === (this as unknown) || source.splat !== this.splat || !source.result) return false;
+        const at = SelectionNodeOp.position;
+        if (!at) return true;
+        const s = at(source);
+        const me = at(this);
+        return s.applied && (me.index < 0 || s.index < me.index);
+    }
+
+    protected hits(splat: Splat) {
+        const n = splat.splatData.numSplats;
+        const state = splat.splatData.getProp('state') as Uint8Array;
+        const incoming = new Uint8Array(n);
+        for (let i = 0; i < n; ++i) incoming[i] = (state[i] & State.selected) ? 1 : 0;
+
+        const read = (source: SelectionSource | null) => {
+            if (!source) return incoming;
+            const out = new Uint8Array(n);
+            if (!this.usable(source)) {
+                this.warning = 'node.selcombine.unusable';
+                return out;
+            }
+            source.result.forEach((i) => {
+                if (i < n) out[i] = 1;
+            });
+            return out;
+        };
+        const A = read(this.a);
+        const B = read(this.b);
+
+        const out = new Uint8Array(n);
+        for (let i = 0; i < n; ++i) {
+            switch (this.operation) {
+                case 'union': out[i] = A[i] | B[i]; break;
+                case 'intersect': out[i] = A[i] & B[i]; break;
+                case 'difference': out[i] = A[i] & (B[i] ^ 1); break;
+                case 'invert': out[i] = A[i] ^ 1; break;
+            }
+        }
+        return out;
+    }
+
+    /** what an input is called: its node's name, or what it selects by */
+    static nameOf(source: SelectionSource | null) {
+        if (!source) return 'in';
+        if (source instanceof SelectionNodeOp) return source.label || source.describe();
+        return 'select';
+    }
+
+    describe() {
+        const a = CombineSelectOp.nameOf(this.a);
+        const b = CombineSelectOp.nameOf(this.b);
+        switch (this.operation) {
+            case 'union': return `${a} ∪ ${b}`;
+            case 'intersect': return `${a} ∩ ${b}`;
+            case 'difference': return `${a} − ${b}`;
+            case 'invert': return `¬ ${a}`;
+        }
+    }
+
+    protected extra() {
+        return { operation: this.operation };
+    }
+
+    restoreExtra(stored: Record<string, any>) {
+        this.operation = ['union', 'intersect', 'difference', 'invert'].includes(stored.operation) ? stored.operation : 'union';
+    }
+
+    /** wire the inputs again on load, from the nodes restored before it */
+    rewire(lookup: (at: unknown) => unknown, stored: Record<string, any>) {
+        const take = (v: unknown) => (isSelectionSource(v) ? v : null);
+        this.a = take(lookup(stored.aAt));
+        this.b = take(lookup(stored.bAt));
+    }
+
+    destroy() {
+        super.destroy();
+        this.a = null;
+        this.b = null;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // the nodes, by kind
 
 // the kinds built, in menu order
-const SELECTION_NODE_KINDS: SelectionNodeKind[] = ['motion', 'colour', 'region', 'attribute', 'grow'];
+const SELECTION_NODE_KINDS: SelectionNodeKind[] = ['motion', 'colour', 'region', 'attribute', 'grow', 'combine'];
 
 /** the op name each kind goes by, for the graph's labels */
 const SELECTION_NODE_NAMES: Record<SelectionNodeKind, string> = {
@@ -908,11 +1045,6 @@ const SELECTION_NODE_NAMES: Record<SelectionNodeKind, string> = {
     combine: 'combineSelections'
 };
 
-/** a select node of either sort: a gesture's, or one of these */
-const isSelectionSource = (op: unknown): op is SelectOp | SelectionNodeOp => {
-    return op instanceof SelectOp || op instanceof SelectionNodeOp;
-};
-
 /** A new node of a kind, with its defaults; null for a kind not built yet. */
 const makeSelectionNode = (kind: string, splat: Splat): SelectionNodeOp | null => {
     switch (kind) {
@@ -921,6 +1053,7 @@ const makeSelectionNode = (kind: string, splat: Splat): SelectionNodeOp | null =
         case 'region': return RegionSelectOp.around(splat);
         case 'attribute': return AttributeSelectOp.fromView(splat);
         case 'grow': return GrowSelectOp.forObject(splat);
+        case 'combine': return new CombineSelectOp(splat);
         default: return null;
     }
 };
@@ -951,6 +1084,8 @@ export {
     type Attribute,
     GrowSelectOp,
     type GrowDirection,
+    CombineSelectOp,
+    type CombineOperation,
     SELECTION_NODE_KINDS,
     SELECTION_NODE_NAMES,
     isSelectionSource,
