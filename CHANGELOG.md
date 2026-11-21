@@ -9,6 +9,25 @@ months finds out why before they change it.
 
 ---
 
+## Exposure over time
+
+The automatic half of "exposure / white balance over time"; the manual
+half is the colour node's own exposure and temperature, keyed over time by
+the keyframe work. Each frame's mean colour is measured, opacity and
+lifetime weighted, over a sample of at most 300,000 of the gaussians drawn
+there; the gain per frame takes its luminance (or, with white balance,
+each channel) to the mean over all frames, or with a window to the mean of
+the frames around it, which keeps slow changes. A gaussian is drawn over
+a stretch of frames, so it gets the mean log gain over those (prefix
+sums), quantised to 1/64 stop - a palette slot per distinct gain.
+
+A gaussian in the global set stands in every frame with the same colour,
+so drift lives in the time-local ones and that is where the correction
+lands. The alley sample has no drift to speak of (+-0.002 EV). With one
+made - the moving part's gaussians centred in the second half a stop up -
+it corrects 0.94 EV across the sequence, and a second node after it finds
+0.27 EV left.
+
 ## Colour match
 
 Merged captures should read as one scene: this grades an object's colours

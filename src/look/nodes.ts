@@ -5,6 +5,7 @@
  */
 
 import { colourMatch } from './colour-match';
+import { exposureDrift } from './exposure-drift';
 import { type LookSpec } from './fields';
 import { fillHole } from './fill-hole';
 import { flickerRemoval } from './flicker-removal';
@@ -20,7 +21,8 @@ const LOOK_NODES: LookSpec[] = [
     fillHole,
     freezeBackground,
     opacity,
-    colourMatch
+    colourMatch,
+    exposureDrift
 ];
 
 /** what the graph calls each of them, by op name */
