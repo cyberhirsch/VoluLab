@@ -4,7 +4,7 @@ import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
 import { SelectMode } from '../edit-ops';
 import { Events } from '../events';
-import { ColourSelectOp, ColourSpace, MotionMetric, MotionSelectOp, RegionSelectOp, RegionShape, modelFrames, SELECTION_NODE_KINDS, SELECTION_NODE_NAMES, SelectionNodeOp } from '../select-nodes';
+import { Attribute, AttributeSelectOp, ColourSelectOp, ColourSpace, MotionMetric, MotionSelectOp, RegionSelectOp, RegionShape, modelFrames, SELECTION_NODE_KINDS, SELECTION_NODE_NAMES, SelectionNodeOp } from '../select-nodes';
 import { Splat } from '../splat';
 
 /**
@@ -435,6 +435,32 @@ const buildRegion = (face: Face, op: RegionSelectOp) => {
     previewRegion(face, op);
 };
 
+const buildAttribute = (face: Face, op: AttributeSelectOp) => {
+    const attrs: Attribute[] = ['opacity', 'scale', 'elongation', 'distance', 'density'];
+    face.choice<Attribute>(t('node.selattr.attribute'), attrs.map(a => [a, t(`node.selattr.${a}`)] as [Attribute, string]), op.attribute, a => op.setAttribute(a));
+    face.numbers(t('node.selmotion.range'), [op.params.min, op.params.max], 0, 0.01, (v) => {
+        op.setParam('min', Math.min(v[0], v[1]));
+        op.setParam('max', Math.max(v[0], v[1]));
+    });
+    face.histogram(op.values(op.splat), op.params.min, op.params.max, op.logScale, (a, b) => {
+        op.setParam('min', a);
+        op.setParam('max', b);
+    });
+    if (op.attribute === 'distance') {
+        face.numbers(t('node.selattr.camera'), [op.params.cx, op.params.cy, op.params.cz], 0, 0.1, (v) => {
+            op.setParam('cx', v[0]);
+            op.setParam('cy', v[1]);
+            op.setParam('cz', v[2]);
+        });
+        face.button(t('node.selattr.from-view'), () => face.refresh(() => op.takeCamera()));
+    }
+    if (op.attribute === 'density') {
+        face.number(t('node.selattr.cell'), op.cellSize(op.splat), 0, 0.001, v => op.setParam('cell', Math.max(0, v)));
+    }
+    outcome(face, op);
+    face.note(t(`node.selattr.note-${op.attribute}`));
+};
+
 /**
  * Fill the node pane for one of these nodes. False for an op that is not
  * one, so the pane carries on with its own kinds.
@@ -446,6 +472,7 @@ const buildSelectionNodeFace = (body: HTMLElement, events: Events, op: unknown, 
     if (op instanceof MotionSelectOp) buildMotion(face, op);
     if (op instanceof ColourSelectOp) buildColour(face, op);
     if (op instanceof RegionSelectOp) buildRegion(face, op);
+    if (op instanceof AttributeSelectOp) buildAttribute(face, op);
     return true;
 };
 

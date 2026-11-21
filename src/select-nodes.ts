@@ -540,10 +540,172 @@ class RegionSelectOp extends SelectionNodeOp {
 }
 
 // ---------------------------------------------------------------------------
+// select by attribute
+
+type Attribute = 'opacity' | 'scale' | 'elongation' | 'distance' | 'density';
+
+/** a grid cell along one axis, 0..2^17 */
+const cellIndex = (v: number, cell: number) => Math.max(0, Math.min(131071, Math.floor(v / cell) + 65536));
+
+/** the uniform scale of a world transform: how long its x axis is */
+const worldScale = (m: Mat4) => Math.hypot(m.data[0], m.data[1], m.data[2]);
+
+/**
+ * Selects by a measure of each gaussian against a range: how opaque it is,
+ * how large (its longest axis, in world units), how elongated (longest
+ * over shortest axis - the needles), how far from a camera position, or
+ * how dense its neighbourhood is (how many gaussians share its cell of a
+ * grid). The node pane draws the measure as a histogram to pick the range
+ * from. Floaters are faint, large or alone; needles are elongated.
+ */
+class AttributeSelectOp extends SelectionNodeOp {
+    name = 'selectByAttribute';
+    readonly kind = 'attribute';
+
+    attribute: Attribute;
+
+    constructor(splat: Splat, attribute: Attribute = 'opacity', params: Record<string, number> = {}) {
+        super(splat, { min: 0, max: 0.1, cx: 0, cy: 0, cz: 0, cell: 0, ...params });
+        this.attribute = attribute;
+    }
+
+    /** a node that measures from where the camera stands now */
+    static fromView(splat: Splat) {
+        const op = new AttributeSelectOp(splat);
+        op.takeCamera();
+        return op;
+    }
+
+    takeCamera() {
+        const p = this.splat?.scene?.camera?.position;
+        if (!p) return;
+        this.params.cx = p.x;
+        this.params.cy = p.y;
+        this.params.cz = p.z;
+        this.invalidate();
+    }
+
+    /** whether the measure reads best on a log scale */
+    get logScale() {
+        return this.attribute === 'scale' || this.attribute === 'elongation' || this.attribute === 'density';
+    }
+
+    /** a range that suits the attribute, for when it is changed */
+    static defaults(attribute: Attribute): [number, number] {
+        switch (attribute) {
+            case 'opacity': return [0, 0.1];
+            case 'scale': return [0.1, 1e6];
+            case 'elongation': return [10, 1e6];
+            case 'distance': return [0, 10];
+            case 'density': return [0, 2];
+        }
+    }
+
+    setAttribute(attribute: Attribute) {
+        this.attribute = attribute;
+        [this.params.min, this.params.max] = AttributeSelectOp.defaults(attribute);
+        this.invalidate();
+    }
+
+    /**
+     * The grid cell the density is counted in: the setting, or about 8
+     * gaussians a cell. The volume is that of the middle 96% of the
+     * centres along each axis, not the bound, which a few far floaters
+     * make many times too large.
+     */
+    cellSize(splat: Splat) {
+        if (this.params.cell > 0) return this.params.cell;
+        const p = worldCenters(splat);
+        const n = splat.splatData.numSplats;
+        const step = Math.max(1, Math.floor(n / 100000));
+        let volume = 1;
+        for (let k = 0; k < 3; ++k) {
+            const v: number[] = [];
+            for (let i = 0; i < n; i += step) v.push(p[i * 3 + k]);
+            v.sort((a, b) => a - b);
+            volume *= Math.max(1e-6, v[Math.floor(v.length * 0.98)] - v[Math.floor(v.length * 0.02)]);
+        }
+        return Math.cbrt(volume * 0.96 / Math.max(1, n) * 8);
+    }
+
+    /** the measure per gaussian: what the node selects on, and the histogram's data */
+    values(splat: Splat): Float32Array {
+        const data = splat.splatData;
+        const n = data.numSplats;
+        const out = new Float32Array(n);
+        const s = worldScale(splat.worldTransform);
+        switch (this.attribute) {
+            case 'opacity': {
+                const o = data.getProp('opacity') as Float32Array;
+                for (let i = 0; i < n; ++i) out[i] = o ? sigmoid(o[i]) : 1;
+                break;
+            }
+            case 'scale':
+            case 'elongation': {
+                const a = data.getProp('scale_0') as Float32Array;
+                const b = data.getProp('scale_1') as Float32Array;
+                const c = data.getProp('scale_2') as Float32Array;
+                if (!a || !b || !c) break;
+                for (let i = 0; i < n; ++i) {
+                    // scales are stored as logs
+                    const hi = Math.max(a[i], b[i], c[i]);
+                    const lo = Math.min(a[i], b[i], c[i]);
+                    out[i] = this.attribute === 'scale' ? Math.exp(hi) * s : Math.exp(hi - lo);
+                }
+                break;
+            }
+            case 'distance': {
+                const p = worldCenters(splat);
+                const { cx, cy, cz } = this.params;
+                for (let i = 0; i < n; ++i) out[i] = Math.hypot(p[i * 3] - cx, p[i * 3 + 1] - cy, p[i * 3 + 2] - cz);
+                break;
+            }
+            case 'density': {
+                const p = worldCenters(splat);
+                const cell = this.cellSize(splat);
+                const keys = new Float64Array(n);
+                const counts = new Map<number, number>();
+                for (let i = 0; i < n; ++i) {
+                    // one number per cell, exact: 17 bits an axis
+                    const k = cellIndex(p[i * 3], cell) * 17179869184 + cellIndex(p[i * 3 + 1], cell) * 131072 + cellIndex(p[i * 3 + 2], cell);
+                    keys[i] = k;
+                    counts.set(k, (counts.get(k) ?? 0) + 1);
+                }
+                for (let i = 0; i < n; ++i) out[i] = counts.get(keys[i]);
+                break;
+            }
+        }
+        return out;
+    }
+
+    protected hits(splat: Splat) {
+        const v = this.values(splat);
+        const lo = this.value('min');
+        const hi = this.value('max');
+        const out = new Uint8Array(v.length);
+        for (let i = 0; i < v.length; ++i) out[i] = v[i] >= lo && v[i] <= hi ? 1 : 0;
+        return out;
+    }
+
+    describe() {
+        const f = (v: number) => (v >= 1e6 ? '∞' : `${+v.toPrecision(3)}`);
+        return `${this.attribute} ${f(this.params.min)}–${f(this.params.max)}`;
+    }
+
+    protected extra() {
+        return { attribute: this.attribute };
+    }
+
+    restoreExtra(stored: Record<string, any>) {
+        this.attribute = ['opacity', 'scale', 'elongation', 'distance', 'density'].includes(stored.attribute) ? stored.attribute : 'opacity';
+    }
+}
+
+// ---------------------------------------------------------------------------
 // the nodes, by kind
 
 // the kinds built, in menu order
-const SELECTION_NODE_KINDS: SelectionNodeKind[] = ['motion', 'colour', 'region'];
+const SELECTION_NODE_KINDS: SelectionNodeKind[] = ['motion', 'colour', 'region', 'attribute'];
 
 /** the op name each kind goes by, for the graph's labels */
 const SELECTION_NODE_NAMES: Record<SelectionNodeKind, string> = {
@@ -566,6 +728,7 @@ const makeSelectionNode = (kind: string, splat: Splat): SelectionNodeOp | null =
         case 'motion': return new MotionSelectOp(splat);
         case 'colour': return new ColourSelectOp(splat);
         case 'region': return RegionSelectOp.around(splat);
+        case 'attribute': return AttributeSelectOp.fromView(splat);
         default: return null;
     }
 };
@@ -592,6 +755,8 @@ export {
     type ColourSpace,
     RegionSelectOp,
     type RegionShape,
+    AttributeSelectOp,
+    type Attribute,
     SELECTION_NODE_KINDS,
     SELECTION_NODE_NAMES,
     isSelectionSource,

@@ -48,6 +48,15 @@ into `doc-nodes.ts`).
   The hooks are accessors over a module object rather than static fields:
   a static never assigned inside the bundle is inlined by the minifier as
   its initial value, so a hook set from outside was ignored.
+- **select by attribute**: by opacity, size (the longest axis, in world
+  units), elongation (longest over shortest axis: the needles), distance
+  from a point (where the camera stood when the node was made, or set again
+  from the view), or density (how many gaussians share each one's cell of a
+  grid; floaters are alone). The node pane draws the measure as a histogram
+  to drag the range on. Without a set cell size a cell holds about 8 on
+  average, worked out from the middle 96% of the centres per axis: from the
+  bound, a few far floaters made the alley's cell 1.55 units and up to
+  252000 gaussians a cell, against 0.24 units now.
 
 ---
 
