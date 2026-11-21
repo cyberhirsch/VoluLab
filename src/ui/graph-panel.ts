@@ -108,7 +108,8 @@ const OP_LABELS: Record<string, string> = {
     debugView: 'debug view',
     output: 'output',
     renderPasses: 'render passes',
-    viewer: 'viewer'
+    viewer: 'viewer',
+    cache: 'cache'
 };
 
 // A bundled edit is named by the member that does the work, not by the fact
@@ -1211,6 +1212,10 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addViewerNode', splat)
                     },
                     {
+                        label: 'cache',
+                        action: () => this.events.fire('graph.addCacheNode', splat)
+                    },
+                    {
                         label: 'output',
                         action: () => this.events.fire('graph.addOutputNode', splat)
                     }
@@ -1539,6 +1544,13 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addViewerNode')
+            },
+            {
+                // keeps what the nodes above it resolved, per frame
+                label: 'add cache node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addCacheNode')
             },
             {
                 label: 'add output node',

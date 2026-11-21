@@ -1,10 +1,11 @@
 import { ZipFileSystem } from '@playcanvas/splat-transform';
 
 import { EditHistory } from './edit-history';
-import { EditOp } from './edit-ops';
+import { EditOp, StateOp } from './edit-ops';
 import { Events } from './events';
+import { IndexRanges } from './index-ranges';
 import {
-    PASS_NAMES, RenderPassesOp, RenderPassSettings, ViewerOp, defaultRenderPassSettings
+    CacheEntry, CacheOp, PASS_NAMES, RenderPassesOp, RenderPassSettings, ViewerOp, defaultRenderPassSettings
 } from './inspect-ops';
 import { BrowserFileSystem } from './io';
 import { PassSink, renderPasses } from './render-passes';
@@ -189,6 +190,242 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
         if (bypassed) op.bypassed = true;
         events.fire('edit.add', op);
         return op;
+    });
+
+    // --- cache -----------------------------------------------------------
+
+    // each wrapped node's own question, and the cache that answers for it
+    type Wrapped = { original: (splat: Splat) => IndexRanges | Promise<IndexRanges>, cache: CacheOp, lastKey: string | null };
+    const wrapped = new WeakMap<StateOp, Wrapped>();
+    const cacheIds = new WeakMap<CacheOp, number>();
+    let nextCacheId = 1;
+
+    /** The state nodes above a cache on its object, top down. */
+    const upstreamOf = (cache: CacheOp) => {
+        const ops = history().ops;
+        const at = ops.indexOf(cache);
+        if (at < 0) return [] as StateOp[];
+        const out: StateOp[] = [];
+        for (let i = 0; i < at; i++) {
+            const op = ops[i];
+            const all = (op as any).ops instanceof Array ? (op as any).ops : [op];
+            all.forEach((inner: EditOp) => {
+                if (inner instanceof StateOp && inner.splat === cache.splat) out.push(inner);
+            });
+        }
+        return out;
+    };
+
+    const live = (cache: CacheOp) => !cache.destroyed && !cache.bypassed && history().ops.includes(cache);
+
+    const fileOf = (cache: CacheOp, key: string) => {
+        if (!cacheIds.has(cache)) cacheIds.set(cache, nextCacheId++);
+        return `cache_${cacheIds.get(cache)}_${key.replace(/[^a-z0-9]+/gi, '_').slice(0, 80)}.bin`;
+    };
+
+    const writeDisk = async (cache: CacheOp, key: string) => {
+        if (!cache.settings.disk || !cache.dir) return;
+        const entry = cache.frames.get(key);
+        if (!entry) return;
+        const upstream = upstreamOf(cache);
+        const parts: number[] = [];
+        let words = 1;
+        entry.forEach((ranges, op) => {
+            const at = upstream.indexOf(op as StateOp);
+            if (at < 0) return;
+            parts.push(at);
+            words += 2 + ranges.data.length;
+        });
+        const out = new Uint32Array(words);
+        out[0] = parts.length;
+        let w = 1;
+        entry.forEach((ranges, op) => {
+            const at = upstream.indexOf(op as StateOp);
+            if (at < 0) return;
+            out[w++] = at;
+            out[w++] = ranges.data.length;
+            out.set(ranges.data, w);
+            w += ranges.data.length;
+        });
+        try {
+            const file = await cache.dir.getFileHandle(fileOf(cache, key), { create: true });
+            const stream = await file.createWritable();
+            await stream.write(out.buffer);
+            await stream.close();
+        } catch (error) {
+            console.warn('cache: could not write to the folder', error);
+        }
+    };
+
+    const readDisk = async (cache: CacheOp, key: string): Promise<CacheEntry | null> => {
+        if (!cache.settings.disk || !cache.dir) return null;
+        try {
+            const file = await (await cache.dir.getFileHandle(fileOf(cache, key))).getFile();
+            const words = new Uint32Array(await file.arrayBuffer());
+            const upstream = upstreamOf(cache);
+            const entry: CacheEntry = new Map();
+            let w = 1;
+            for (let k = 0; k < words[0]; k++) {
+                const at = words[w++];
+                const n = words[w++];
+                if (upstream[at]) entry.set(upstream[at], IndexRanges.fromData(words.slice(w, w + n)));
+                w += n;
+            }
+            return entry;
+        } catch {
+            return null;
+        }
+    };
+
+    const clearDisk = async (cache: CacheOp) => {
+        if (!cache.dir) return;
+        const prefix = `cache_${cacheIds.get(cache)}_`;
+        try {
+            for await (const name of (cache.dir as any).keys()) {
+                if (name.startsWith(prefix)) await cache.dir.removeEntry(name);
+            }
+        } catch {
+            // the folder went away; nothing to clear
+        }
+    };
+
+    const clearCache = (cache: CacheOp) => {
+        cache.clear();
+        clearDisk(cache);
+    };
+
+    /**
+     * Put the cache between each state node above it and its question.
+     *
+     * A node asks again when it was invalidated: the data under it was
+     * replaced (a new frame of a sequence) or something above it changed. A
+     * frame it has an answer for is answered from the cache; a node asking
+     * again on the frame it last asked on means the question changed, and
+     * the whole cache goes.
+     */
+    const wrap = (cache: CacheOp) => {
+        upstreamOf(cache).forEach((op) => {
+            const known = wrapped.get(op);
+            if (known && known.cache === cache) return;
+            if (known && live(known.cache)) return;
+            const original = known?.original ?? (op as any).resolver;
+            const w: Wrapped = { original, cache, lastKey: null };
+            wrapped.set(op, w);
+            (op as any).resolver = async (splat: Splat) => {
+                const c = w.cache;
+                if (!live(c) || !upstreamOf(c).includes(op)) return w.original(splat);
+                const key = frameKey(splat);
+                if (w.lastKey === key) {
+                    clearCache(c);
+                }
+                w.lastKey = key;
+                let entry = c.frames.get(key);
+                if (!entry?.has(op)) {
+                    const fromDisk = await readDisk(c, key);
+                    if (fromDisk?.has(op)) {
+                        entry = fromDisk;
+                        c.frames.set(key, entry);
+                    }
+                }
+                const hit = entry?.get(op);
+                if (hit) {
+                    c.hits++;
+                    return hit;
+                }
+                c.misses++;
+                const ranges = await w.original(splat);
+                if (!c.frames.has(key)) c.frames.set(key, new Map());
+                c.frames.get(key).set(op, ranges);
+                if (op === upstreamOf(c).at(-1)) writeDisk(c, key);
+                return ranges;
+            };
+            // what it already resolved is the frame it stands on now
+            if (op.resolved) {
+                const key = frameKey(cache.splat);
+                if (!cache.frames.has(key)) cache.frames.set(key, new Map());
+                cache.frames.get(key).set(op, op.resolved);
+                w.lastKey = key;
+            }
+        });
+        writeDisk(cache, frameKey(cache.splat));
+    };
+
+    const makeCache = (splat: Splat, disk = false) => {
+        const op = new CacheOp(splat, { disk });
+        cacheIds.set(op, nextCacheId++);
+        const doIt = op.do.bind(op);
+        op.do = () => {
+            doIt();
+            wrap(op);
+        };
+        return op;
+    };
+
+    events.on('graph.addCacheNode', (target?: Splat) => {
+        addTarget(target).forEach(splat => appendAndOpen(makeCache(splat)));
+    });
+
+    events.function('cache.addNode', (splat: Splat, bypassed?: boolean) => {
+        if (!splat) return null;
+        // the folder is not stored: disk comes back off until one is picked
+        const op = makeCache(splat, false);
+        if (bypassed) op.bypassed = true;
+        events.fire('edit.add', op);
+        return op;
+    });
+
+    events.function('cache.clear', (op: CacheOp) => {
+        clearCache(op);
+        events.fire('edit.changed');
+    });
+
+    /** Turn writing to a folder on (one picked, or handed in) or off. */
+    events.function('cache.setDisk', async (op: CacheOp, on: boolean, dir?: FileSystemDirectoryHandle) => {
+        if (!on) {
+            op.settings.disk = false;
+            op.dir = null;
+            events.fire('edit.changed');
+            return true;
+        }
+        let folder = dir;
+        if (!folder) {
+            if (!(window as any).showDirectoryPicker) return false;
+            try {
+                folder = await (window as any).showDirectoryPicker({ id: 'volulab-cache', mode: 'readwrite' });
+            } catch {
+                return false;
+            }
+        }
+        op.dir = folder;
+        op.settings.disk = true;
+        for (const key of op.frames.keys()) await writeDisk(op, key);
+        events.fire('edit.changed');
+        return true;
+    });
+
+    /**
+     * Fill the cache for every frame of a PLY sequence, by stepping the
+     * sequence through them, and go back to the frame shown.
+     */
+    events.function('cache.bake', async (op: CacheOp) => {
+        const source = events.invoke('sequence.source');
+        if (!source || events.invoke('sequence.splat') !== op.splat || source.showFrame) return 0;
+        const frames = source.frameCount as number;
+        const back = events.invoke('timeline.frame') ?? 0;
+        events.fire('progressStart', i18n.t('node.cache.bake'), false);
+        try {
+            for (let f = 0; f < frames; f++) {
+                await events.invoke('plysequence.setFrameAsync', f);
+                await scene.commandQueue.enqueue(() => {});
+                events.fire('progressUpdate', { text: `${f + 1} / ${frames}`, progress: 100 * (f + 1) / frames });
+            }
+        } finally {
+            await events.invoke('plysequence.setFrameAsync', back);
+            await scene.commandQueue.enqueue(() => {});
+            events.fire('progressEnd');
+            events.fire('edit.changed');
+        }
+        return frames;
     });
 };
 

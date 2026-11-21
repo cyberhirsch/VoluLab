@@ -1,3 +1,4 @@
+import { IndexRanges } from './index-ranges';
 import type { Splat } from './splat';
 
 /**
@@ -89,16 +90,83 @@ class ViewerOp {
     }
 }
 
-const isInspectOp = (op: unknown): op is RenderPassesOp | ViewerOp => {
-    return op instanceof RenderPassesOp || op instanceof ViewerOp;
+type CacheSettings = {
+    /** also write each entry to a folder picked by the user */
+    disk: boolean;
+};
+
+/** What one cached frame holds: the set each node above resolved to. */
+type CacheEntry = Map<object, IndexRanges>;
+
+/**
+ * Keeps what the nodes above it on this object resolved to - a selection, a
+ * cleanup, a decimate - per frame of the object's data, so a frame shown
+ * again, or the same frame after an edit further down, does not ask them
+ * again. An edit above it, or anything that makes those nodes ask again on
+ * a frame they already answered, empties it. inspect-nodes.ts does the
+ * work: it puts itself between each node above and its question.
+ */
+class CacheOp {
+    name = 'cache';
+    splat: Splat;
+    settings: CacheSettings;
+    bypassed?: boolean;
+
+    /** by frame key (see inspect-nodes.ts frameKey) */
+    frames = new Map<string, CacheEntry>();
+    hits = 0;
+    misses = 0;
+    clears = 0;
+    /** the folder entries also go to, while disk is on; not stored */
+    dir: FileSystemDirectoryHandle | null = null;
+    destroyed = false;
+
+    constructor(splat: Splat, settings: CacheSettings) {
+        this.splat = splat;
+        this.settings = settings;
+    }
+
+    get sourceLabel() {
+        return `${this.frames.size} frame${this.frames.size === 1 ? '' : 's'}`;
+    }
+
+    get bytes() {
+        let n = 0;
+        this.frames.forEach(entry => entry.forEach((r) => {
+            n += r.data.byteLength;
+        }));
+        return n;
+    }
+
+    clear() {
+        if (this.frames.size) this.clears++;
+        this.frames.clear();
+    }
+
+    do() {}
+
+    undo() {}
+
+    destroy() {
+        this.destroyed = true;
+        this.frames.clear();
+        this.splat = null;
+    }
+}
+
+const isInspectOp = (op: unknown): op is RenderPassesOp | ViewerOp | CacheOp => {
+    return op instanceof RenderPassesOp || op instanceof ViewerOp || op instanceof CacheOp;
 };
 
 export {
     type PassName,
     type RenderPassSettings,
+    type CacheSettings,
+    type CacheEntry,
     PASS_NAMES,
     defaultRenderPassSettings,
     RenderPassesOp,
     ViewerOp,
+    CacheOp,
     isInspectOp
 };

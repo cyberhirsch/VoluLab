@@ -1,6 +1,6 @@
 import { i18n } from './localization';
 import { Events } from '../events';
-import { PASS_NAMES, RenderPassesOp, ViewerOp } from '../inspect-ops';
+import { CacheOp, PASS_NAMES, RenderPassesOp, ViewerOp } from '../inspect-ops';
 
 /**
  * The node pane's faces for the output and inspection nodes: render passes,
@@ -20,7 +20,7 @@ const pct = (a: number, b: number) => (b > 0 ? `${(100 * a / b).toFixed(1)} %` :
 const num = (n: number) => n.toLocaleString();
 const fix = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed(3));
 
-const buildInspectNode = (body: HTMLElement, op: RenderPassesOp | ViewerOp, index: number, events: Events, rebuild: () => void) => {
+const buildInspectNode = (body: HTMLElement, op: RenderPassesOp | ViewerOp | CacheOp, index: number, events: Events, rebuild: () => void) => {
     const row = (label: string) => {
         const r = el('div', 'nd-row');
         r.appendChild(el('div', 'nd-row-label', label));
@@ -112,6 +112,28 @@ const buildInspectNode = (body: HTMLElement, op: RenderPassesOp | ViewerOp, inde
             action(i18n.t('node.viewer.view'), () => events.invoke('viewer.view', op), !!op.bypassed);
         }
         note(i18n.t('node.viewer.note'));
+        return;
+    }
+
+    if (op instanceof CacheOp) {
+        stat(i18n.t('node.cache.frames'), num(op.frames.size));
+        stat(i18n.t('node.cache.memory'), megabytes(op.bytes));
+        stat(i18n.t('node.cache.hits'), `${num(op.hits)} / ${num(op.hits + op.misses)}`);
+        stat(i18n.t('node.cache.cleared'), num(op.clears));
+        const disk = el('div', 'nd-choices');
+        disk.appendChild(choice(i18n.t('node.cache.memory-only'), !op.settings.disk, () => {
+            events.invoke('cache.setDisk', op, false).then(rebuild);
+        }));
+        disk.appendChild(choice(i18n.t('node.cache.disk'), op.settings.disk, () => {
+            events.invoke('cache.setDisk', op, true).then(rebuild);
+        }));
+        row(i18n.t('node.cache.store')).appendChild(disk);
+        if (op.dir) stat(i18n.t('node.cache.folder'), op.dir.name);
+        const seq = events.invoke('sequence.source');
+        const bakeable = !!seq && events.invoke('sequence.splat') === op.splat && !seq.showFrame;
+        action(i18n.t('node.cache.bake'), () => events.invoke('cache.bake', op).then(rebuild), !bakeable);
+        action(i18n.t('node.cache.clear'), () => events.invoke('cache.clear', op));
+        note(i18n.t(op.splat?.motion ? 'node.cache.note-4d' : 'node.cache.note'));
         return;
     }
 };

@@ -9,6 +9,31 @@ months finds out why before they change it.
 
 ---
 
+## Cache node
+
+Keeps what the state nodes above it on its object (select, cleanup, decimate,
+crop, ...) resolved, per frame of the object's data, and answers for them. It
+sits between each such node and its resolver (`wrap` in `inspect-nodes.ts`): a
+frame it has an answer for is answered from memory, or from a folder (File
+System Access API) when "memory and folder" is on, one file per frame.
+
+What empties it is one rule that needs to know nothing about node parameters:
+a node asking again on the frame it last asked on means its question changed -
+an edit or a bypass above - so the whole cache goes. A node asking on another
+frame is a frame change and is answered if it can be. The frame key is the
+data's asset name and count (`frameKey`): each PLY of a sequence is its own,
+a 3D object or GPU-played 4D model keeps one. "Fill every frame" steps a PLY
+sequence through its frames.
+
+Where it helps: a PLY sequence, whose edits are re-run on every frame
+(`reapplyAll`). Measured on a 5-frame sequence with a decimate above: showing
+the frames again ran the decimate 0 times. A 4D model's data is the same at
+every frame, so the nodes above resolve once anyway; there it holds one entry
+and saves nothing, and its note says so. The folder is not stored in a
+project: a reloaded cache keeps its frames in memory until one is picked.
+
+---
+
 ## Viewer node
 
 A tap, like a Nuke viewer: "view here" shows the object as it stands at the
