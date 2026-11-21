@@ -9,6 +9,7 @@ import { exposureDrift } from './exposure-drift';
 import { type LookSpec } from './fields';
 import { fillHole } from './fill-hole';
 import { flickerRemoval } from './flicker-removal';
+import { fog } from './fog-node';
 import { freezeBackground } from './freeze-background';
 import { opacity } from './opacity';
 import { stillMovingSplit } from './still-moving-split';
@@ -22,7 +23,8 @@ const LOOK_NODES: LookSpec[] = [
     freezeBackground,
     opacity,
     colourMatch,
-    exposureDrift
+    exposureDrift,
+    fog
 ];
 
 /** what the graph calls each of them, by op name */

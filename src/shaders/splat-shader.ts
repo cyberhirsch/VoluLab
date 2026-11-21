@@ -120,6 +120,13 @@ uniform mat3 clrMatrix;     // tint, temperature, levels and saturation, folded
 uniform vec3 clrOffset;
 uniform float clrAlpha;
 
+// a fog node's fog (fog.ts): x mode (0 off, 1 depth, 2 height), y start,
+// z end, w amount; the colour; the plane giving a model-space point its
+// world height
+uniform vec4 fogParams;
+uniform vec3 fogColor;
+uniform vec4 fogPlane;
+
 uniform highp usampler2D splatGrade;    // per-gaussian index into the grade palette
 uniform sampler2D gradePalette;         // palette of colour grades
 
@@ -351,6 +358,15 @@ void main(void) {
             color.xyz *= lit;
         }
         #endif
+
+        // fog sits on the lit colour, before exposure: it is light in the
+        // scene between the camera and the gaussian
+        if (fogParams.x > 0.5) {
+            float fogAt = fogParams.x < 1.5 ? -center.view.z : dot(fogPlane.xyz, modelCenter) + fogPlane.w;
+            float fogMix = smoothstep(fogParams.y, fogParams.z, fogAt);
+            if (fogParams.x > 1.5) fogMix = 1.0 - fogMix;
+            color.xyz = mix(color.xyz, fogColor, fogMix * fogParams.w);
+        }
 
         // camera exposure is the last thing before the sensor, so it lands
         // on scene-referred colour - after the object's grade, before the
@@ -651,6 +667,11 @@ uniform clrMatrix: mat3x3f;     // tint, temperature, levels and saturation, fol
 uniform clrOffset: vec3f;
 uniform clrAlpha: f32;
 
+// a fog node's fog - see the GLSL twin
+uniform fogParams: vec4f;
+uniform fogColor: vec3f;
+uniform fogPlane: vec4f;
+
 var splatGrade: texture_2d<u32>;    // per-gaussian index into the grade palette
 var gradePalette: texture_2d<f32>;  // palette of colour grades
 
@@ -855,6 +876,19 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
             }
             color = vec4f(color.xyz * lit, color.a);
         #endif
+
+        // fog: on the lit colour, before exposure - see the GLSL twin
+        if (uniform.fogParams.x > 0.5) {
+            var fogAt: f32 = -center.view.z;
+            if (uniform.fogParams.x > 1.5) {
+                fogAt = dot(uniform.fogPlane.xyz, modelCenter) + uniform.fogPlane.w;
+            }
+            var fogMix: f32 = smoothstep(uniform.fogParams.y, uniform.fogParams.z, fogAt);
+            if (uniform.fogParams.x > 1.5) {
+                fogMix = 1.0 - fogMix;
+            }
+            color = vec4f(mix(color.xyz, uniform.fogColor, fogMix * uniform.fogParams.w), color.a);
+        }
 
         // camera exposure: scene-referred, before the tonemap
         color = vec4f(color.xyz * uniform.camExposure, color.a);

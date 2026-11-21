@@ -9,6 +9,24 @@ months finds out why before they change it.
 
 ---
 
+## Fog / depth tint
+
+Sits an inserted object into a scene by fading it towards a fog colour:
+by distance from the camera (view depth), or by height (full below one
+world height, gone above another). It is drawn in the splat shader, GLSL
+and WGSL, on the lit colour before the camera's exposure - light in the
+scene between the camera and the gaussian - so it follows the camera, the
+viewport and the video export, with no bake. Three uniforms per object
+(`fog.ts`): mode, range and amount; the colour; and the second row of the
+world matrix, which gives a model-space centre its world height.
+
+The object holds the settings while the node is applied (`Splat.fog`),
+the way it holds a relight node's; with several the last applied wins.
+Whole objects only. A file written from the object does not carry it, and
+a project stores the node. The depth range starts at the camera and ends
+at twice the object's distance from it when the node is made - a
+capture's bound is stretched by floaters, the view is not.
+
 ## Exposure over time
 
 The automatic half of "exposure / white balance over time"; the manual

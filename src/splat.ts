@@ -20,6 +20,7 @@ import {
 import { GradeParams, gradeMatrix } from './color-grade';
 import { CameraSettings } from './edit-ops';
 import { Element, ElementType } from './element';
+import { type FogSettings, fogUniforms } from './fog';
 import { Grade, GradePalette } from './grade-palette';
 import { MotionLayout, MotionSorter } from './motion-sort';
 import type { RelightSettings } from './relight/relighter';
@@ -116,6 +117,12 @@ class Splat extends Element {
      * null. The node sets and clears it; the relighter reads it each frame.
      */
     relight: RelightSettings | null = null;
+
+    /**
+     * This object's fog / depth tint while a fog node is applied, or null.
+     * The node sets and clears it; the shader gets it each frame.
+     */
+    fog: FogSettings | null = null;
     _exposure = 0;
     _brightness = 0;
     _blackPoint = 0;
@@ -1004,6 +1011,12 @@ class Splat extends Element {
         material.setParameter('transformPalette', this.transformPalette.texture);
         material.setParameter('gradePalette', this.gradePalette.texture);
         material.setParameter('splatGrade', this.gradeTexture);
+
+        // a fog node's fog, or none
+        const fog = fogUniforms(this.fog, this.entity.getWorldTransform().data);
+        material.setParameter('fogParams', fog.params);
+        material.setParameter('fogColor', fog.colour);
+        material.setParameter('fogPlane', fog.plane);
 
         // the camera node's exposure and depth of field. The blur needs to
         // know how a scene unit maps to pixels, which is a property of the
