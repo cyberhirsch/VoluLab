@@ -236,6 +236,7 @@ class Splat extends Element {
                 material.setParameter('splatFalloff', this.falloffTexture);
                 material.setParameter('motionTime', this.shaderTime);
                 material.setParameter('motionScale', this.motionScale);
+                material.setParameter('motionShutter', this.motionShutter);
             }
 
             // the debug view: a define, so an object without one pays nothing
@@ -535,11 +536,20 @@ class Splat extends Element {
         return this.motionLooks.reduce((k, look) => k * look.velocity, 1);
     }
 
+    /** How long the shutter is open, in normalised time: the last blur node's say. */
+    get motionShutter() {
+        for (let i = this.motionLooks.length - 1; i >= 0; --i) {
+            if (this.motionLooks[i].shutter > 0) return this.motionLooks[i].shutter;
+        }
+        return 0;
+    }
+
     /** The motion looks changed: the shader and the sort follow. */
     applyMotionLook() {
         const material = this.entity.gsplat?.instance?.material;
         if (material && this.motionTexture) {
             material.setParameter('motionScale', this.motionScale);
+            material.setParameter('motionShutter', this.motionShutter);
         }
         this.motionSorter?.setVelocityScale(this.motionScale);
         if (this.scene) this.scene.forceRender = true;

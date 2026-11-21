@@ -720,6 +720,70 @@ class MotionScaleOp {
     }
 }
 
+/**
+ * Motion blur: each gaussian of a 4D model is stretched along the way it
+ * travels while the shutter is open, and fainter by what it gains in area.
+ * The shutter angle is of a timeline frame, as on a film camera: 180 is
+ * open for half of it. A frame's length in the model's time is taken
+ * through the object's time nodes, so a retimed model blurs as fast as it
+ * now moves.
+ */
+class MotionBlurOp implements FrameDriven {
+    name = 'motionBlurNode';
+    splat: Splat;
+    bypassed?: boolean;
+    /** degrees */
+    shutter = 180;
+    look = { velocity: 1, shutter: 0 };
+
+    constructor(splat: Splat, shutter = 180) {
+        this.splat = splat;
+        this.shutter = shutter;
+    }
+
+    get sourceLabel() {
+        return `${Math.round(this.shutter)}°`;
+    }
+
+    get applied() {
+        return this.splat.motionLooks.includes(this.look);
+    }
+
+    /** how long the shutter is open at a timeline frame, in the model's normalised time */
+    private open(frame: number) {
+        const a = modelTimeAt(this.splat, frame - 0.5);
+        const b = modelTimeAt(this.splat, frame + 0.5);
+        const per = a !== null && b !== null ? Math.abs(b - a) : 1 / Math.max(1, this.splat.motionFrames);
+        return Math.max(0, this.shutter) / 360 * per;
+    }
+
+    do() {
+        this.look.shutter = this.open(this.splat.timelineFrame);
+        this.splat.motionLooks.push(this.look);
+        this.splat.applyMotionLook();
+    }
+
+    animate(frame: number) {
+        if (!this.applied) return false;
+        const s = this.open(frame);
+        if (s !== this.look.shutter) {
+            this.look.shutter = s;
+            this.splat.applyMotionLook();
+        }
+        return false;
+    }
+
+    undo() {
+        const at = this.splat.motionLooks.indexOf(this.look);
+        if (at >= 0) this.splat.motionLooks.splice(at, 1);
+        this.splat.applyMotionLook();
+    }
+
+    destroy() {
+        this.splat = null;
+    }
+}
+
 // ---- keyable parameters
 
 const registerMotionParams = () => {
@@ -767,6 +831,20 @@ const registerMotionParams = () => {
     }]);
     keyableLive(MotionScaleOp, (op) => {
         op.splat.applyMotionLook();
+        return true;
+    });
+
+    keyable(MotionBlurOp, [{
+        id: 'shutter',
+        min: 0,
+        max: 720,
+        get: op => op.shutter,
+        set: (op, v) => {
+            op.shutter = v;
+        }
+    }]);
+    keyableLive(MotionBlurOp, (op) => {
+        op.animate(op.splat.timelineFrame);
         return true;
     });
 };
@@ -834,6 +912,7 @@ const motionSettings = (op: EditOp): MotionNodeSettings | null => {
     if (op instanceof StabiliseOp) return { kind: 'stabilise', ref: op.ref, strength: op.strength };
     if (op instanceof TimeWarpOp) return { kind: 'timeWarp', speed: op.speed };
     if (op instanceof MotionScaleOp) return { kind: 'motionScale', scale: op.scale };
+    if (op instanceof MotionBlurOp) return { kind: 'motionBlur', shutter: op.shutter };
     return null;
 };
 
@@ -850,6 +929,7 @@ const motionNodeFrom = (splat: Splat, stored: MotionNodeSettings): EditOp | null
         }
         case 'timeWarp': return new TimeWarpOp(splat, num(stored.speed, 1));
         case 'motionScale': return new MotionScaleOp(splat, num(stored.scale, 1));
+        case 'motionBlur': return new MotionBlurOp(splat, num(stored.shutter, 180));
     }
     return null;
 };
@@ -889,6 +969,7 @@ const registerMotionNodes = (events: Events, scene: Scene, canvas: HTMLElement) 
     events.on('graph.addStabiliseNode', add(splat => new StabiliseOp(splat, frameOf(splat))));
     events.on('graph.addTimeWarpNode', add(splat => new TimeWarpOp(splat)));
     events.on('graph.addMotionScaleNode', add(splat => new MotionScaleOp(splat)));
+    events.on('graph.addMotionBlurNode', add(splat => new MotionBlurOp(splat)));
 
     // align: onto the other object if there is just one other, which is the
     // usual case - two captures to be put together
@@ -971,6 +1052,7 @@ export {
     GroundPlaneOp,
     TimeWarpOp,
     MotionScaleOp,
+    MotionBlurOp,
     registerMotionNodes,
     motionSettings,
     type ObjectPoint,

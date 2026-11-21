@@ -410,6 +410,8 @@
     "node.warp.note": "Spielt die Sequenz mit einem Tempo, das sich ändern kann: Key das Tempo für eine Rampe. Zwischen Frames wird das Modell zwischen Frames gezeigt, ein langsamer Teil ist also Zeitlupe, keine gehaltenen Frames.",
     "node.mscale.scale": "Faktor",
     "node.mscale.note": "Skaliert, wie weit sich die Gaussians von ihrer Lage im zeitlichen Zentrum entfernen: 0 friert jedes dort ein, 1 ist wie aufgenommen, 2 übertreibt. Key es, um Bewegung ein- oder auszublenden.",
+    "node.mblur.shutter": "Verschluss",
+    "node.mblur.note": "Streckt jedes Gaussian entlang seines Wegs, solange der Verschluss offen ist, in Grad eines Frames: 180 ist die halbe Zeit offen. Im Viewport und in der Videoausgabe zu sehen.",
     "node.offset.frames": "Frames",
     "node.offset.outside": "außerhalb",
     "node.offset.hide": "versteckt",

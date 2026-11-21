@@ -410,6 +410,8 @@
     "node.warp.note": "Toca a sequência numa velocidade que pode mudar: crie chaves na velocidade para uma rampa. Entre quadros o modelo é mostrado entre quadros, então uma parte lenta é câmera lenta, não quadros congelados.",
     "node.mscale.scale": "escala",
     "node.mscale.note": "Escala quanto as gaussianas se afastam de onde estão no seu centro temporal: 0 congela cada uma ali, 1 é como gravado, 2 exagera. Crie chaves para fazer o movimento surgir ou sumir.",
+    "node.mblur.shutter": "obturador",
+    "node.mblur.note": "Estica cada gaussiana ao longo do seu trajeto enquanto o obturador está aberto, em graus de um quadro: 180 é aberto metade. Aparece na viewport e na saída de vídeo.",
     "node.offset.frames": "quadros",
     "node.offset.outside": "fora",
     "node.offset.hide": "oculto",

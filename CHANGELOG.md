@@ -9,6 +9,24 @@ months finds out why before they change it.
 
 ---
 
+## Motion blur
+
+A motion blur node stretches each gaussian of a 4D model along the way it
+travels while the shutter is open, as a shutter angle of a timeline frame
+(180 by default: open for half of it). Seen in the viewport and in video
+output, keyable.
+
+The shader adds the travel over the shutter to the gaussian's scale as the
+variance of a box of that length (L squared over 12), per axis after turning
+the travel into the gaussian's own axes: exact along an axis, the nearest
+axis-aligned shape across them. The amplitude drops by the cube root of the
+ratio of the determinants, so a stretched gaussian keeps roughly the light it
+had instead of smearing brighter. A frame's length in the model's time is
+taken through the object's time nodes, so a retimed model blurs as fast as
+it now moves. Picking stays sharp.
+
+---
+
 ## Motion scale
 
 A motion scale node multiplies how far a 4D model's gaussians travel from

@@ -1,6 +1,6 @@
 import { EditOp } from '../edit-ops';
 import { Events } from '../events';
-import { AlignOp, GroundPlaneOp, MotionScaleOp, ObjectPoint, StabiliseOp, TimeWarpOp, TrackOp } from '../motion-nodes';
+import { AlignOp, GroundPlaneOp, MotionBlurOp, MotionScaleOp, ObjectPoint, StabiliseOp, TimeWarpOp, TrackOp } from '../motion-nodes';
 import { Splat } from '../splat';
 import { i18n } from './localization';
 
@@ -232,6 +232,14 @@ const buildMotionScale = (kit: PanelKit, op: MotionScaleOp, index: number) => {
     kit.note(t('node.mscale.note'));
 };
 
+const buildMotionBlur = (kit: PanelKit, op: MotionBlurOp, index: number) => {
+    kit.number(t('node.mblur.shutter'), op.shutter, 15, 180, index, (v) => {
+        op.shutter = Math.max(0, v);
+    }, { op, param: 'shutter' });
+    if (!op.splat.motion) kit.note(t('node.motion.needs-4d'));
+    kit.note(t('node.mblur.note'));
+};
+
 /** The face of one of these nodes, built into the kit's body; false for any other node. */
 const buildMotionNode = (op: EditOp, index: number, kit: PanelKit) => {
     if (op instanceof TrackOp) buildTrack(kit, op, index);
@@ -240,6 +248,7 @@ const buildMotionNode = (op: EditOp, index: number, kit: PanelKit) => {
     else if (op instanceof GroundPlaneOp) buildGround(kit, op, index);
     else if (op instanceof TimeWarpOp) buildTimeWarp(kit, op, index);
     else if (op instanceof MotionScaleOp) buildMotionScale(kit, op, index);
+    else if (op instanceof MotionBlurOp) buildMotionBlur(kit, op, index);
     else return false;
     return true;
 };

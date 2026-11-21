@@ -410,6 +410,8 @@
     "node.warp.note": "以可变的速度播放序列：给速度设关键帧即可做变速。帧与帧之间模型也显示在帧之间，所以慢的部分是慢动作，而不是停帧。",
     "node.mscale.scale": "倍数",
     "node.mscale.note": "缩放高斯相对其时间中心位置的移动幅度：0 让每个高斯停在那里，1 为原样，2 为夸张。设关键帧可让运动渐入或渐出。",
+    "node.mblur.shutter": "快门",
+    "node.mblur.note": "在快门打开期间沿运动方向拉伸每个高斯，单位为一帧的角度：180 表示打开一半时间。在视口和视频输出中可见。",
     "node.offset.frames": "帧数",
     "node.offset.outside": "范围外",
     "node.offset.hide": "隐藏",

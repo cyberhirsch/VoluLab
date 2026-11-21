@@ -410,6 +410,8 @@
     "node.warp.note": "Joue la séquence à une vitesse qui peut changer : posez des clés sur la vitesse pour une rampe. Entre deux images, le modèle est montré entre deux images : une partie lente est un ralenti, pas des images figées.",
     "node.mscale.scale": "échelle",
     "node.mscale.note": "Change la distance que parcourent les gaussiennes depuis leur place au centre temporel : 0 fige chacune là, 1 est tel qu'enregistré, 2 exagère. Posez des clés pour faire apparaître ou disparaître le mouvement.",
+    "node.mblur.shutter": "obturateur",
+    "node.mblur.note": "Étire chaque gaussienne le long de son trajet pendant que l'obturateur est ouvert, en degrés d'une image : 180 est ouvert la moitié. Visible dans la vue et dans la sortie vidéo.",
     "node.offset.frames": "images",
     "node.offset.outside": "en dehors",
     "node.offset.hide": "masqué",

@@ -410,6 +410,8 @@
     "node.warp.note": "Plays the sequence at a speed that can change: key the speed for a ramp. Between frames the model is shown between frames, so a slow part is slow motion, not held frames.",
     "node.mscale.scale": "scale",
     "node.mscale.note": "Scales how far the gaussians travel from where they are at their temporal centres: 0 freezes each one there, 1 is as recorded, 2 exaggerates. Key it to fade motion in or out.",
+    "node.mblur.shutter": "shutter",
+    "node.mblur.note": "Stretches each gaussian along the way it moves while the shutter is open, in degrees of a frame: 180 is open for half of it. Seen in the viewport and in video output.",
     "node.offset.frames": "frames",
     "node.offset.outside": "outside",
     "node.offset.hide": "hidden",

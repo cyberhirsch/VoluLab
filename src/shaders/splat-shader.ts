@@ -34,6 +34,13 @@ float camDofAlpha = 1.0;
 // difference between a blur and bokeh.
 float camDofMix = 0.0;
 
+// Motion blur (motion-nodes.ts): how far the gaussian travels while the
+// shutter is open, in model space, written by the vertex shader of a 4D
+// model; zero for none. The gaussian is stretched along it, and loses the
+// amplitude it gains in area.
+vec3 motionBlurStep = vec3(0.0);
+float motionBlurAlpha = 1.0;
+
 void modifySplatCenter(inout vec3 center) {
 }
 
@@ -56,9 +63,25 @@ void modifySplatCenter(inout vec3 center) {
 
 void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout vec4 rotation, inout vec3 scale) {
     camDofAlpha = 1.0;
+    motionBlurAlpha = 1.0;
 
     #ifdef SPLAT_LIGHTING
         splatLightAxis = relightFlatAxis(rotation, scale);
+    #endif
+
+    // the travel, into the gaussian's own axes (by the inverse rotation),
+    // added to each axis as the variance of a box of that length: exact
+    // along an axis, the nearest axis-aligned shape otherwise
+    #ifndef PICK_PASS
+        if (dot(motionBlurStep, motionBlurStep) > 0.0) {
+            vec3 qv = -rotation.xyz;
+            vec3 t = 2.0 * cross(qv, motionBlurStep);
+            vec3 d = motionBlurStep + rotation.w * t + cross(qv, t);
+            vec3 s2 = scale * scale;
+            vec3 n2 = s2 + d * d / 12.0;
+            motionBlurAlpha = pow(max(s2.x * s2.y * s2.z, 1e-30) / max(n2.x * n2.y * n2.z, 1e-30), 1.0 / 3.0);
+            scale = sqrt(n2);
+        }
     #endif
 
     // picking must stay sharp - a defocused splat would answer for a
@@ -137,6 +160,7 @@ uniform sampler2D gradePalette;         // palette of colour grades
     uniform highp sampler2D splatFalloff;   // r: 1 / (2 sigma_t^2)
     uniform float motionTime;               // normalised time being shown
     uniform float motionScale;              // motion scale nodes: 1 as trained
+    uniform float motionShutter;            // motion blur nodes: shutter open, in normalised time
 #endif
 
 // The debug view: this object is drawn false-coloured by one channel of its
@@ -237,6 +261,7 @@ void main(void) {
         vec4 motion = texelFetch(splatMotion, splat.uv, 0);
         float motionDt = motionTime - motion.w;
         modelCenter += motion.xyz * (motionDt * motionScale);
+        motionBlurStep = motion.xyz * (motionScale * motionShutter);
         float motionFalloff = texelFetch(splatFalloff, splat.uv, 0).r;
         float motionAlpha = exp(-motionDt * motionDt * motionFalloff);
         if (motionAlpha < 1.0 / 255.0) {
@@ -296,7 +321,7 @@ void main(void) {
         #endif
 
         // a defocused gaussian covers more screen, so it must be fainter
-        color.a *= camDofAlpha * motionAlpha;
+        color.a *= camDofAlpha * motionAlpha * motionBlurAlpha;
 
         // The debug view takes the colour's place, and from there on it is
         // the object's colour: alpha and shape stay, there is no view
@@ -572,6 +597,10 @@ var<private> camDofAlpha: f32 = 1.0;
 // GLSL twin for why the falloff has to change shape, not just width
 var<private> camDofMix: f32 = 0.0;
 
+// motion blur - see the GLSL twin
+var<private> motionBlurStep: vec3f = vec3f(0.0);
+var<private> motionBlurAlpha: f32 = 1.0;
+
 fn modifySplatCenter(center: ptr<function, vec3f>) {
 }
 
@@ -596,9 +625,25 @@ fn modifySplatCenter(center: ptr<function, vec3f>) {
 
 fn modifySplatRotationScale(originalCenter: vec3f, modifiedCenter: vec3f, rotation: ptr<function, vec4f>, scale: ptr<function, vec3f>) {
     camDofAlpha = 1.0;
+    motionBlurAlpha = 1.0;
 
     #ifdef SPLAT_LIGHTING
         splatLightAxis = relightFlatAxis(*rotation, *scale);
+    #endif
+
+    // the travel while the shutter is open - see the GLSL twin
+    #ifndef PICK_PASS
+        if (dot(motionBlurStep, motionBlurStep) > 0.0) {
+            let q = *rotation;
+            let qv = -q.xyz;
+            let t = 2.0 * cross(qv, motionBlurStep);
+            let d = motionBlurStep + q.w * t + cross(qv, t);
+            let s = *scale;
+            let s2 = s * s;
+            let n2 = s2 + d * d / 12.0;
+            motionBlurAlpha = pow(max(s2.x * s2.y * s2.z, 1e-30) / max(n2.x * n2.y * n2.z, 1e-30), 1.0 / 3.0);
+            *scale = sqrt(n2);
+        }
     #endif
 
     // picking must stay sharp
@@ -667,6 +712,7 @@ var gradePalette: texture_2d<f32>;  // palette of colour grades
     var splatFalloff: texture_2d<f32>;  // r: 1 / (2 sigma_t^2)
     uniform motionTime: f32;            // normalised time being shown
     uniform motionScale: f32;           // motion scale nodes: 1 as trained
+    uniform motionShutter: f32;         // motion blur nodes: shutter open, in normalised time
 #endif
 
 // the debug view - see the GLSL twin
@@ -759,6 +805,7 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
         let motion: vec4f = textureLoad(splatMotion, splat.uv, 0);
         let motionDt: f32 = uniform.motionTime - motion.w;
         modelCenter = modelCenter + motion.xyz * (motionDt * uniform.motionScale);
+        motionBlurStep = motion.xyz * (uniform.motionScale * uniform.motionShutter);
         let motionFalloff: f32 = textureLoad(splatFalloff, splat.uv, 0).r;
         motionAlpha = exp(-motionDt * motionDt * motionFalloff);
         if (motionAlpha < 1.0 / 255.0) {
@@ -813,7 +860,7 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
         #endif
 
         // a defocused gaussian covers more screen, so it must be fainter
-        color.a = color.a * camDofAlpha * motionAlpha;
+        color.a = color.a * camDofAlpha * motionAlpha * motionBlurAlpha;
 
         // the debug view takes the colour's place, and is graded and
         // exposed as a colour is - see the GLSL twin
