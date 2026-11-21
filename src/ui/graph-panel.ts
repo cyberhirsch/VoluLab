@@ -76,6 +76,7 @@ const OP_LABELS: Record<string, string> = {
     transformNode: 'transform',
     deleteNode: 'delete',
     trimNode: 'trim',
+    retimeNode: 'retime',
     splatsTransform: 'transform splats',
     setPivot: 'place pivot',
     setLocalFrame: 'local frame',
@@ -1145,6 +1146,10 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addTrimNode', splat)
                     },
                     {
+                        label: 'retime',
+                        action: () => this.events.fire('graph.addRetimeNode', splat)
+                    },
+                    {
                         label: 'cleanup',
                         action: () => this.events.fire('graph.addCleanupNode', splat)
                     },
@@ -1415,6 +1420,13 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addTrimNode')
+            },
+            {
+                // a 4D model's sequence faster, slower or backwards
+                label: 'add retime node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addRetimeNode')
             },
             {
                 label: 'add cleanup node',

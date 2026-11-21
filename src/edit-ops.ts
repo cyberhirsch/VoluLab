@@ -18,7 +18,7 @@ import { SphereShape } from './sphere-shape';
 import { Splat } from './splat';
 import type { DebugView } from './splat-debug';
 import { State } from './splat-state';
-import { TimeMap, TrimMap, timeSpan } from './time-map';
+import { RetimeMap, TimeMap, TrimMap, timeSpan } from './time-map';
 import { Transform } from './transform';
 import { Voxels } from './voxels';
 
@@ -752,6 +752,27 @@ class TrimOp extends TimeOp {
     get sourceLabel() {
         const [a, b] = this.range;
         return Number.isFinite(b) ? `${a} - ${b}` : `${a} -`;
+    }
+}
+
+/**
+ * Retime: the sequence faster or slower, and forwards or backwards. The
+ * model is still drawn at one of its own times, so its gaussians are where
+ * they were trained to be at that time and fade as they did: what a
+ * velocity or a lifetime comes to per timeline frame follows from the
+ * mapping, and nothing is stored twice that could disagree.
+ */
+class RetimeOp extends TimeOp {
+    name = 'retimeNode';
+    declare map: RetimeMap;
+
+    constructor(splat: Splat, speed = 1, reverse = false) {
+        super(splat, new RetimeMap(speed, reverse));
+    }
+
+    /** what the graph writes under the node's title */
+    get sourceLabel() {
+        return `${+this.map.factor.toFixed(3)}x${this.map.reverse ? ' reversed' : ''}`;
     }
 }
 
@@ -2314,6 +2335,7 @@ export {
     type DeleteWhat,
     TimeOp,
     TrimOp,
+    RetimeOp,
     SplatsTransformOp,
     PlacePivotOp,
     SetLocalFrameOp,

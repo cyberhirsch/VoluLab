@@ -3,7 +3,7 @@ import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
-import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
@@ -836,6 +836,18 @@ class NodePanel extends Container {
             });
             this.replayNumber(i18n.t('node.trim.out'), Number.isFinite(b) ? b : 0, 1, Math.max(0, frames - 1), index, (v) => {
                 op.map.out = Math.max(0, Math.round(v));
+            });
+        }
+
+        if (op instanceof RetimeOp) {
+            this.replayNumber(i18n.t('node.retime.speed'), op.map.factor, 0.05, 1, index, (v) => {
+                if (v > 0) op.map.speed = v;
+            });
+            this.replayChoice(i18n.t('node.retime.direction'), [
+                ['forward', i18n.t('node.retime.forward')],
+                ['reverse', i18n.t('node.retime.reverse')]
+            ], op.map.reverse ? 'reverse' : 'forward', index, (v) => {
+                op.map.reverse = v === 'reverse';
             });
         }
 
