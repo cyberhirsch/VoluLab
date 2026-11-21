@@ -11,6 +11,7 @@ import { initFileHandler } from './file-handler';
 import { registerIframeApi } from './iframe-api';
 import { registerKeyframeDriver } from './keyframe-driver';
 import { registerKeyframeParams } from './keyframe-params';
+import { registerMotionNodes } from './motion-nodes';
 import { registerPreferences } from './preferences';
 import { registerPublishEvents } from './publish';
 import { registerRenderEvents } from './render';
@@ -280,6 +281,7 @@ const main = async () => {
     registerEditorEvents(events, editHistory, scene);
     registerKeyframeParams();
     registerKeyframeDriver(events);
+    registerMotionNodes(events, scene, editorUI.canvasContainer.dom);
     registerSelectionEvents(events, scene);
     registerSequenceEvents(events, scene);
     registerTghParityEvents(events);

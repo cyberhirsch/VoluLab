@@ -611,11 +611,23 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         const vec = (v: number[] | undefined, fallback: number) => {
             return Array.isArray(v) && v.length === 3 && v.every(Number.isFinite) ? new Vec3(v[0], v[1], v[2]) : new Vec3(fallback, fallback, fallback);
         };
-        const op = new TransformNodeOp(splat, vec(stored?.position, 0), vec(stored?.rotation, 0), vec(stored?.scale, 1));
+        const position = vec(stored?.position, 0);
+        const euler = vec(stored?.rotation, 0);
+        const scale = vec(stored?.scale, 1);
+        const op = new TransformNodeOp(splat, position, euler, scale);
         op.bypassed = !!stored?.bypassed;
         unpackKeys(op, (stored as any)?.keys);
         events.fire('edit.add', op);
         return op;
+    });
+
+    // A node made elsewhere (motion-nodes.ts), for each object it is added
+    // to, appended and opened like the ones above
+    events.on('graph.addNodeFor', (make: (splat: Splat) => EditOp | null, target?: Splat) => {
+        addTarget(target).forEach((splat) => {
+            const op = make(splat);
+            if (op) appendAndOpen(op);
+        });
     });
 
     // A delete node removes what the select nodes above it leave selected.

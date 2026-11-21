@@ -3,6 +3,7 @@ import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { addKeyControls } from './keyframe-ui';
 import { i18n } from './localization';
+import { buildMotionNode, PanelKit } from './motion-node-panel';
 import { fieldDefault } from './value-fields';
 import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplitOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
@@ -185,6 +186,14 @@ class NodePanel extends Container {
                 this.buildColourKeys(op);
                 return;
             }
+        }
+
+        // track, stabilise, align, ground plane, time warp, motion scale and
+        // motion blur: ahead of the transform and time faces, since align
+        // and ground plane are transform nodes and time warp a time node
+        if (buildMotionNode(op, index, this.kit())) {
+            this.empty.hidden = true;
+            return;
         }
 
         if (op instanceof SelectOp) {
@@ -989,6 +998,24 @@ class NodePanel extends Container {
         };
         note(n === 0 ? 'node.split.none' : 'node.split.note');
         if (op.inputs?.[0]?.motion) note('node.split.note-4d');
+    }
+
+    /** What a face built elsewhere (motion-node-panel.ts) builds its rows with. */
+    private kit(): PanelKit {
+        return {
+            events: this.events,
+            body: this.body,
+            row: label => this.row(label),
+            stat: (label, value) => this.stat(label, value),
+            note: (text) => {
+                const el = document.createElement('div');
+                el.className = 'nd-note';
+                el.textContent = text;
+                this.body.appendChild(el);
+            },
+            number: (label, value, step, neutral, index, apply, key) => this.replayNumber(label, value, step, neutral, index, apply, key),
+            choice: (label, options, value, index, apply) => this.replayChoice(label, options, value, index, apply)
+        };
     }
 
     private row(label: string): HTMLElement {

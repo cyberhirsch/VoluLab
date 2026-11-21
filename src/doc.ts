@@ -335,7 +335,22 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             if (Array.isArray(document.transforms)) {
                 for (const stored of document.transforms) {
                     const splat = loaded[stored?.splat];
-                    if (splat) later(stored, () => events.invoke('transform.addNode', splat, stored));
+                    if (splat) {
+                        later(stored, () => {
+                            const op = events.invoke('transform.addNode', splat, stored);
+                            if (op && typeof stored.reference === 'number') op.reference = loaded[stored.reference] ?? null;
+                            return op;
+                        });
+                    }
+                }
+            }
+
+            // the nodes that transform over time (motion-nodes.ts), with
+            // what a track node attaches, by its place in the list
+            if (Array.isArray(document.motionNodes)) {
+                for (const stored of document.motionNodes) {
+                    const splat = loaded[stored?.splat];
+                    if (splat) later(stored, () => events.invoke('motion.addNode', splat, { ...stored, targetSplat: loaded[stored.target] ?? null }));
                 }
             }
 
@@ -560,10 +575,13 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             const placements = splats.map((splat) => {
                 const nodes = allOps.slice(0, cursor).filter(o => o instanceof TransformNodeOp && o.splat === splat && (o.applied || o.bypassed)) as TransformNodeOp[];
                 const { entity } = splat;
-                const base = nodes.length ? TransformNodeOp.baseOf(
-                    new Transform(entity.getLocalPosition(), entity.getLocalRotation(), entity.getLocalScale()),
-                    nodes.filter(n => n.applied)
-                ) : null;
+                // a node placing the object per frame (motion-nodes.ts): the
+                // object is stored where that node found it, under the
+                // transform nodes before it, and the node goes back on top
+                const moved = events.invoke('motion.placedFrom', splat, allOps, cursor) as { at: number, base: Transform } | null;
+                const final = moved ? moved.base : new Transform(entity.getLocalPosition(), entity.getLocalRotation(), entity.getLocalScale());
+                const under = nodes.filter(n => n.applied && (!moved || allOps.indexOf(n) < moved.at));
+                const base = under.length ? TransformNodeOp.baseOf(final, under) : (moved || nodes.length ? final : null);
                 return base ? { base, nodes } : null;
             });
 
@@ -624,6 +642,24 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     const pos = events.invoke('graph.position', allOps[node.at]) as { x: number, y: number } | null;
                     return pos ? { ...node, pos: [pos.x, pos.y] } : node;
                 })),
+
+                // the nodes that transform over time (motion-nodes.ts):
+                // track, stabilise, time warp, motion scale, motion blur
+                motionNodes: allOps.slice(0, cursor).flatMap((o) => {
+                    const settings = events.invoke('motion.settings', o);
+                    const i = settings ? splats.indexOf((o as any).splat) : -1;
+                    if (i < 0) return [];
+                    const keys = packKeys(o);
+                    const target = (o as any).target instanceof Splat ? splats.indexOf((o as any).target) : -1;
+                    return [{
+                        ...settings,
+                        splat: i,
+                        bypassed: !!o.bypassed,
+                        ...(target >= 0 ? { target } : {}),
+                        ...(keys ? { keys } : {}),
+                        ...placeOf(o)
+                    }];
+                }),
 
                 // the camera objects: pose, lens, lock and their animation
                 cameras: cameras.map(c => c.docSerialize()),

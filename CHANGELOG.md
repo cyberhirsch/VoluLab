@@ -9,6 +9,38 @@ months finds out why before they change it.
 
 ---
 
+## Track and attach
+
+A track node fits a rigid transform per frame to what the select nodes
+above it leave selected (everything, with nothing selected). An object
+wired into its "attach" input, or picked in the node pane, follows it as if
+carried, from where it stands at the reference frame: a hat on a moving
+head. Attaching a camera is not built.
+
+The fit (`motion-fit.ts`) works on up to 20 000 of the selected gaussians at
+their positions per model frame - the stored centre moved along the velocity
+and weighted by the temporal falloff, as the shader draws them - with
+Horn's quaternion method. Each frame is fitted straight from the reference
+frame while a fifth of the gaussians there are still there, so their centre
+is held exactly; further out, where they have faded and others carry the
+motion, it is fitted from the frame before and chained on. Between frames
+the track is interpolated (lerp and slerp). The fit is kept while the
+selection, the reference frame and the model stay the same: 1.1 s for 9 331
+gaussians over 100 frames.
+
+The keyframe driver asks the node to place the attached object each frame
+(`FrameDriven.animate`); with a node after it that places either object
+again, the node is replayed instead. A project stores the attached object
+where the node found it, and the node puts the motion back on top.
+
+All the nodes that transform over time are in `motion-nodes.ts`, their faces
+in `ui/motion-node-panel.ts`; they are added from the graph's menus like the
+others (`graph.addNodeFor` in `editor.ts`), stored in a project's
+`motionNodes` (or `transforms`, for align and ground plane) and come back
+through `motion.addNode`.
+
+---
+
 ## Keyframes on node parameters
 
 Any numeric parameter of a node can now be keyed over time: a key button

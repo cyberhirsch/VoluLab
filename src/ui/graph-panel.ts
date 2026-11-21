@@ -63,6 +63,11 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 // EditOp.name is the internal identifier; these are what a person should read.
 // Anything missing falls through to the raw name rather than to a blank node.
+// the nodes that transform over time, as the menus offer them
+const MOTION_NODES: [string, string][] = [
+    ['track', 'graph.addTrackNode'],
+];
+
 const OP_LABELS: Record<string, string> = {
     selectAll: 'select all',
     selectNone: 'deselect all',
@@ -80,6 +85,7 @@ const OP_LABELS: Record<string, string> = {
     loopNode: 'loop',
     freezeNode: 'freeze frame',
     offsetNode: 'time offset',
+    trackNode: 'track',
     splatsTransform: 'transform splats',
     setPivot: 'place pivot',
     setLocalFrame: 'local frame',
@@ -1171,6 +1177,11 @@ class GraphPanel extends Container {
                         label: 'time offset',
                         action: () => this.events.fire('graph.addOffsetNode', splat)
                     },
+                    // transforming over time (motion-nodes.ts)
+                    ...MOTION_NODES.map(([label, event]) => ({
+                        label,
+                        action: () => this.events.fire(event, splat)
+                    })),
                     {
                         label: 'split',
                         action: () => this.events.fire('graph.addSplitNode', splat)
@@ -1475,6 +1486,13 @@ class GraphPanel extends Container {
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addOffsetNode')
             },
+            // transforming over time (motion-nodes.ts)
+            ...MOTION_NODES.map(([label, event]) => ({
+                label: `add ${label} node`,
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire(event)
+            })),
             {
                 // what the select nodes above selected, as an object of its own
                 label: 'add split node',
