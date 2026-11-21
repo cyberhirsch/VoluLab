@@ -498,6 +498,73 @@ class AlignOp extends TransformNodeOp {
     }
 }
 
+type GroundMode = 'fit' | 'points';
+
+/**
+ * Ground plane: turns the object so its floor is level and moves it so the
+ * floor is at a height - from three points picked on the floor, or from the
+ * plane most of its still gaussians lie on. The up-axis of a capture that
+ * came in on its side is put right by the same turn. Like align, a transform
+ * node holding what it came to, worked out again on asking.
+ */
+class GroundPlaneOp extends TransformNodeOp {
+    name = 'groundNode';
+    mode: GroundMode = 'fit';
+    /** the three floor points, in the object's own space */
+    points: (ObjectPoint | null)[] = [null, null, null];
+    /** where the floor goes */
+    height = 0;
+    /** the floor's other side is up */
+    flip = false;
+    /** RANSAC: how near the plane a gaussian has to be to count, as a share of the object's size */
+    tolerance = 0.01;
+    result: { inliers: number, of: number, tilt: number } | null = null;
+
+    get sourceLabel() {
+        return this.mode === 'fit' ? 'fitted' : 'three points';
+    }
+
+    solve() {
+        const base = placementNow(this.splat);
+        let plane: { point: Vec3, normal: Vec3 } | null = null;
+        if (this.mode === 'points') {
+            if (this.points.some(p => !p)) return false;
+            const [a, b, c] = this.points.map(p => toWorld(this.splat, p, base));
+            plane = planeFrom3(a, b, c);
+            if (plane) this.result = { inliers: 3, of: 3, tilt: 0 };
+        } else {
+            const pts = staticWorld(this.splat, 40000, base);
+            const bound = this.splat.worldBound;
+            const size = bound ? bound.halfExtents.length() * 2 : 1;
+            const fit = fitPlane(pts.pos, pts.count, Math.max(1e-5, this.tolerance * size));
+            if (fit) {
+                plane = fit;
+                this.result = { inliers: fit.inliers, of: fit.of, tilt: 0 };
+            }
+        }
+        if (!plane) return false;
+
+        // the floor's normal points up: towards where most of the object is,
+        // unless turned round
+        const n = plane.normal.clone();
+        const centre = this.splat.worldBound?.center ?? plane.point;
+        if (new Vec3().sub2(centre, plane.point).dot(n) < 0) n.mulScalar(-1);
+        if (this.flip) n.mulScalar(-1);
+        const q = rotationBetween(n, Vec3.UP);
+        const p = q.transformVector(plane.point);
+        this.newt.position.set(0, this.height - p.y, 0);
+        const e = q.getEulerAngles();
+        this.setRotation(e.x, e.y, e.z);
+        this.newt.scale.set(1, 1, 1);
+        if (this.result) this.result.tilt = Math.acos(Math.max(-1, Math.min(1, n.dot(Vec3.UP)))) * 180 / Math.PI;
+        return true;
+    }
+
+    get docSettings() {
+        return { kind: 'ground', mode: this.mode, points: this.points, height: this.height, flip: this.flip, tolerance: this.tolerance };
+    }
+}
+
 // ---- keyable parameters
 
 const registerMotionParams = () => {
@@ -511,6 +578,16 @@ const registerMotionParams = () => {
         }
     }]);
     keyableLive(StabiliseOp, (op, later) => !op.animate(op.splat.timelineFrame, later));
+
+    keyable(GroundPlaneOp, [{
+        id: 'height',
+        get: op => op.height,
+        set: (op, v) => {
+            // the floor moves; the turn stays as it was worked out
+            op.newt.position.y += v - op.height;
+            op.height = v;
+        }
+    }]);
 
 };
 
@@ -604,6 +681,15 @@ const transformLikeFrom = (splat: Splat, stored: any, position: Vec3, euler: Vec
         op.pairs = Array.isArray(stored.pairs) ? stored.pairs.map((p: any) => ({ from: point(p?.from), to: point(p?.to) })) : [];
         return op;
     }
+    if (stored?.kind === 'ground') {
+        const op = new GroundPlaneOp(splat, position, euler, scale);
+        op.mode = stored.mode === 'points' ? 'points' : 'fit';
+        op.points = Array.isArray(stored.points) ? [0, 1, 2].map(i => point(stored.points[i])) : [null, null, null];
+        op.height = num(stored.height, 0);
+        op.flip = !!stored.flip;
+        op.tolerance = num(stored.tolerance, 0.01);
+        return op;
+    }
     return null;
 };
 
@@ -624,6 +710,13 @@ const registerMotionNodes = (events: Events, scene: Scene, canvas: HTMLElement) 
         const op = new AlignOp(splat);
         const others = (events.invoke('scene.allSplats') as Splat[]).filter(s => s !== splat);
         if (others.length === 1) op.reference = others[0];
+        return op;
+    }));
+
+    // ground plane: fitted as it is added, so it does something at once
+    events.on('graph.addGroundNode', add((splat) => {
+        const op = new GroundPlaneOp(splat);
+        op.solve();
         return op;
     }));
 
@@ -689,8 +782,10 @@ export {
     TrackOp,
     StabiliseOp,
     AlignOp,
+    GroundPlaneOp,
     registerMotionNodes,
     motionSettings,
     type ObjectPoint,
     type AlignMode,
+    type GroundMode
 };

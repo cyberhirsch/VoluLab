@@ -9,6 +9,28 @@ months finds out why before they change it.
 
 ---
 
+## Ground plane
+
+A ground plane node turns an object so its floor is level and puts the
+floor at a height: from three points picked on it in the viewport, or from
+the plane most of its still gaussians lie on (RANSAC with a tolerance as a
+share of the object's size, then the least-squares plane of the inliers).
+The floor's normal is taken to point towards the object's centre, with a
+flip for when that is wrong. A capture that came in on its side is put
+right by the same turn. The floor height can be keyed.
+
+It is a transform node whose values are worked out (`GroundPlaneOp extends
+TransformNodeOp`), so it composes in the chain as one and a project keeps it
+as one, with what it was worked out from. It is fitted once when added;
+fitting again is a button, not something it does whenever anything above it
+changes.
+
+Points are picked by a one-shot viewport click (`motion.pickPoint`), using
+the same surface pick as the orient tool, and stored in the object's own
+space.
+
+---
+
 ## Align
 
 An align node moves one object onto another, wired into its "reference"

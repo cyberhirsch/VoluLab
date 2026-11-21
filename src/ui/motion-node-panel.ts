@@ -1,6 +1,6 @@
 import { EditOp } from '../edit-ops';
 import { Events } from '../events';
-import { AlignOp, ObjectPoint, StabiliseOp, TrackOp } from '../motion-nodes';
+import { AlignOp, GroundPlaneOp, ObjectPoint, StabiliseOp, TrackOp } from '../motion-nodes';
 import { Splat } from '../splat';
 import { i18n } from './localization';
 
@@ -156,11 +156,67 @@ const buildAlign = (kit: PanelKit, op: AlignOp, index: number) => {
     kit.note(t(op.mode === 'icp' ? 'node.align.note-icp' : 'node.align.note-points'));
 };
 
+const buildGround = (kit: PanelKit, op: GroundPlaneOp, index: number) => {
+    kit.choice(t('node.ground.mode'), [
+        ['fit', t('node.ground.fit')],
+        ['points', t('node.ground.points')]
+    ], op.mode, index, (v) => {
+        op.mode = v;
+        op.solve();
+    });
+
+    if (op.mode === 'points') {
+        const row = kit.row(t('node.ground.floor'));
+        op.points.forEach((p, k) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = `nd-choice${p ? ' nd-choice-active' : ''}`;
+            b.textContent = `${k + 1}`;
+            b.addEventListener('click', () => {
+                b.textContent = t('node.motion.click');
+                pickInto(kit, op, op.splat, (q) => {
+                    op.points[k] = q;
+                }, () => op.solve());
+            });
+            row.appendChild(b);
+        });
+        kit.body.appendChild(row);
+    } else {
+        kit.number(t('node.ground.tolerance'), op.tolerance, 0.005, 0.01, index, (v) => {
+            op.tolerance = Math.max(1e-4, v);
+            op.solve();
+        });
+    }
+    kit.number(t('node.ground.height'), op.height, 0.01, 0, index, (v) => {
+        op.height = v;
+        op.solve();
+    }, { op, param: 'height' });
+    kit.choice(t('node.ground.up'), [
+        ['normal', t('node.ground.as-found')],
+        ['flip', t('node.ground.flipped')]
+    ], op.flip ? 'flip' : 'normal', index, (v) => {
+        op.flip = v === 'flip';
+        op.solve();
+    });
+    button(kit, t('node.ground.solve'), () => kit.events.invoke('edit.refresh', index, () => op.solve()));
+
+    if (op.result) {
+        if (op.mode === 'fit') kit.stat(t('node.ground.on-plane'), `${op.result.inliers.toLocaleString()} / ${op.result.of.toLocaleString()}`);
+        kit.stat(t('node.ground.tilt'), `${fmt(op.result.tilt, 2)}°`);
+    } else {
+        kit.note(t('node.ground.none'));
+    }
+    kit.stat(t('node.motion.moved'), trio(op.newt.position));
+    kit.stat(t('node.motion.turned'), trio(op.euler));
+    kit.note(t('node.ground.note'));
+};
+
 /** The face of one of these nodes, built into the kit's body; false for any other node. */
 const buildMotionNode = (op: EditOp, index: number, kit: PanelKit) => {
     if (op instanceof TrackOp) buildTrack(kit, op, index);
     else if (op instanceof StabiliseOp) buildStabilise(kit, op, index);
     else if (op instanceof AlignOp) buildAlign(kit, op, index);
+    else if (op instanceof GroundPlaneOp) buildGround(kit, op, index);
     else return false;
     return true;
 };
