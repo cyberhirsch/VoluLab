@@ -6,9 +6,11 @@
 
 import { type LookSpec } from './fields';
 import { stillMovingSplit } from './still-moving-split';
+import { temporalDenoise } from './temporal-denoise';
 
 const LOOK_NODES: LookSpec[] = [
-    stillMovingSplit
+    stillMovingSplit,
+    temporalDenoise
 ];
 
 /** what the graph calls each of them, by op name */

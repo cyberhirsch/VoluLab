@@ -9,6 +9,27 @@ months finds out why before they change it.
 
 ---
 
+## Temporal denoise
+
+Smooths what flickers in a 4D model and keeps what moves. A gaussian whose
+drift over the time it is drawn stays under `keep` times its thinnest axis
+is taken as jitter around a rest pose: its velocity is damped by
+`strength`, and its lifetime is widened by a gaussian of `smooth` frames
+(the variances add: falloff' = 1 / (1 / falloff + 2 (smooth / frames)^2)),
+so it fades in and out over longer. Faster motion is not touched. The
+model's colour is the same at every time per gaussian, so there is no
+colour flicker of a single gaussian to smooth.
+
+It is the first node that edits motion (`look/motion-edit.ts`): the
+velocities, temporal centres and falloffs are copied, edited and handed
+to the object with `Splat.setMotion`, which makes new motion textures and
+a new sort worker; undo hands back the motion it replaced. The splat data
+is not touched, so a project - which stores a 4D model as the file it came
+from - stores the node and applies it again on open. On a 3D object it
+does nothing. On the alley sample it changes 1,318,311 gaussians in about
+1 s; the picture moves by 78 to 79 dB (75 dB at full strength) - the
+sample is clean.
+
 ## Still / moving split, and the cleanup and look nodes' frame
 
 The first of the PRD's "cleanup and quality" and "look and grading" nodes.
