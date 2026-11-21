@@ -9,6 +9,24 @@ months finds out why before they change it.
 
 ---
 
+## Motion scale
+
+A motion scale node multiplies how far a 4D model's gaussians travel from
+where they are at their temporal centres: 0 freezes each there, 1 is as
+recorded, 2 exaggerates. Keyable, so motion can fade in and out.
+
+It is a uniform (`motionScale`) in the shader and a factor on the travel in
+the sort worker's keys (`k` on the sort request), so what is drawn and what
+is sorted agree. The fades are untouched: each gaussian still lives when it
+lived. The spatial bins the worker built for the model assume the trained
+travel; above 1 a gaussian can land outside its bin's range and is clamped
+into the nearest, which costs a little order accuracy, not correctness of
+what is shown. Bounds, picking and selection still use the trained
+positions. Smoothing the motion over time to remove jitter, which the PRD
+lists as an option, is not built.
+
+---
+
 ## Time warp
 
 A time warp node retimes a 4D model with a curve: its speed is a parameter,

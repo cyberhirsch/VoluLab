@@ -408,6 +408,8 @@
     "node.ground.note": "Turns the object so its floor is level and puts the floor at this height. Fitted, the floor is the plane most of the still gaussians lie on; the tolerance is how near it they have to be, as a share of the object's size.",
     "node.warp.speed": "speed",
     "node.warp.note": "Plays the sequence at a speed that can change: key the speed for a ramp. Between frames the model is shown between frames, so a slow part is slow motion, not held frames.",
+    "node.mscale.scale": "scale",
+    "node.mscale.note": "Scales how far the gaussians travel from where they are at their temporal centres: 0 freezes each one there, 1 is as recorded, 2 exaggerates. Key it to fade motion in or out.",
     "node.offset.frames": "frames",
     "node.offset.outside": "outside",
     "node.offset.hide": "hidden",

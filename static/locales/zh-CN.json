@@ -408,6 +408,8 @@
     "node.ground.note": "旋转对象使地面水平，并把地面放到这个高度。拟合时，地面是大多数静止高斯所在的平面；容差是它们需要离平面多近，按对象大小的比例计。",
     "node.warp.speed": "速度",
     "node.warp.note": "以可变的速度播放序列：给速度设关键帧即可做变速。帧与帧之间模型也显示在帧之间，所以慢的部分是慢动作，而不是停帧。",
+    "node.mscale.scale": "倍数",
+    "node.mscale.note": "缩放高斯相对其时间中心位置的移动幅度：0 让每个高斯停在那里，1 为原样，2 为夸张。设关键帧可让运动渐入或渐出。",
     "node.offset.frames": "帧数",
     "node.offset.outside": "范围外",
     "node.offset.hide": "隐藏",

@@ -136,6 +136,7 @@ uniform sampler2D gradePalette;         // palette of colour grades
     uniform highp sampler2D splatMotion;    // xyz: velocity per unit time, w: temporal centre
     uniform highp sampler2D splatFalloff;   // r: 1 / (2 sigma_t^2)
     uniform float motionTime;               // normalised time being shown
+    uniform float motionScale;              // motion scale nodes: 1 as trained
 #endif
 
 // The debug view: this object is drawn false-coloured by one channel of its
@@ -235,7 +236,7 @@ void main(void) {
     #ifdef SPLAT_MOTION
         vec4 motion = texelFetch(splatMotion, splat.uv, 0);
         float motionDt = motionTime - motion.w;
-        modelCenter += motion.xyz * motionDt;
+        modelCenter += motion.xyz * (motionDt * motionScale);
         float motionFalloff = texelFetch(splatFalloff, splat.uv, 0).r;
         float motionAlpha = exp(-motionDt * motionDt * motionFalloff);
         if (motionAlpha < 1.0 / 255.0) {
@@ -665,6 +666,7 @@ var gradePalette: texture_2d<f32>;  // palette of colour grades
     var splatMotion: texture_2d<f32>;   // xyz: velocity per unit time, w: temporal centre
     var splatFalloff: texture_2d<f32>;  // r: 1 / (2 sigma_t^2)
     uniform motionTime: f32;            // normalised time being shown
+    uniform motionScale: f32;           // motion scale nodes: 1 as trained
 #endif
 
 // the debug view - see the GLSL twin
@@ -756,7 +758,7 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
     #ifdef SPLAT_MOTION
         let motion: vec4f = textureLoad(splatMotion, splat.uv, 0);
         let motionDt: f32 = uniform.motionTime - motion.w;
-        modelCenter = modelCenter + motion.xyz * motionDt;
+        modelCenter = modelCenter + motion.xyz * (motionDt * uniform.motionScale);
         let motionFalloff: f32 = textureLoad(splatFalloff, splat.uv, 0).r;
         motionAlpha = exp(-motionDt * motionDt * motionFalloff);
         if (motionAlpha < 1.0 / 255.0) {

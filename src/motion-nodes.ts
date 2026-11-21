@@ -669,6 +669,57 @@ class TimeWarpOp extends TimeOp implements FrameDriven {
     }
 }
 
+// ---- motion scale and motion blur
+
+/**
+ * Motion scale: a 4D model's gaussians travel this many times as far from
+ * where they are at their temporal centres - 0 freezes each where it is
+ * centred, 1 is as trained, 2 exaggerates. The shader and the sort worker
+ * both scale the travel; nothing of the data changes.
+ */
+class MotionScaleOp {
+    name = 'motionScaleNode';
+    splat: Splat;
+    bypassed?: boolean;
+    look = { velocity: 1, shutter: 0 };
+
+    constructor(splat: Splat, scale = 1) {
+        this.splat = splat;
+        this.look.velocity = scale;
+    }
+
+    set scale(v: number) {
+        this.look.velocity = v;
+    }
+
+    get scale() {
+        return this.look.velocity;
+    }
+
+    get sourceLabel() {
+        return `${+this.scale.toFixed(3)}x`;
+    }
+
+    get applied() {
+        return this.splat.motionLooks.includes(this.look);
+    }
+
+    do() {
+        this.splat.motionLooks.push(this.look);
+        this.splat.applyMotionLook();
+    }
+
+    undo() {
+        const at = this.splat.motionLooks.indexOf(this.look);
+        if (at >= 0) this.splat.motionLooks.splice(at, 1);
+        this.splat.applyMotionLook();
+    }
+
+    destroy() {
+        this.splat = null;
+    }
+}
+
 // ---- keyable parameters
 
 const registerMotionParams = () => {
@@ -705,6 +756,19 @@ const registerMotionParams = () => {
     // the map reads the curve itself: a value written per frame changes nothing
     keyableLive(TimeWarpOp, () => true);
 
+    keyable(MotionScaleOp, [{
+        id: 'scale',
+        min: 0,
+        max: 4,
+        get: op => op.scale,
+        set: (op, v) => {
+            op.scale = v;
+        }
+    }]);
+    keyableLive(MotionScaleOp, (op) => {
+        op.splat.applyMotionLook();
+        return true;
+    });
 };
 
 // ---- picking a point on an object in the viewport
@@ -769,6 +833,7 @@ const motionSettings = (op: EditOp): MotionNodeSettings | null => {
     if (op instanceof TrackOp) return { kind: 'track', ref: op.ref };
     if (op instanceof StabiliseOp) return { kind: 'stabilise', ref: op.ref, strength: op.strength };
     if (op instanceof TimeWarpOp) return { kind: 'timeWarp', speed: op.speed };
+    if (op instanceof MotionScaleOp) return { kind: 'motionScale', scale: op.scale };
     return null;
 };
 
@@ -784,6 +849,7 @@ const motionNodeFrom = (splat: Splat, stored: MotionNodeSettings): EditOp | null
             return op;
         }
         case 'timeWarp': return new TimeWarpOp(splat, num(stored.speed, 1));
+        case 'motionScale': return new MotionScaleOp(splat, num(stored.scale, 1));
     }
     return null;
 };
@@ -822,6 +888,7 @@ const registerMotionNodes = (events: Events, scene: Scene, canvas: HTMLElement) 
     events.on('graph.addTrackNode', add(splat => new TrackOp(splat, frameOf(splat))));
     events.on('graph.addStabiliseNode', add(splat => new StabiliseOp(splat, frameOf(splat))));
     events.on('graph.addTimeWarpNode', add(splat => new TimeWarpOp(splat)));
+    events.on('graph.addMotionScaleNode', add(splat => new MotionScaleOp(splat)));
 
     // align: onto the other object if there is just one other, which is the
     // usual case - two captures to be put together
@@ -903,6 +970,7 @@ export {
     AlignOp,
     GroundPlaneOp,
     TimeWarpOp,
+    MotionScaleOp,
     registerMotionNodes,
     motionSettings,
     type ObjectPoint,

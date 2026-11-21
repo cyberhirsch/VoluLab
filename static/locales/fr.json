@@ -408,6 +408,8 @@
     "node.ground.note": "Tourne l'objet pour que son sol soit horizontal et met le sol à cette hauteur. Ajusté, le sol est le plan où se trouvent la plupart des gaussiennes immobiles ; la tolérance est leur distance permise, en part de la taille de l'objet.",
     "node.warp.speed": "vitesse",
     "node.warp.note": "Joue la séquence à une vitesse qui peut changer : posez des clés sur la vitesse pour une rampe. Entre deux images, le modèle est montré entre deux images : une partie lente est un ralenti, pas des images figées.",
+    "node.mscale.scale": "échelle",
+    "node.mscale.note": "Change la distance que parcourent les gaussiennes depuis leur place au centre temporel : 0 fige chacune là, 1 est tel qu'enregistré, 2 exagère. Posez des clés pour faire apparaître ou disparaître le mouvement.",
     "node.offset.frames": "images",
     "node.offset.outside": "en dehors",
     "node.offset.hide": "masqué",

@@ -408,6 +408,8 @@
     "node.ground.note": "Gira o objeto para que o chão fique nivelado e coloca o chão nesta altura. Ajustado, o chão é o plano onde está a maioria das gaussianas paradas; a tolerância é quão perto devem estar, como parte do tamanho do objeto.",
     "node.warp.speed": "velocidade",
     "node.warp.note": "Toca a sequência numa velocidade que pode mudar: crie chaves na velocidade para uma rampa. Entre quadros o modelo é mostrado entre quadros, então uma parte lenta é câmera lenta, não quadros congelados.",
+    "node.mscale.scale": "escala",
+    "node.mscale.note": "Escala quanto as gaussianas se afastam de onde estão no seu centro temporal: 0 congela cada uma ali, 1 é como gravado, 2 exagera. Crie chaves para fazer o movimento surgir ou sumir.",
     "node.offset.frames": "quadros",
     "node.offset.outside": "fora",
     "node.offset.hide": "oculto",
