@@ -1176,6 +1176,10 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addSplitNode', splat)
                     },
                     {
+                        label: 'merge',
+                        action: () => this.events.fire('graph.addMergeNode', splat)
+                    },
+                    {
                         label: 'cleanup',
                         action: () => this.events.fire('graph.addCleanupNode', splat)
                     },
@@ -1481,6 +1485,13 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addSplitNode')
+            },
+            {
+                // the selected object and every other one shown, as one
+                label: 'add merge node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addMergeNode')
             },
             {
                 label: 'add cleanup node',

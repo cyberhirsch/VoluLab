@@ -1,6 +1,7 @@
 import { ZipFileSystem, ZipReadFileSystem } from '@playcanvas/splat-transform';
 import { Vec3 } from 'playcanvas';
 
+import { combineOutputs, placeholderSplat, restoreCombine, storeCombine } from './doc-combine';
 import { restoreStateNode, storeStateNodes } from './doc-nodes';
 import { DebugViewOp, EditOp, LightOp, PrimitiveOp, RelightOp, TransformNodeOp } from './edit-ops';
 import { ElementType } from './element';
@@ -219,12 +220,18 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             // run through each splat and load it, keeping the order: nodes
             // that hang off an object refer to it by its place in the list
             const loaded: Splat[] = [];
+            // the objects merge and switch nodes make, which have no file
+            const made = combineOutputs(document);
             for (let i = 0; i < document.splats.length; ++i) {
                 const filename = `splat_${i}.ply`;
                 const splatSettings = document.splats[i];
 
                 let splat: Splat;
-                if (splatSettings.motion?.file) {
+                if (made.has(i)) {
+                    // empty until its node makes it again
+                    splat = placeholderSplat(scene, splatSettings.name);
+                    await scene.add(splat);
+                } else if (splatSettings.motion?.file) {
                     // a 4D model: it adds itself to the scene as the sequence
                     splat = await loadMotionSplat(zipFs, splatSettings.motion, splatSettings.name);
                 } else {
@@ -414,6 +421,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 }
             }
 
+            // merge, switch and layer nodes (doc-combine.ts)
+            restoreCombine(document, loaded, later, events);
+
             // in, in order (the sort is stable, so nodes without a place
             // keep the order they were listed in), and where they were put
             // in the graph
@@ -503,6 +513,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             // null for an object they do not account for, which is stored
             // the old way: without them, and without what they deleted.
             const stateNodes = splats.map((s, i) => storeStateNodes(allOps, cursor, s, i, primitives));
+
+            // merge, switch and layer nodes; a merged object's data is not written
+            const combined = storeCombine(allOps, cursor, splats, placeOf);
 
             // what a 4D model has deleted or hidden, a byte per row, where
             // no nodes say it: its file holds every gaussian
@@ -621,6 +634,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     return pos ? { ...node, pos: [pos.x, pos.y] } : node;
                 })),
 
+                // merge, switch and layer nodes
+                ...combined.document,
+
                 // the camera objects: pose, lens, lock and their animation
                 cameras: cameras.map(c => c.docSerialize()),
 
@@ -709,6 +725,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             // Write each splat as PLY, or a 4D model as its own file
             for (let i = 0; i < splats.length; ++i) {
                 const source = motions[i];
+                // made again by its merge or switch node
+                if (combined.outputs.has(i)) continue;
                 if (!source) {
                     // with its nodes stored, every gaussian: the nodes delete
                     await writeSplatFile([splats[i]], { ...serializeSettings, keepDeleted: !!stateNodes[i] }, 'ply', `splat_${i}.ply`, {}, zipFs);

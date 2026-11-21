@@ -1,6 +1,7 @@
 import { Container } from '@playcanvas/pcui';
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
+import { buildCombineFace } from './combine-panel';
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
 import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplitOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
@@ -211,6 +212,12 @@ class NodePanel extends Container {
         if (op instanceof SplitOp) {
             this.empty.hidden = true;
             this.buildSplit(op, index);
+            return;
+        }
+
+        // merge, switch, layer and instance (combine-panel.ts)
+        if (buildCombineFace(op, index, this.body, this.events)) {
+            this.empty.hidden = true;
             return;
         }
 
