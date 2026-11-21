@@ -74,6 +74,7 @@ Traps:
   whole sequence, not only those alive at the frame shown.
 - The move gizmo is not put back where the object went when a transform
   node's numbers change. Picking the tool again places it.
+
 ## A debug view's colour is the object's colour from its node on
 
 A colour node after a debug view node did nothing to the false colours,
