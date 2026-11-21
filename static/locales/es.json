@@ -416,6 +416,8 @@
     "node.denoise.note": "Las gaussianas que, mientras se dibujan, se mueven menos que esta cantidad de veces su eje más delgado se toman como vibración: se amortigua su velocidad y su aparición y desaparición se reparten en más frames. El movimiento más rápido queda como está.",
     "node.flicker.frames": "más corto que (frames)",
     "node.flicker.note": "Elimina las gaussianas dibujadas con al menos la mitad de su opacidad durante menos frames que estos, la forma 4D de los floaters. Solo añade a lo eliminado.",
+    "node.fill.reach": "alcance (frames)",
+    "node.fill.note": "Las gaussianas quietas se dibujan esta cantidad de frames más a cada lado, de modo que los frames que perdieron cobertura se rellenan con los de alrededor. Las gaussianas en movimiento no se tocan, para que nada deje estela.",
     "light.delight-deleted": "quitar iluminación: contar eliminados",
     "light.yes": "sí",
     "light.no": "no",

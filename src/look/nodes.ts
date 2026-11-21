@@ -5,6 +5,7 @@
  */
 
 import { type LookSpec } from './fields';
+import { fillHole } from './fill-hole';
 import { flickerRemoval } from './flicker-removal';
 import { stillMovingSplit } from './still-moving-split';
 import { temporalDenoise } from './temporal-denoise';
@@ -12,7 +13,8 @@ import { temporalDenoise } from './temporal-denoise';
 const LOOK_NODES: LookSpec[] = [
     stillMovingSplit,
     temporalDenoise,
-    flickerRemoval
+    flickerRemoval,
+    fillHole
 ];
 
 /** what the graph calls each of them, by op name */

@@ -9,6 +9,18 @@ months finds out why before they change it.
 
 ---
 
+## Fill hole
+
+Where a frame lost coverage, the frames around it fill it: every still
+gaussian (global, drifting less than `still` of its thinnest axis while
+drawn) lives `reach` frames longer on each side - its temporal sigma grows
+by reach / frames. That is the neighbouring frames' gaussians copied in,
+without a copy. Moving gaussians are left alone; living longer they would
+leave a trail. A gaussian outside the global set is drawn only within its
+segment of the hierarchy, so it cannot be stretched past it and is not
+touched either. On the alley sample 1,308,265 gaussians qualify; the
+picture moves by 79 to 93 dB, the sample has few holes.
+
 ## Flicker removal
 
 Deletes what pops in and out: the gaussians of a 4D model drawn at half
