@@ -107,7 +107,8 @@ const OP_LABELS: Record<string, string> = {
     setShBands: 'sh bands',
     debugView: 'debug view',
     output: 'output',
-    renderPasses: 'render passes'
+    renderPasses: 'render passes',
+    viewer: 'viewer'
 };
 
 // A bundled edit is named by the member that does the work, not by the fact
@@ -741,8 +742,8 @@ class GraphPanel extends Container {
                 applied: i < cursor,
                 splat,
                 select: !!select,
-                // render passes are a tap: nothing is fed from them
-                terminal: ['output', 'renderPasses'].includes(op.name),
+                // render passes and the viewer are taps: nothing is fed from them
+                terminal: ['output', 'renderPasses', 'viewer'].includes(op.name),
                 bypassed: !!op.bypassed,
                 // frozen only when nothing in it can be re-run
                 frozen: steps.length && !select?.mesh ? steps.every(s => !isParametric(s.query)) : undefined,
@@ -1206,6 +1207,10 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addRenderPassesNode', splat)
                     },
                     {
+                        label: 'viewer',
+                        action: () => this.events.fire('graph.addViewerNode', splat)
+                    },
+                    {
                         label: 'output',
                         action: () => this.events.fire('graph.addOutputNode', splat)
                     }
@@ -1527,6 +1532,13 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addRenderPassesNode')
+            },
+            {
+                // the stream at this point in the viewport, without moving the end of the chain
+                label: 'add viewer node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addViewerNode')
             },
             {
                 label: 'add output node',

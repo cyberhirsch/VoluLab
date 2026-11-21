@@ -64,8 +64,33 @@ class RenderPassesOp {
     }
 }
 
-const isInspectOp = (op: unknown): op is RenderPassesOp => {
-    return op instanceof RenderPassesOp;
+/**
+ * A tap that shows the stream at this point in the viewport, the object
+ * alone, without moving where the chain ends. Showing it is the editor's
+ * business (inspect-nodes.ts); the node only marks the place.
+ */
+class ViewerOp {
+    name = 'viewer';
+    splat: Splat;
+    /** show the object alone while viewing */
+    isolate = true;
+    bypassed?: boolean;
+
+    constructor(splat: Splat) {
+        this.splat = splat;
+    }
+
+    do() {}
+
+    undo() {}
+
+    destroy() {
+        this.splat = null;
+    }
+}
+
+const isInspectOp = (op: unknown): op is RenderPassesOp | ViewerOp => {
+    return op instanceof RenderPassesOp || op instanceof ViewerOp;
 };
 
 export {
@@ -74,5 +99,6 @@ export {
     PASS_NAMES,
     defaultRenderPassSettings,
     RenderPassesOp,
+    ViewerOp,
     isInspectOp
 };

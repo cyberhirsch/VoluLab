@@ -1,6 +1,6 @@
 import { i18n } from './localization';
 import { Events } from '../events';
-import { PASS_NAMES, RenderPassesOp } from '../inspect-ops';
+import { PASS_NAMES, RenderPassesOp, ViewerOp } from '../inspect-ops';
 
 /**
  * The node pane's faces for the output and inspection nodes: render passes,
@@ -20,7 +20,7 @@ const pct = (a: number, b: number) => (b > 0 ? `${(100 * a / b).toFixed(1)} %` :
 const num = (n: number) => n.toLocaleString();
 const fix = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed(3));
 
-const buildInspectNode = (body: HTMLElement, op: RenderPassesOp, index: number, events: Events, rebuild: () => void) => {
+const buildInspectNode = (body: HTMLElement, op: RenderPassesOp | ViewerOp, index: number, events: Events, rebuild: () => void) => {
     const row = (label: string) => {
         const r = el('div', 'nd-row');
         r.appendChild(el('div', 'nd-row-label', label));
@@ -96,6 +96,57 @@ const buildInspectNode = (body: HTMLElement, op: RenderPassesOp, index: number, 
         note(i18n.t('node.passes.note'));
         return;
     }
+
+    if (op instanceof ViewerOp) {
+        const active = events.invoke('viewer.active') === op;
+        stat(i18n.t('node.viewer.state'), active ? i18n.t('node.viewer.showing') : i18n.t('node.viewer.idle'));
+        const iso = el('div', 'nd-choices');
+        iso.appendChild(choice(i18n.t('node.viewer.isolate'), op.isolate, () => {
+            op.isolate = !op.isolate;
+            rebuild();
+        }));
+        row(i18n.t('node.viewer.others')).appendChild(iso);
+        if (active) {
+            action(i18n.t('node.viewer.stop'), () => events.invoke('viewer.stop'));
+        } else {
+            action(i18n.t('node.viewer.view'), () => events.invoke('viewer.view', op), !!op.bypassed);
+        }
+        note(i18n.t('node.viewer.note'));
+        return;
+    }
 };
 
 export { buildInspectNode };
+
+/**
+ * While a viewer node is showing its point, a badge over the viewport says
+ * so; clicking it goes back to the end of the chain.
+ */
+const registerViewerBadge = (events: Events) => {
+    const badge = el('button', 'viewer-badge') as HTMLButtonElement;
+    badge.type = 'button';
+    Object.assign(badge.style, {
+        position: 'absolute',
+        top: '8px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: '10',
+        padding: '4px 10px',
+        border: '1px solid #f60',
+        borderRadius: '4px',
+        background: 'rgba(0,0,0,0.7)',
+        color: '#fb7',
+        font: '12px sans-serif',
+        cursor: 'pointer',
+        display: 'none'
+    });
+    badge.addEventListener('click', () => events.invoke('viewer.stop'));
+    events.on('viewer.changed', (op: ViewerOp | null) => {
+        const host = document.getElementById('canvas-container') ?? document.body;
+        if (badge.parentElement !== host) host.appendChild(badge);
+        badge.style.display = op ? '' : 'none';
+        badge.textContent = op ? i18n.t('node.viewer.badge', { name: op.splat?.name ?? '' }) : '';
+    });
+};
+
+export { registerViewerBadge };

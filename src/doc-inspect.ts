@@ -1,6 +1,6 @@
 import type { EditOp } from './edit-ops';
 import type { Events } from './events';
-import { RenderPassesOp } from './inspect-ops';
+import { RenderPassesOp, ViewerOp } from './inspect-ops';
 import type { Splat } from './splat';
 
 /**
@@ -18,6 +18,7 @@ const storeInspectNodes = (ops: EditOp[], cursor: number, splats: Splat[], place
         if (splat < 0) return [];
         const common = { splat, ...(op.bypassed ? { bypassed: true } : {}), ...placeOf(op) };
         if (op instanceof RenderPassesOp) return [{ type: 'renderPasses', settings: { ...op.settings, passes: { ...op.settings.passes } }, ...common }];
+        if (op instanceof ViewerOp) return [{ type: 'viewer', isolate: op.isolate, ...common }];
         return [];
     });
 };
@@ -26,6 +27,7 @@ const restoreInspectNode = (stored: any, splat: Splat, events: Events): EditOp |
     const bypassed = !!stored?.bypassed;
     switch (stored?.type) {
         case 'renderPasses': return events.invoke('renderPasses.addNode', splat, stored.settings, bypassed);
+        case 'viewer': return events.invoke('viewer.addNode', splat, stored.isolate !== false, bypassed);
         default: return null;
     }
 };

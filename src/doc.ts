@@ -481,6 +481,10 @@ const registerDocEvents = (scene: Scene, events: Events) => {
         events.fire('startSpinner');
 
         try {
+            // a viewer showing an earlier point gives the chain back first:
+            // the project is the whole of it
+            await events.invoke('viewer.stop');
+
             const splats = events.invoke('scene.allSplats') as Splat[];
 
             const cameras = (events.invoke('camera.list') ?? []) as SceneCamera[];

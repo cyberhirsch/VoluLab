@@ -9,6 +9,19 @@ months finds out why before they change it.
 
 ---
 
+## Viewer node
+
+A tap, like a Nuke viewer: "view here" shows the object as it stands at the
+node in the viewport without moving where the chain ends. It winds the
+history to itself, hides the other objects while it shows (optional) and puts a
+badge over the viewport; the badge, or "back to the end", winds back.
+Anything that moves the history while viewing - an undo, a new node, a changed
+setting - is the user working again, and the viewer lets go where the history
+now is instead of winding over it. Saving a project stops it first, so the
+project is the whole chain.
+
+---
+
 ## Render passes node
 
 Renders the scene as it stands at the node, frame by frame, into one image

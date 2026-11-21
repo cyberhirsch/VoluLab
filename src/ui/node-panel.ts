@@ -1,7 +1,7 @@
 import { Container } from '@playcanvas/pcui';
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { buildInspectNode } from './inspect-panel';
+import { buildInspectNode, registerViewerBadge } from './inspect-panel';
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
 import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplitOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
@@ -91,6 +91,8 @@ class NodePanel extends Container {
         events.on('splat.visibility', () => this.rebuild());
         events.on('edit.changed', () => this.rebuild());
         events.on('tool.activated', () => this.rebuild());
+        events.on('viewer.changed', () => this.rebuild());
+        registerViewerBadge(events);
 
         queueMicrotask(() => this.rebuild());
     }

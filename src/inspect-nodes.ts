@@ -4,7 +4,7 @@ import { EditHistory } from './edit-history';
 import { EditOp } from './edit-ops';
 import { Events } from './events';
 import {
-    PASS_NAMES, RenderPassesOp, RenderPassSettings, defaultRenderPassSettings
+    PASS_NAMES, RenderPassesOp, RenderPassSettings, ViewerOp, defaultRenderPassSettings
 } from './inspect-ops';
 import { BrowserFileSystem } from './io';
 import { PassSink, renderPasses } from './render-passes';
@@ -110,6 +110,85 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
         } finally {
             await editHistory.goto(resume);
         }
+    });
+
+    // --- viewer ----------------------------------------------------------
+
+    // what the viewport is showing instead of the end of the chain
+    let viewing: { op: ViewerOp, resume: number, hidden: Splat[] } | null = null;
+    let travelling = false;
+
+    const fireViewer = () => events.fire('viewer.changed', viewing?.op ?? null);
+
+    const unhide = () => {
+        viewing?.hidden.forEach((s) => {
+            if (s.scene) s.visible = true;
+        });
+    };
+
+    /** Stop showing the viewer's point; back to where the chain was, unless the user has moved since. */
+    const stopViewing = async (goBack = true) => {
+        if (!viewing) return;
+        const { resume } = viewing;
+        unhide();
+        viewing = null;
+        fireViewer();
+        if (goBack) {
+            travelling = true;
+            try {
+                await editHistory.goto(resume);
+            } finally {
+                travelling = false;
+            }
+        }
+    };
+
+    events.function('viewer.view', async (op: ViewerOp) => {
+        const index = indexOf(op);
+        if (index < 0 || !(op instanceof ViewerOp)) return false;
+        if (viewing?.op === op) return true;
+        const resume = viewing ? viewing.resume : history().cursor;
+        await stopViewing(false);
+        travelling = true;
+        try {
+            await editHistory.goto(index + 1);
+        } finally {
+            travelling = false;
+        }
+        const hidden = op.isolate ? (events.invoke('scene.allSplats') as Splat[]).filter(s => s !== op.splat && s.visible) : [];
+        hidden.forEach((s) => {
+            s.visible = false;
+        });
+        viewing = { op, resume, hidden };
+        fireViewer();
+        return true;
+    });
+
+    events.function('viewer.stop', () => stopViewing(true));
+    events.function('viewer.active', () => viewing?.op ?? null);
+
+    // Anything that moves the history while viewing - an undo, a new node, a
+    // changed parameter - is the user working again: the viewer lets go,
+    // where the history now is.
+    events.on('edit.changed', () => {
+        if (!viewing || travelling) return;
+        const index = indexOf(viewing.op);
+        if (index < 0 || history().cursor !== index + 1) {
+            stopViewing(false);
+        }
+    });
+
+    events.on('graph.addViewerNode', (target?: Splat) => {
+        addTarget(target).forEach(splat => appendAndOpen(new ViewerOp(splat)));
+    });
+
+    events.function('viewer.addNode', (splat: Splat, isolate?: boolean, bypassed?: boolean) => {
+        if (!splat) return null;
+        const op = new ViewerOp(splat);
+        if (isolate === false) op.isolate = false;
+        if (bypassed) op.bypassed = true;
+        events.fire('edit.add', op);
+        return op;
     });
 };
 
