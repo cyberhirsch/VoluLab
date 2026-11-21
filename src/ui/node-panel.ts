@@ -3,10 +3,11 @@ import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
-import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
+import type { LoopMode } from '../time-map';
 
 /**
  * The parameters of whichever node the graph has selected.
@@ -848,6 +849,19 @@ class NodePanel extends Container {
                 ['reverse', i18n.t('node.retime.reverse')]
             ], op.map.reverse ? 'reverse' : 'forward', index, (v) => {
                 op.map.reverse = v === 'reverse';
+            });
+        }
+
+        if (op instanceof LoopOp) {
+            this.replayChoice<LoopMode>(i18n.t('node.loop.mode'), [
+                ['none', i18n.t('node.loop.none')],
+                ['loop', i18n.t('node.loop.loop')],
+                ['pingpong', i18n.t('node.loop.pingpong')]
+            ], op.map.mode, index, (v) => {
+                op.map.mode = v;
+            });
+            this.replayNumber(i18n.t('node.loop.count'), op.map.repeats, 1, 1, index, (v) => {
+                op.map.count = Math.max(1, Math.round(v));
             });
         }
 

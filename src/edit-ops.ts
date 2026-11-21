@@ -18,7 +18,7 @@ import { SphereShape } from './sphere-shape';
 import { Splat } from './splat';
 import type { DebugView } from './splat-debug';
 import { State } from './splat-state';
-import { RetimeMap, TimeMap, TrimMap, timeSpan } from './time-map';
+import { LoopMap, LoopMode, RetimeMap, TimeMap, TrimMap, timeSpan } from './time-map';
 import { Transform } from './transform';
 import { Voxels } from './voxels';
 
@@ -773,6 +773,26 @@ class RetimeOp extends TimeOp {
     /** what the graph writes under the node's title */
     get sourceLabel() {
         return `${+this.map.factor.toFixed(3)}x${this.map.reverse ? ' reversed' : ''}`;
+    }
+}
+
+/**
+ * Loop: the sequence several times over, or there and back again that many
+ * times (ping-pong, which shows neither end twice in a row so it joins up
+ * with itself). Set to none it passes the sequence through.
+ */
+class LoopOp extends TimeOp {
+    name = 'loopNode';
+    declare map: LoopMap;
+
+    constructor(splat: Splat, mode: LoopMode = 'loop', count = 2) {
+        super(splat, new LoopMap(mode, count));
+    }
+
+    /** what the graph writes under the node's title */
+    get sourceLabel() {
+        if (this.map.mode === 'none') return 'none';
+        return `${this.map.mode === 'pingpong' ? 'ping-pong' : 'loop'} x${this.map.repeats}`;
     }
 }
 
@@ -2336,6 +2356,7 @@ export {
     TimeOp,
     TrimOp,
     RetimeOp,
+    LoopOp,
     SplatsTransformOp,
     PlacePivotOp,
     SetLocalFrameOp,

@@ -5,7 +5,7 @@ import { registerCameraEffects } from './camera-effects';
 import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, TrimOp, RetimeOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
+import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, TrimOp, RetimeOp, LoopOp, CameraOp, CleanupOp, CropOp, DatasetOp, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -660,6 +660,11 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // A retime node starts at the speed the model has: something to change.
     events.on('graph.addRetimeNode', (target?: Splat) => {
         addTarget(target).forEach(splat => appendAndOpen(new RetimeOp(splat)));
+    });
+
+    // A loop node starts as the sequence twice over.
+    events.on('graph.addLoopNode', (target?: Splat) => {
+        addTarget(target).forEach(splat => appendAndOpen(new LoopOp(splat)));
     });
 
     events.on('graph.addCleanupNode', (target?: Splat) => {
