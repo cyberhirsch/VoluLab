@@ -18,7 +18,7 @@ import { SphereShape } from './sphere-shape';
 import { Splat } from './splat';
 import type { DebugView } from './splat-debug';
 import { State } from './splat-state';
-import { FreezeMap, LoopMap, LoopMode, RetimeMap, TimeMap, TrimMap, timeSpan } from './time-map';
+import { FreezeMap, LoopMap, LoopMode, OffsetMap, OffsetOutside, RetimeMap, TimeMap, TrimMap, timeSpan } from './time-map';
 import { Transform } from './transform';
 import { Voxels } from './voxels';
 
@@ -812,6 +812,27 @@ class FreezeOp extends TimeOp {
     /** what the graph writes under the node's title */
     get sourceLabel() {
         return `frame ${Math.round(this.map.frame) || 0}`;
+    }
+}
+
+/**
+ * Time offset: the object's sequence starts that many frames later on the
+ * timeline, or earlier. Where the timeline is outside the sequence - before
+ * a later start, or after the end - the object is hidden, or holds the
+ * nearest frame it has.
+ */
+class OffsetOp extends TimeOp {
+    name = 'offsetNode';
+    declare map: OffsetMap;
+
+    constructor(splat: Splat, frames = 0, outside: OffsetOutside = 'hide') {
+        super(splat, new OffsetMap(frames, outside));
+    }
+
+    /** what the graph writes under the node's title */
+    get sourceLabel() {
+        const n = this.map.shift;
+        return `${n < 0 ? '' : '+'}${n}, ${this.map.outside}`;
     }
 }
 
@@ -2377,6 +2398,7 @@ export {
     RetimeOp,
     LoopOp,
     FreezeOp,
+    OffsetOp,
     SplatsTransformOp,
     PlacePivotOp,
     SetLocalFrameOp,

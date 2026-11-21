@@ -3,11 +3,11 @@ import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
-import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
-import type { LoopMode } from '../time-map';
+import type { LoopMode, OffsetOutside } from '../time-map';
 
 /**
  * The parameters of whichever node the graph has selected.
@@ -868,6 +868,18 @@ class NodePanel extends Container {
         if (op instanceof FreezeOp) {
             this.replayNumber(i18n.t('node.freeze.frame'), Math.round(op.map.frame) || 0, 1, 0, index, (v) => {
                 op.map.frame = Math.max(0, Math.round(v));
+            });
+        }
+
+        if (op instanceof OffsetOp) {
+            this.replayNumber(i18n.t('node.offset.frames'), op.map.shift, 1, 0, index, (v) => {
+                op.map.frames = Math.round(v);
+            });
+            this.replayChoice<OffsetOutside>(i18n.t('node.offset.outside'), [
+                ['hide', i18n.t('node.offset.hide')],
+                ['hold', i18n.t('node.offset.hold')]
+            ], op.map.outside, index, (v) => {
+                op.map.outside = v;
             });
         }
 
