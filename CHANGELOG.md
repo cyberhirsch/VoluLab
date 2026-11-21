@@ -9,6 +9,41 @@ months finds out why before they change it.
 
 ---
 
+## Compact GSV: a gaussian at rest is stored at rest
+
+The compact encoding stores a velocity as a 16-bit code between the page's
+`velMins` and `velMaxs`, and zero fell between two codes: a gaussian with a
+velocity of exactly zero read back with about 2.5e-5 per axis. Small, but
+it is the difference between "stands still" and "moves slowly", and three
+things ask exactly that. The debug view's static channel showed the
+background as dynamic, the writer's static rule found no static rows in a
+file written all-dynamic and read back, and the 4D sort needed a tolerance.
+
+The writer now widens each axis's range until zero is one of its codes
+(`zeroOnCode` in `gsv-webp.ts`). Zero moves to the code above by lowering
+the minimum or to the code below by raising the maximum, whichever grows
+the step less; that is never more than one step of range in all. Keeping
+to one end, the obvious rule, is not: with zero near the other end it
+widened the range by thousands of steps in a test of two million ranges.
+The reader computes `min + (max - min) * q / 65535` and was not to change,
+so the last rounding error is taken out against exactly that expression -
+`e^x - 1` of a last-place error is not zero. A range with zero at an end,
+to one side of zero or of no width is left alone.
+
+The format and the reader are unchanged; files written before this still
+read as they did, with the half step at rest. The rule is in the spec
+(`docs/format-gsv.md`, 7.2) as a SHOULD for writers.
+
+Measured on every 40th gaussian of `mira_alley_2layer.npz` (82,391, in
+headless Chrome): the file written all-dynamic and read back has 32,334
+rows with a velocity of exactly zero, where it had none; written again
+with the static set on, its static page holds 32,334 rows, the same as
+when the set is picked from the source. Other velocities are off by at
+most 0.5 step, as before. Two million random ranges in a node script: zero
+exact in all of them, the range never more than one step wider.
+
+---
+
 ## Transform and delete nodes
 
 Two nodes that only ever appeared as the trace of something done in the

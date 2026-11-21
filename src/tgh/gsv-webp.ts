@@ -192,6 +192,44 @@ const q16 = (v: number, lo: number, hi: number) => {
     return range > 0 ? Math.max(0, Math.min(65535, Math.round(((v - lo) / range) * 65535))) : 0;
 };
 
+/**
+ * Widen a 16-bit range that straddles zero, by at most one step, until
+ * zero is one of its codes. Between two codes, a gaussian at rest reads
+ * back with a velocity of half a step, and nothing that asks "does it
+ * stand still" (the static set, the debug view, the 4D sort) gets a yes.
+ * A range with zero at an end, to one side of zero or of no width needs
+ * nothing: there zero is already a code, or no value is zero.
+ */
+const zeroOnCode = (lo: number, hi: number): [number, number] => {
+    if (!(lo < 0 && hi > 0)) return [lo, hi];
+    // where zero falls, in codes. It moves to the code above by lowering
+    // lo, or to the one below by raising hi; either grows the step, and
+    // the one that grows it less is taken. That is never more than one
+    // step of range in all, where keeping to one end could cost thousands
+    // when zero lies near the other.
+    const at = (-lo / (hi - lo)) * 65535;
+    const up = Math.min(65534, Math.ceil(at));
+    const down = Math.max(1, Math.floor(at));
+    const stepOf = (k: number) => Math.max(-lo / k, hi / (65535 - k));
+    const k = stepOf(up) <= stepOf(down) ? up : down;
+    const step = stepOf(k);
+    lo = -k * step;
+    hi = (65535 - k) * step;
+
+    // What is left is rounding, and it has to go too: the reader computes
+    // lo + (hi - lo) * (q / 65535) and is not to change, and e^x - 1 of a
+    // last-place error is not zero. Setting lo to what the reader adds to
+    // it is a rising or a falling walk of a few last places that ends
+    // where the sum is exactly zero.
+    const c = k / 65535;
+    for (let i = 0; i < 64; i++) {
+        const next = -((hi - lo) * c);
+        if (next === lo) break;
+        lo = next;
+    }
+    return [lo, hi];
+};
+
 type EncodeOptions = {
     device: GPUDevice;
     // SH palette size; defaults to 65 536, or one per primitive if fewer
@@ -321,6 +359,10 @@ const encodeWebpPages = async (pages: { id: string, data: MotionPage, isStatic?:
         }));
         if (!(tHi >= tLo)) {
             tLo = tHi = 0;
+        }
+        // a velocity of zero is stored as zero
+        for (let a = 0; a < 3; a++) {
+            [velMins[a], velMaxs[a]] = zeroOnCode(velMins[a], velMaxs[a]);
         }
 
         const meansL = new Uint8Array(texel);

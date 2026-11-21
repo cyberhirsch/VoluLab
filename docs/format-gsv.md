@@ -283,7 +283,12 @@ byte happens to be 0.
   `v = invLog(min + (max − min) · q / 65535)`.
 - **Velocities** are 16-bit lerps between the page's `velMins` and
   `velMaxs`, through the same `sign(v) · ln(|v| + 1)`: still and slow
-  primitives, the great majority, get the finest steps.
+  primitives, the great majority, get the finest steps. A writer SHOULD
+  choose the range so that zero is one of the 65 536 codes
+  (`−velMin · 65535 / (velMax − velMin)` an integer, by widening the range
+  by less than one step): otherwise a primitive at rest reads back with
+  half a step of velocity, and no reader can tell it from a slow one.
+  VoluLab's writer does; files it wrote before 21 November 2026 do not.
 - **Time** is a 16-bit linear lerp over the page's `timeRange`,
   `[lo, hi]`, the range of the page's temporal means. It is not
   `[tMin, tMax]`: a primitive belongs to a segment by its hierarchy, and its
