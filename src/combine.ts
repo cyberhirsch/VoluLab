@@ -17,6 +17,7 @@ import { CombineOp, LayerOp, MergeOp, SwitchOp, defaultLayerSettings, type Combi
 import type { EditOp } from './edit-ops';
 import { ElementType } from './element';
 import { Events } from './events';
+import { registerInstanceEvents } from './instance';
 import { mergedRotation, type MergeBuilt } from './merge-build';
 import { Scene } from './scene';
 import { Splat } from './splat';
@@ -341,6 +342,9 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
     });
 
     events.function('combine.check', () => check());
+
+    // instance nodes (instance.ts)
+    registerInstanceEvents(events);
 };
 
 export { registerCombineEvents };

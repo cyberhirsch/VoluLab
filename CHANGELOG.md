@@ -9,6 +9,35 @@ months finds out why before they change it.
 
 ---
 
+## An instance node: copies that share the data
+
+The instance node draws copies of an object at other places without
+copying it. There are two ways to place them. A grid takes a count and a
+spacing per axis; the object itself is the first cell. A list takes one
+entry per copy: `x y z`, then an optional turn about y in degrees and an
+optional number of frames the copy plays later.
+
+How (`instance-ops.ts`). Each copy is an entity with its own gsplat
+component on the source's asset, so it uses the same GPU resource. The
+gaussians are uploaded once whatever the count. Each frame (`prerender`),
+the copy takes the object's world transform with its offset and turn on
+top. It also copies the main material's parameters, except the ones that
+belong to each copy: its sort order, texture size, count and motion time.
+That way grading, debug views and deletions show on the copies as soon as
+they show on the object. Each copy is sorted for its own position. A 4D
+object's copies each get their own MotionSorter. A copy shows the time
+that the object's own time nodes give for the timeline frame minus the
+copy's frame offset. A copy with an offset is hidden before it starts and
+after it ends.
+
+What copies are not. They are drawn only. Picking, selection, bounds,
+merges and exports see the object alone, and two copies that overlap in
+depth do not interleave, since each is sorted apart. Making them real
+gaussians is what a merge of real duplicates is for. There are at most
+256 copies (`MAX_COPIES`), each one a sort of the whole object.
+
+---
+
 ## Layer nodes and the layer list
 
 A layer node names the branch up to it. It has a visibility, a solo, a

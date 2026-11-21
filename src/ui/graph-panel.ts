@@ -92,6 +92,7 @@ const OP_LABELS: Record<string, string> = {
     merge: 'merge',
     switch: 'switch',
     layer: 'layer',
+    instance: 'instance',
     splitNode: 'split',
     voxelise: 'voxelise',
     addVoxels: 'import voxels',
@@ -1190,6 +1191,10 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addLayerNode', splat)
                     },
                     {
+                        label: 'instance',
+                        action: () => this.events.fire('graph.addInstanceNode', splat)
+                    },
+                    {
                         label: 'cleanup',
                         action: () => this.events.fire('graph.addCleanupNode', splat)
                     },
@@ -1516,6 +1521,13 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addLayerNode')
+            },
+            {
+                // copies of the object elsewhere, its data shared
+                label: 'add instance node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addInstanceNode')
             },
             {
                 label: 'add cleanup node',

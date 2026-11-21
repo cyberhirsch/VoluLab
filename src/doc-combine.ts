@@ -9,12 +9,14 @@
  * entry with its name, placement and grade and no file; it opens as an
  * empty object, which the node fills once the history has settled.
  *
- * A layer node is stored with its settings on the object it is on.
+ * A layer node and an instance node are stored with their settings on
+ * the object they are on.
  */
 
 import { CombineOp, LayerOp, MergeOp, SwitchOp } from './combine-ops';
 import type { EditOp } from './edit-ops';
 import { Events } from './events';
+import { InstanceOp } from './instance-ops';
 import { mergedRotation } from './merge-build';
 import { Scene } from './scene';
 import { Splat } from './splat';
@@ -30,6 +32,7 @@ const storeCombine = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: P
     const outputs = new Set<number>();
     const combine: any[] = [];
     const layers: any[] = [];
+    const instances: any[] = [];
 
     ops.slice(0, cursor).forEach((op) => {
         if (op instanceof CombineOp) {
@@ -50,10 +53,14 @@ const storeCombine = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: P
             const splat = splats.indexOf(op.splat);
             if (splat < 0) return;
             layers.push({ splat, settings: { ...op.settings }, bypassed: !!op.bypassed, ...placeOf(op) });
+        } else if (op instanceof InstanceOp) {
+            const splat = splats.indexOf(op.splat);
+            if (splat < 0) return;
+            instances.push({ splat, settings: JSON.parse(JSON.stringify(op.settings)), bypassed: !!op.bypassed, ...placeOf(op) });
         }
     });
 
-    return { outputs, document: { combine, layers } };
+    return { outputs, document: { combine, layers, instances } };
 };
 
 /** The objects of a project that a merge or switch node makes: they have no file. */
@@ -85,6 +92,11 @@ const restoreCombine = (document: any, loaded: Splat[], later: Later, events: Ev
         const splat = loaded[stored.splat];
         if (!splat) return;
         later(stored, () => events.invoke('layer.addNode', splat, { ...(stored.settings ?? {}), bypassed: !!stored.bypassed }));
+    });
+    (Array.isArray(document?.instances) ? document.instances : []).forEach((stored: any) => {
+        const splat = loaded[stored.splat];
+        if (!splat) return;
+        later(stored, () => events.invoke('instance.addNode', splat, { ...(stored.settings ?? {}), bypassed: !!stored.bypassed }));
     });
 };
 

@@ -1,5 +1,5 @@
 /**
- * The nodes that combine objects: merge, switch and layer.
+ * The nodes that combine objects: merge, switch, layer and instance.
  *
  * Merge and switch make one object out of several (merge-build.ts). The
  * object is made before the node exists - the first build is the node's

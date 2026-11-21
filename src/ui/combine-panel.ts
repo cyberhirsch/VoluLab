@@ -1,6 +1,6 @@
 /**
- * The node pane's faces for the combining nodes: merge, switch and
- * layer. In a file of their own so the node pane only dispatches to
+ * The node pane's faces for the combining nodes: merge, switch, layer and
+ * instance. In a file of their own so the node pane only dispatches to
  * them; they use its rows and classes (node-panel.scss).
  */
 
@@ -9,6 +9,7 @@ import { fieldDefault } from './value-fields';
 import { CombineOp, LayerOp, MergeOp, SwitchOp, type SwitchCut } from '../combine-ops';
 import type { EditOp } from '../edit-ops';
 import { Events } from '../events';
+import { InstanceOp } from '../instance-ops';
 
 class Face {
     body: HTMLElement;
@@ -207,6 +208,40 @@ const buildLayer = (face: Face, op: LayerOp) => {
     face.note(i18n.t('node.layer.note'));
 };
 
+const buildInstance = (face: Face, op: InstanceOp) => {
+    const s = op.settings;
+    face.choice(i18n.t('node.instance.mode'), [
+        ['grid', i18n.t('node.instance.grid')],
+        ['list', i18n.t('node.instance.list')]
+    ], s.mode, (v) => {
+        s.mode = v;
+    });
+    if (s.mode === 'grid') {
+        const counts = face.row(i18n.t('node.instance.count'));
+        (['x', 'y', 'z'] as const).forEach((axis, k) => {
+            face.number('', s.count[k], 1, 1, (v) => {
+                s.count[k] = Math.max(1, Math.min(32, Math.round(v)));
+            }, counts).title = axis;
+        });
+        const spacing = face.row(i18n.t('node.instance.spacing'));
+        (['x', 'y', 'z'] as const).forEach((axis, k) => {
+            face.number('', s.spacing[k], 0.1, 1, (v) => {
+                s.spacing[k] = v;
+            }, spacing).title = axis;
+        });
+        face.number(i18n.t('node.instance.time-step'), s.timeStep, 1, 0, (v) => {
+            s.timeStep = Math.round(v);
+        });
+    } else {
+        face.text(i18n.t('node.instance.list-label'), s.list, (v) => {
+            s.list = v;
+        }).placeholder = '2 0 0 0 10; -2 0 0 90 20';
+        face.note(i18n.t('node.instance.list-note'));
+    }
+    face.stat(i18n.t('node.instance.copies'), count(op.copyCount));
+    face.note(i18n.t('node.instance.note'));
+};
+
 /**
  * Build the face of a combining node into the node pane's body. False when
  * `op` is none of them.
@@ -216,6 +251,7 @@ const buildCombineFace = (op: EditOp, index: number, body: HTMLElement, events: 
     if (op instanceof MergeOp) buildMerge(face, op);
     else if (op instanceof SwitchOp) buildSwitch(face, op);
     else if (op instanceof LayerOp) buildLayer(face, op);
+    else if (op instanceof InstanceOp) buildInstance(face, op);
     else return false;
     return true;
 };
