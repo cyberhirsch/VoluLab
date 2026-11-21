@@ -9,6 +9,113 @@ months finds out why before they change it.
 
 ---
 
+## Time nodes and a split node
+
+The graph can now edit time. Five nodes for a 4D model - trim, retime,
+loop, freeze frame, time offset - and a split node, the counterpart to
+merge, are in the canvas menu ("add ... node") and in the menu shown when
+a wire is dropped on nothing.
+
+How time gets to the picture decides how the nodes are built. A 4D model
+played on the GPU is one set of gaussians at their temporal centres, with
+a velocity and a lifetime each. The timeline's frame reaches the sequence
+(`sequence.ts`), which hands it to the model's frame source, which calls
+the object; the object passes a normalised time to its sort worker
+(`motion-sort.ts`), and the time of the order that comes back is the
+`motionTime` the shader moves and fades the gaussians by. So there is one
+number per object, and everything that draws or measures the model -
+bounds, picking, selection, relighting - already reads it.
+
+A time node therefore changes that number and nothing else. Each is a map
+(`time-map.ts`) from a frame of the sequence it leaves to a frame of the
+sequence it was given, plus the length of the sequence it leaves. An
+object keeps the maps of its applied time nodes in the order of its chain
+(`Splat.timeMaps`), and `Splat.showFrame` - the one place the mapping is
+applied - sends a timeline frame through them from the last to the first
+and shows the model frame that comes out. A node (`TimeOp`) puts its map
+on the object when it is applied and takes it off when it is undone or
+bypassed, so the mapping without a node is simply the list without its
+map, and two nodes compose in graph order because the list is in graph
+order. The model's data is never touched: a retimed gaussian is still
+drawn where it was trained to be at the model frame shown, and fades as
+it did, so there is no second copy of a velocity or a lifetime that could
+disagree with the first. A mapped frame may fall between two of the
+model's frames (half speed); the model is continuous in time and is drawn
+there.
+
+- **Trim** keeps frames in..out. The frames are counted in the sequence
+  the node is given, so under a retime they are frames of the retimed
+  sequence.
+- **Retime** is a speed factor and a reverse switch; the length follows.
+- **Loop** repeats the sequence, or plays it there and back that many
+  times (ping-pong shows neither end twice in a row, so it joins up with
+  itself). "none" passes the sequence through.
+- **Freeze frame** shows one frame for the whole timeline: a 4D model
+  drawn as a still, its data left as it is. It starts on the frame the
+  object is showing.
+- **Time offset** starts the sequence later or earlier. Where the
+  timeline is outside the sequence the object is hidden or holds its
+  nearest frame, as a setting. Hidden is a flag of its own
+  (`Splat.timeHidden`), not the object's visibility, which stays the
+  user's.
+
+The timeline takes the length of the longest 4D object as its time nodes
+leave it, once the history has settled (a replay takes the nodes off and
+puts them back, and following every step would strand the playhead). A
+shorter object holds its last frame, or is hidden there if a time offset
+node on it says so.
+
+All five leave a 3D model untouched and say so in their face: the node is
+carried on the chain and does nothing.
+
+The split node (`SplitOp`) makes what the select nodes above it leave
+selected into a new object in its own lane. Set to move, the source loses
+those gaussians (they are marked deleted, as a delete node would); set to
+copy, the source keeps everything. It reads the selection when it
+applies, so changing a select node above it changes the split - the new
+object stays the same object, for the nodes after it to stand on, and its
+data is made again (`Splat.replaceData`). Undo and bypass take the object
+out of the scene and give the source its gaussians back. With nothing
+selected there is no new object.
+
+The part split off a 4D model is a 4D model: its rows are copied as they
+are, each with its velocity, its lifetime and its place in the hierarchy
+(`split.ts`), it gets a sort worker of its own, and it starts with the
+time nodes its source had at the split. Only the object the sequence
+plays was told the frame until now, so every 4D object is now told by the
+editor as well (`timeline.frame`, and `timeline.time` for the video
+export, which moves the time without moving the frame). A 3D object's
+part goes the way a duplicate's does - written out and read back - which
+bakes in what the nodes above did to single gaussians.
+
+Traps:
+
+- The 4D export (`.gsv`) writes the sequence's model as it was loaded. It
+  ignores time nodes, and it writes the whole source of a split, not the
+  parts. To follow them the writer would need the frame range and
+  direction applied to each gaussian's temporal centre and velocity
+  (trim, retime, offset), a still written for a freeze frame, and a
+  model per object; a loop cannot be held by a file that stores one
+  lifetime per gaussian and would have to be a flag for the player.
+- The video export follows time nodes on the model the sequence plays.
+  It waits for the sort of that model only, so a part split off a 4D
+  model can be drawn one sort late in an exported frame.
+- A project does not store these nodes yet. Each time node says what
+  there is to keep (`TimeOp.settings`) and `time.addNode` puts one back
+  from that; a split needs its mode and, for a 4D part, which rows of the
+  source it holds.
+- Two objects are each sorted on their own and drawn one after the other.
+  Where the two parts of a split overlap in depth the picture of both is
+  not exactly the picture of the whole: on the alley model, 77 dB against
+  the whole with a quarter split off at one side, 33 dB with a band out
+  of the middle. The rows, their motion and their active sets are the
+  model's to the bit either way.
+- The part split off a 4D model does not carry colour or transform
+  changes made to single gaussians above the split; those live outside
+  the rows.
+- The graph draws the split's wire from the end of the source's lane,
+  like merge's, also when nodes were added to the source after it.
+
 ## Transform and delete nodes
 
 Two nodes that only ever appeared as the trace of something done in the
