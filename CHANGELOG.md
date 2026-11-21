@@ -37,6 +37,17 @@ into `doc-nodes.ts`).
   or by tolerances on hue, saturation and value apart. "Take colour from
   selection" takes the mean colour of what the nodes above leave selected,
   so a patch picked with a select node gives the key colour.
+- **select by region over time**: a box, sphere or cylinder in world space,
+  with a range of frames. Its place, turn and size are nine plain numbers;
+  the node asks for them at each frame of the model and tests each gaussian
+  of a 4D model against the region as it stands at the gaussian's own
+  moment, where the gaussian is then, so a keyed region follows a moving
+  subject. Unkeyed it stands still. The region is drawn in the viewport, at
+  the frame shown, while the node is open. Not built: the brush volume, and
+  attaching the region to a tracked point (that waits for track / attach).
+  The hooks are accessors over a module object rather than static fields:
+  a static never assigned inside the bundle is inlined by the minifier as
+  its initial value, so a hook set from outside was ignored.
 
 ---
 

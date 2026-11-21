@@ -1,3 +1,5 @@
+import { Mat4, Quat, Vec3 } from 'playcanvas';
+
 import { EditOp, SelectMode, SelectOp, StateOp } from './edit-ops';
 import { IndexRanges } from './index-ranges';
 import { Splat } from './splat';
@@ -74,16 +76,36 @@ const lifetime = (splat: Splat, i: number) => {
     return { tc, reach };
 };
 
+type KeyedHook = (op: SelectionNodeOp, key: string, frame: number) => number | undefined;
+type AppliedHook = (op: EditOp) => boolean;
+
+// what the static hooks below hold. In an object of their own rather than
+// as static fields: a static never assigned inside the bundle is inlined as
+// its initial value by the minifier, and the hook set from outside ignored
+const hooks: { keyed: KeyedHook | null, applied: AppliedHook | null } = { keyed: null, applied: null };
+
 abstract class SelectionNodeOp extends StateOp {
     /**
      * A keyed value of a node's parameter at a frame of the model, or
      * undefined where the parameter has no keys. Set by the keyframe work;
      * unset, every parameter is its number.
      */
-    static keyed: ((op: SelectionNodeOp, key: string, frame: number) => number | undefined) | null = null;
+    static set keyed(hook: KeyedHook | null) {
+        hooks.keyed = hook;
+    }
+
+    static get keyed() {
+        return hooks.keyed;
+    }
 
     /** whether an op is applied in the history now: set by the editor */
-    static applied: ((op: EditOp) => boolean) | null = null;
+    static set applied(hook: AppliedHook | null) {
+        hooks.applied = hook;
+    }
+
+    static get applied() {
+        return hooks.applied;
+    }
 
     abstract readonly kind: SelectionNodeKind;
 
@@ -394,10 +416,134 @@ class ColourSelectOp extends SelectionNodeOp {
 }
 
 // ---------------------------------------------------------------------------
+// select by region over time
+
+type RegionShape = 'box' | 'sphere' | 'cylinder';
+
+const REGION_KEYS = ['px', 'py', 'pz', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz'];
+
+const regionQuat = new Quat();
+const regionPos = new Vec3();
+const regionSize = new Vec3();
+
+/** is a point in the unit shape: a cube of side 1, a sphere or cylinder (along y) of diameter 1 */
+const inUnitShape = (shape: RegionShape, x: number, y: number, z: number) => {
+    switch (shape) {
+        case 'box': return Math.abs(x) <= 0.5 && Math.abs(y) <= 0.5 && Math.abs(z) <= 0.5;
+        case 'sphere': return x * x + y * y + z * z <= 0.25;
+        case 'cylinder': return x * x + z * z <= 0.25 && Math.abs(y) <= 0.5;
+    }
+};
+
+/**
+ * A box, sphere or cylinder in the world that selects what is inside it,
+ * over a range of frames. Its place, turn and size are nine plain numbers,
+ * so the keyframe work can key them; the node asks for them at each frame
+ * of the model and tests each gaussian of a 4D model against the region as
+ * it stands at that gaussian's own moment, where the gaussian is then. A
+ * keyed region therefore follows a moving subject. Without keys the region
+ * stands still, and a 4D model's gaussians are caught by where they are at
+ * their temporal centre. Gaussians whose lifetime misses the range of
+ * frames are not caught.
+ */
+class RegionSelectOp extends SelectionNodeOp {
+    name = 'selectByRegion';
+    readonly kind = 'region';
+
+    shape: RegionShape;
+
+    constructor(splat: Splat, shape: RegionShape = 'box', params: Record<string, number> = {}) {
+        super(splat, { px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1, from: 0, to: -1, ...params });
+        this.shape = shape;
+    }
+
+    /** A region around an object: in its middle, half as wide as it. */
+    static around(splat: Splat, shape: RegionShape = 'box') {
+        const bound = splat.worldBound;
+        const c = bound.center;
+        const h = bound.halfExtents;
+        return new RegionSelectOp(splat, shape, { px: c.x, py: c.y, pz: c.z, sx: Math.max(h.x, 1e-3), sy: Math.max(h.y, 1e-3), sz: Math.max(h.z, 1e-3) });
+    }
+
+    setShape(shape: RegionShape) {
+        this.shape = shape;
+        this.invalidate();
+    }
+
+    /** the region at a frame of the model: unit shape to world */
+    matrixAt(frame: number, out = new Mat4()) {
+        const v = (k: string) => this.value(k, frame);
+        regionPos.set(v('px'), v('py'), v('pz'));
+        regionQuat.setFromEulerAngles(v('rx'), v('ry'), v('rz'));
+        regionSize.set(v('sx') || 1e-6, v('sy') || 1e-6, v('sz') || 1e-6);
+        return out.setTRS(regionPos, regionQuat, regionSize);
+    }
+
+    /** the range of model frames, `to` of -1 being the last */
+    range(splat: Splat): [number, number] {
+        const frames = modelFrames(splat);
+        const from = Math.max(0, Math.min(frames - 1, Math.round(this.params.from)));
+        const to = this.params.to < 0 ? frames - 1 : Math.max(from, Math.min(frames - 1, Math.round(this.params.to)));
+        return [from, to];
+    }
+
+    protected hits(splat: Splat) {
+        const n = splat.splatData.numSplats;
+        const out = new Uint8Array(n);
+        const centers = worldCenters(splat);
+        const motion = splat.motion;
+        const frames = modelFrames(splat);
+        const [from, to] = this.range(splat);
+
+        // the inverse of the region at each frame asked for, made once
+        const keyed = this.anyKeyed(REGION_KEYS);
+        const inverses = new Map<number, Float32Array>();
+        const inverseAt = (frame: number) => {
+            const f = keyed ? frame : 0;
+            let m = inverses.get(f);
+            if (!m) {
+                m = new Float32Array(this.matrixAt(f).invert().data);
+                inverses.set(f, m);
+            }
+            return m;
+        };
+
+        for (let i = 0; i < n; ++i) {
+            let frame = 0;
+            if (motion) {
+                const { tc, reach } = lifetime(splat, i);
+                // its lifetime has to meet the range of frames
+                if (tc + reach < from / frames || tc - reach > to / frames) continue;
+                frame = Math.max(from, Math.min(to, Math.round(tc * frames)));
+            }
+            const m = inverseAt(frame);
+            const x = centers[i * 3], y = centers[i * 3 + 1], z = centers[i * 3 + 2];
+            const lx = m[0] * x + m[4] * y + m[8] * z + m[12];
+            const ly = m[1] * x + m[5] * y + m[9] * z + m[13];
+            const lz = m[2] * x + m[6] * y + m[10] * z + m[14];
+            out[i] = inUnitShape(this.shape, lx, ly, lz) ? 1 : 0;
+        }
+        return out;
+    }
+
+    describe() {
+        return this.shape;
+    }
+
+    protected extra() {
+        return { shape: this.shape };
+    }
+
+    restoreExtra(stored: Record<string, any>) {
+        this.shape = ['box', 'sphere', 'cylinder'].includes(stored.shape) ? stored.shape : 'box';
+    }
+}
+
+// ---------------------------------------------------------------------------
 // the nodes, by kind
 
 // the kinds built, in menu order
-const SELECTION_NODE_KINDS: SelectionNodeKind[] = ['motion', 'colour'];
+const SELECTION_NODE_KINDS: SelectionNodeKind[] = ['motion', 'colour', 'region'];
 
 /** the op name each kind goes by, for the graph's labels */
 const SELECTION_NODE_NAMES: Record<SelectionNodeKind, string> = {
@@ -419,6 +565,7 @@ const makeSelectionNode = (kind: string, splat: Splat): SelectionNodeOp | null =
     switch (kind) {
         case 'motion': return new MotionSelectOp(splat);
         case 'colour': return new ColourSelectOp(splat);
+        case 'region': return RegionSelectOp.around(splat);
         default: return null;
     }
 };
@@ -443,6 +590,8 @@ export {
     type MotionMetric,
     ColourSelectOp,
     type ColourSpace,
+    RegionSelectOp,
+    type RegionShape,
     SELECTION_NODE_KINDS,
     SELECTION_NODE_NAMES,
     isSelectionSource,

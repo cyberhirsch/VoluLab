@@ -1,8 +1,10 @@
+import { Color, Mat4, Vec3 } from 'playcanvas';
+
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
 import { SelectMode } from '../edit-ops';
 import { Events } from '../events';
-import { ColourSelectOp, ColourSpace, MotionMetric, MotionSelectOp, SELECTION_NODE_KINDS, SELECTION_NODE_NAMES, SelectionNodeOp } from '../select-nodes';
+import { ColourSelectOp, ColourSpace, MotionMetric, MotionSelectOp, RegionSelectOp, RegionShape, modelFrames, SELECTION_NODE_KINDS, SELECTION_NODE_NAMES, SelectionNodeOp } from '../select-nodes';
 import { Splat } from '../splat';
 
 /**
@@ -343,6 +345,96 @@ const buildColour = (face: Face, op: ColourSelectOp) => {
     face.note(t('node.selcolour.note'));
 };
 
+const lineA = new Vec3();
+const lineB = new Vec3();
+const regionMat = new Mat4();
+
+// the edges of each unit shape, as pairs of points
+const shapeEdges = (shape: RegionShape): number[][] => {
+    const e: number[][] = [];
+    if (shape === 'box') {
+        const c = [-0.5, 0.5];
+        c.forEach(a => c.forEach((b) => {
+            e.push([-0.5, a, b, 0.5, a, b], [a, -0.5, b, a, 0.5, b], [a, b, -0.5, a, b, 0.5]);
+        }));
+        return e;
+    }
+    const ring = (y: number, axis: 'x' | 'y' | 'z') => {
+        const S = 48;
+        for (let k = 0; k < S; ++k) {
+            const a0 = k / S * Math.PI * 2, a1 = (k + 1) / S * Math.PI * 2;
+            const p = (a: number) => {
+                const u = Math.cos(a) * 0.5, v = Math.sin(a) * 0.5;
+                return axis === 'y' ? [u, y, v] : axis === 'x' ? [y, u, v] : [u, v, y];
+            };
+            e.push([...p(a0), ...p(a1)]);
+        }
+    };
+    if (shape === 'sphere') {
+        ring(0, 'x');
+        ring(0, 'y');
+        ring(0, 'z');
+    } else {
+        ring(-0.5, 'y');
+        ring(0.5, 'y');
+        [[0.5, 0], [-0.5, 0], [0, 0.5], [0, -0.5]].forEach(([x, z]) => e.push([x, -0.5, z, x, 0.5, z]));
+    }
+    return e;
+};
+
+/**
+ * Draw the region in the viewport while its node is open in the pane: at
+ * the frame shown, so a keyed region is seen where it is then.
+ */
+const previewRegion = (face: Face, op: RegionSelectOp) => {
+    const scene = op.splat?.scene;
+    if (!scene) return;
+    const marker = face.body.lastElementChild;
+    const edges = shapeEdges(op.shape);
+    const colour = new Color(1, 0.4, 0);
+    const draw = () => {
+        if (!marker?.isConnected || !op.splat) {
+            scene.events.off('prerender', draw);
+            return;
+        }
+        const splat = op.splat;
+        const frame = splat.motion ? Math.round(splat.motionTime * modelFrames(splat)) : 0;
+        op.matrixAt(frame, regionMat);
+        edges.forEach((p) => {
+            regionMat.transformPoint(lineA.set(p[0], p[1], p[2]), lineA);
+            regionMat.transformPoint(lineB.set(p[3], p[4], p[5]), lineB);
+            scene.app.drawLine(lineA, lineB, colour, false, scene.worldLayer);
+        });
+    };
+    scene.events.on('prerender', draw);
+    scene.forceRender = true;
+};
+
+const buildRegion = (face: Face, op: RegionSelectOp) => {
+    face.choice<RegionShape>(t('node.selregion.shape'), [
+        ['box', t('node.selregion.box')],
+        ['sphere', t('node.selregion.sphere')],
+        ['cylinder', t('node.selregion.cylinder')]
+    ], op.shape, s => op.setShape(s));
+    const p = op.params;
+    const triple = (label: string, keys: string[], neutral: number, step: number) => {
+        face.numbers(label, keys.map(k => p[k]), neutral, step, v => keys.forEach((k, i) => op.setParam(k, v[i])));
+    };
+    triple(t('node.selregion.position'), ['px', 'py', 'pz'], 0, 0.05);
+    triple(t('node.selregion.rotation'), ['rx', 'ry', 'rz'], 0, 1);
+    triple(t('node.selregion.size'), ['sx', 'sy', 'sz'], 1, 0.05);
+    if (op.splat.motion) {
+        const [from, to] = op.range(op.splat);
+        face.numbers(t('node.selmotion.frames'), [from, to], 0, 1, (v) => {
+            op.setParam('from', Math.max(0, Math.round(v[0])));
+            op.setParam('to', Math.max(0, Math.round(v[1])));
+        });
+    }
+    outcome(face, op);
+    face.note(t(op.splat.motion ? 'node.selregion.note-4d' : 'node.selregion.note'));
+    previewRegion(face, op);
+};
+
 /**
  * Fill the node pane for one of these nodes. False for an op that is not
  * one, so the pane carries on with its own kinds.
@@ -353,6 +445,7 @@ const buildSelectionNodeFace = (body: HTMLElement, events: Events, op: unknown, 
     common(face, op);
     if (op instanceof MotionSelectOp) buildMotion(face, op);
     if (op instanceof ColourSelectOp) buildColour(face, op);
+    if (op instanceof RegionSelectOp) buildRegion(face, op);
     return true;
 };
 
