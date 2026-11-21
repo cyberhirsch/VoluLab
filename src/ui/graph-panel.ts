@@ -109,7 +109,8 @@ const OP_LABELS: Record<string, string> = {
     output: 'output',
     renderPasses: 'render passes',
     viewer: 'viewer',
-    cache: 'cache'
+    cache: 'cache',
+    stats: 'stats'
 };
 
 // A bundled edit is named by the member that does the work, not by the fact
@@ -743,8 +744,8 @@ class GraphPanel extends Container {
                 applied: i < cursor,
                 splat,
                 select: !!select,
-                // render passes and the viewer are taps: nothing is fed from them
-                terminal: ['output', 'renderPasses', 'viewer'].includes(op.name),
+                // render passes, viewer and stats are taps: nothing is fed from them
+                terminal: ['output', 'renderPasses', 'viewer', 'stats'].includes(op.name),
                 bypassed: !!op.bypassed,
                 // frozen only when nothing in it can be re-run
                 frozen: steps.length && !select?.mesh ? steps.every(s => !isParametric(s.query)) : undefined,
@@ -1216,6 +1217,10 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addCacheNode', splat)
                     },
                     {
+                        label: 'stats',
+                        action: () => this.events.fire('graph.addStatsNode', splat)
+                    },
+                    {
                         label: 'output',
                         action: () => this.events.fire('graph.addOutputNode', splat)
                     }
@@ -1551,6 +1556,13 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addCacheNode')
+            },
+            {
+                // count, still and moving, memory, bounds, change per frame
+                label: 'add stats node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addStatsNode')
             },
             {
                 label: 'add output node',

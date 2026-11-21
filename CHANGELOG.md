@@ -9,6 +9,21 @@ months finds out why before they change it.
 
 ---
 
+## Stats node
+
+Measures the object when the chain passes through it, so it always says what
+its point holds (`StatsOp.do` calls the measure in `inspect-nodes.ts`): count,
+deleted, selected, hidden, the still and moving share of a 4D model (the
+hierarchy's still set, or no velocity and no fade), CPU memory of the data and
+its motion, and the bounds of the live centres in object space. "Count per
+frame" works out for a 4D model how many gaussians the shader draws at each
+model frame - in the active set, not faded below 1/255, the shader's own
+discard - and how many came and went since the frame before. A PLY sequence
+collects the count of each frame it shows. Nothing is stored but the node: the
+figures are measured again on load.
+
+---
+
 ## Cache node
 
 Keeps what the state nodes above it on its object (select, cleanup, decimate,

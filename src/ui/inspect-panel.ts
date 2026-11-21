@@ -1,6 +1,6 @@
 import { i18n } from './localization';
 import { Events } from '../events';
-import { CacheOp, PASS_NAMES, RenderPassesOp, ViewerOp } from '../inspect-ops';
+import { CacheOp, PASS_NAMES, RenderPassesOp, StatsOp, ViewerOp } from '../inspect-ops';
 
 /**
  * The node pane's faces for the output and inspection nodes: render passes,
@@ -20,7 +20,7 @@ const pct = (a: number, b: number) => (b > 0 ? `${(100 * a / b).toFixed(1)} %` :
 const num = (n: number) => n.toLocaleString();
 const fix = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed(3));
 
-const buildInspectNode = (body: HTMLElement, op: RenderPassesOp | ViewerOp | CacheOp, index: number, events: Events, rebuild: () => void) => {
+const buildInspectNode = (body: HTMLElement, op: RenderPassesOp | ViewerOp | CacheOp | StatsOp, index: number, events: Events, rebuild: () => void) => {
     const row = (label: string) => {
         const r = el('div', 'nd-row');
         r.appendChild(el('div', 'nd-row-label', label));
@@ -135,6 +135,53 @@ const buildInspectNode = (body: HTMLElement, op: RenderPassesOp | ViewerOp | Cac
         action(i18n.t('node.cache.clear'), () => events.invoke('cache.clear', op));
         note(i18n.t(op.splat?.motion ? 'node.cache.note-4d' : 'node.cache.note'));
         return;
+    }
+
+    if (op instanceof StatsOp) {
+        const s = op.snapshot;
+        if (!s) {
+            note(i18n.t('node.stats.not-applied'));
+            return;
+        }
+        stat(i18n.t('node.stats.count'), num(s.live));
+        if (s.total !== s.live) stat(i18n.t('node.stats.deleted'), num(s.total - s.live));
+        stat(i18n.t('node.stats.selected'), `${num(s.selected)} (${pct(s.selected, s.live)})`);
+        if (s.hidden) stat(i18n.t('node.stats.hidden'), num(s.hidden));
+        if (s.still !== null) {
+            stat(i18n.t('node.stats.still'), `${num(s.still)} (${pct(s.still, s.live)})`);
+            stat(i18n.t('node.stats.moving'), `${num(s.live - s.still)} (${pct(s.live - s.still, s.live)})`);
+        }
+        stat(i18n.t('node.stats.memory'), megabytes(s.bytes));
+        if (s.min && s.max) {
+            stat(i18n.t('node.stats.min'), s.min.map(fix).join(', '));
+            stat(i18n.t('node.stats.max'), s.max.map(fix).join(', '));
+            stat(i18n.t('node.stats.size'), s.max.map((v, k) => fix(v - s.min[k])).join(' x '));
+        }
+
+        if (op.splat?.motion) {
+            if (op.perFrame) {
+                const pf = op.perFrame;
+                const drawn = pf.map(f => f.drawn);
+                stat(i18n.t('node.stats.drawn'), `${num(Math.min(...drawn))} - ${num(Math.max(...drawn))}`);
+                const changes = pf.slice(1).map(f => f.appeared + f.gone);
+                const mean = changes.length ? changes.reduce((a, b) => a + b, 0) / changes.length : 0;
+                stat(i18n.t('node.stats.change'), `${num(Math.round(mean))} (${i18n.t('node.stats.max-change')} ${num(Math.max(0, ...changes))})`);
+                const table = el('div', 'nd-note');
+                table.style.whiteSpace = 'pre';
+                table.style.fontFamily = 'monospace';
+                table.style.maxHeight = '160px';
+                table.style.overflowY = 'auto';
+                table.textContent = pf.map(f => `${`${f.frame}`.padStart(4)} ${num(f.drawn).padStart(11)} +${num(f.appeared)} -${num(f.gone)}`).join('\n');
+                body.appendChild(table);
+            } else {
+                action(i18n.t('node.stats.per-frame'), () => events.invoke('stats.perFrame', op));
+            }
+        } else if (op.seen.size > 1) {
+            const counts = [...op.seen.values()];
+            stat(i18n.t('node.stats.frames-seen'), num(counts.length));
+            stat(i18n.t('node.stats.drawn'), `${num(Math.min(...counts))} - ${num(Math.max(...counts))}`);
+        }
+        note(i18n.t('node.stats.note'));
     }
 };
 

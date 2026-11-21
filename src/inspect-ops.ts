@@ -154,8 +154,67 @@ class CacheOp {
     }
 }
 
-const isInspectOp = (op: unknown): op is RenderPassesOp | ViewerOp | CacheOp => {
-    return op instanceof RenderPassesOp || op instanceof ViewerOp || op instanceof CacheOp;
+/** What a stats node measured as the chain passed through it. */
+type StatsSnapshot = {
+    total: number;
+    live: number;
+    selected: number;
+    hidden: number;
+    /** 4D only: live gaussians that stand still for the whole sequence */
+    still: number | null;
+    /** bytes of the object's data on the CPU, its motion included */
+    bytes: number;
+    /** object space, of the live gaussians' centres; null when none */
+    min: number[] | null;
+    max: number[] | null;
+    /** what the data was when measured: a frame of a sequence, or the model */
+    key: string;
+};
+
+/** Per frame of a 4D model: how many gaussians are drawn, and how many came and went. */
+type FrameChange = { frame: number, drawn: number, appeared: number, gone: number };
+
+/**
+ * Measures the object at this point in the chain: how many gaussians, how
+ * many still and moving, how much memory, the bounds, and per frame how
+ * many are drawn and how that changes. Measured when the chain passes
+ * through it, so it always says what this point holds.
+ */
+class StatsOp {
+    name = 'stats';
+    splat: Splat;
+    bypassed?: boolean;
+
+    snapshot: StatsSnapshot | null = null;
+    /** a PLY sequence: live count per frame seen, by frame key */
+    seen = new Map<string, number>();
+    /** a 4D model: worked out when asked for */
+    perFrame: FrameChange[] | null = null;
+
+    // set by inspect-nodes.ts: does the measuring
+    measure: ((op: StatsOp) => void) | null = null;
+
+    constructor(splat: Splat) {
+        this.splat = splat;
+    }
+
+    get sourceLabel() {
+        return this.snapshot ? `${this.snapshot.live.toLocaleString()} gaussians` : '';
+    }
+
+    do() {
+        this.measure?.(this);
+    }
+
+    undo() {}
+
+    destroy() {
+        this.splat = null;
+    }
+}
+
+const isInspectOp = (op: unknown): op is RenderPassesOp | ViewerOp | CacheOp | StatsOp => {
+    return op instanceof RenderPassesOp || op instanceof ViewerOp || op instanceof CacheOp || op instanceof StatsOp;
 };
 
 export {
@@ -163,10 +222,13 @@ export {
     type RenderPassSettings,
     type CacheSettings,
     type CacheEntry,
+    type StatsSnapshot,
+    type FrameChange,
     PASS_NAMES,
     defaultRenderPassSettings,
     RenderPassesOp,
     ViewerOp,
     CacheOp,
+    StatsOp,
     isInspectOp
 };
