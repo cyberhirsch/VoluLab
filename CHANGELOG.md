@@ -9,6 +9,21 @@ months finds out why before they change it.
 
 ---
 
+## Stabilise
+
+A stabilise node takes the rigid motion of what the select nodes above it
+leave selected out of the whole object, so the selection holds still where
+it is at the reference frame: a shaking rig held by a wall or a floor.
+Strength 0 to 1, keyable. Taking it out of the rest only, the PRD's
+alternative, is a split and a stabilise, and is not built as an option.
+
+On the alley sample the fastest gaussians live about a frame each, so the
+fit there is chained frame to frame rather than straight from the
+reference; a test cannot hold such a selection still, only steadier (the
+drift of what was fitted to over two frames halves).
+
+---
+
 ## Track and attach
 
 A track node fits a rigid transform per frame to what the select nodes

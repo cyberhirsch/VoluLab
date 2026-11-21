@@ -371,6 +371,8 @@
     "node.track.used": "gaussianas",
     "node.track.rms": "error",
     "node.track.note": "Ajusta un movimiento rígido por fotograma a lo que dejan seleccionado los nodos de selección de arriba (todo, si no hay nada seleccionado). Un objeto elegido aquí, o conectado a la entrada attach, lo sigue como si fuera llevado, desde donde está en el fotograma de referencia.",
+    "node.stabilise.strength": "intensidad",
+    "node.stabilise.note": "Quita el movimiento rígido de la selección de todo el objeto, de modo que la selección queda quieta donde está en el fotograma de referencia. Selecciona arriba algo que no debería moverse: una pared, el suelo.",
     "node.offset.frames": "fotogramas",
     "node.offset.outside": "fuera",
     "node.offset.hide": "oculto",

@@ -371,6 +371,8 @@
     "node.track.used": "gaussians",
     "node.track.rms": "fit error",
     "node.track.note": "Fits a rigid motion per frame to what the select nodes above leave selected (everything, with nothing selected). An object picked here, or wired into the attach input, follows it as if carried, from where it stands at the reference frame.",
+    "node.stabilise.strength": "strength",
+    "node.stabilise.note": "Takes the selection's rigid motion out of the whole object, so the selection holds still where it is at the reference frame. Select something that should not move - a wall, the floor - above this node.",
     "node.offset.frames": "frames",
     "node.offset.outside": "outside",
     "node.offset.hide": "hidden",

@@ -371,6 +371,8 @@
     "node.track.used": "gaussianas",
     "node.track.rms": "erro",
     "node.track.note": "Ajusta um movimento rígido por quadro ao que os nós de seleção acima deixam selecionado (tudo, se nada estiver). Um objeto escolhido aqui, ou ligado à entrada attach, o segue como se fosse carregado, a partir de onde está no quadro de referência.",
+    "node.stabilise.strength": "intensidade",
+    "node.stabilise.note": "Tira o movimento rígido da seleção do objeto inteiro, para que a seleção fique parada onde está no quadro de referência. Selecione acima algo que não deveria se mover: uma parede, o chão.",
     "node.offset.frames": "quadros",
     "node.offset.outside": "fora",
     "node.offset.hide": "oculto",

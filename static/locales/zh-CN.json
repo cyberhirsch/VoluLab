@@ -371,6 +371,8 @@
     "node.track.used": "高斯",
     "node.track.rms": "误差",
     "node.track.note": "为上方选择节点留下的选区（未选择时为全部）逐帧拟合刚体运动。在此选择或接入 attach 输入的对象会像被携带一样跟随它，起点是它在参考帧中的位置。",
+    "node.stabilise.strength": "强度",
+    "node.stabilise.note": "从整个对象中去除选区的刚体运动，使选区停在参考帧中的位置。请在此节点上方选择不应移动的东西，例如墙或地面。",
     "node.offset.frames": "帧数",
     "node.offset.outside": "范围外",
     "node.offset.hide": "隐藏",

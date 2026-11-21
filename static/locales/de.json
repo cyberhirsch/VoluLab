@@ -371,6 +371,8 @@
     "node.track.used": "Gaussians",
     "node.track.rms": "Fehler",
     "node.track.note": "Passt pro Frame eine starre Bewegung an das an, was die Select-Nodes darüber ausgewählt lassen (alles, wenn nichts ausgewählt ist). Ein hier gewähltes oder in den Eingang 'attach' verdrahtetes Objekt folgt ihr, als würde es getragen, von dort aus, wo es im Referenz-Frame steht.",
+    "node.stabilise.strength": "Stärke",
+    "node.stabilise.note": "Nimmt die starre Bewegung der Auswahl aus dem ganzen Objekt heraus, sodass die Auswahl dort stillsteht, wo sie im Referenz-Frame ist. Wähle über diesem Node etwas aus, das sich nicht bewegen sollte – eine Wand, den Boden.",
     "node.offset.frames": "Frames",
     "node.offset.outside": "außerhalb",
     "node.offset.hide": "versteckt",

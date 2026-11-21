@@ -66,6 +66,7 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 // the nodes that transform over time, as the menus offer them
 const MOTION_NODES: [string, string][] = [
     ['track', 'graph.addTrackNode'],
+    ['stabilise', 'graph.addStabiliseNode'],
 ];
 
 const OP_LABELS: Record<string, string> = {
@@ -86,6 +87,7 @@ const OP_LABELS: Record<string, string> = {
     freezeNode: 'freeze frame',
     offsetNode: 'time offset',
     trackNode: 'track',
+    stabiliseNode: 'stabilise',
     splatsTransform: 'transform splats',
     setPivot: 'place pivot',
     setLocalFrame: 'local frame',

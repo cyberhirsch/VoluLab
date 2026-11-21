@@ -1,6 +1,6 @@
 import { EditOp } from '../edit-ops';
 import { Events } from '../events';
-import { TrackOp } from '../motion-nodes';
+import { StabiliseOp, TrackOp } from '../motion-nodes';
 import { Splat } from '../splat';
 import { i18n } from './localization';
 
@@ -49,7 +49,7 @@ const fmt = (v: number, digits = 3) => (Number.isFinite(v) ? `${+v.toFixed(digit
 
 const trio = (v: { x: number, y: number, z: number }) => `${fmt(v.x)}, ${fmt(v.y)}, ${fmt(v.z)}`;
 
-const fitStats = (kit: PanelKit, op: TrackOp) => {
+const fitStats = (kit: PanelKit, op: TrackOp | StabiliseOp) => {
     const n = op.rowsUsed;
     kit.stat(t('node.track.used'), n < 0 ? t('node.motion.not-fitted') : n.toLocaleString());
     if (op.track) kit.stat(t('node.track.rms'), fmt(op.track.rms, 4));
@@ -65,9 +65,20 @@ const buildTrack = (kit: PanelKit, op: TrackOp, index: number) => {
     kit.note(t('node.track.note'));
 };
 
+const buildStabilise = (kit: PanelKit, op: StabiliseOp, index: number) => {
+    kit.number(t('node.track.ref'), op.ref, 1, 0, index, v => op.setRef(v));
+    kit.number(t('node.stabilise.strength'), op.strength, 0.05, 1, index, (v) => {
+        op.strength = Math.max(0, Math.min(1, v));
+    }, { op, param: 'strength' });
+    fitStats(kit, op);
+    if (!op.splat.motion) kit.note(t('node.motion.needs-4d'));
+    kit.note(t('node.stabilise.note'));
+};
+
 /** The face of one of these nodes, built into the kit's body; false for any other node. */
 const buildMotionNode = (op: EditOp, index: number, kit: PanelKit) => {
     if (op instanceof TrackOp) buildTrack(kit, op, index);
+    else if (op instanceof StabiliseOp) buildStabilise(kit, op, index);
     else return false;
     return true;
 };

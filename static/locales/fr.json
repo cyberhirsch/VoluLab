@@ -371,6 +371,8 @@
     "node.track.used": "gaussiennes",
     "node.track.rms": "erreur",
     "node.track.note": "Ajuste un mouvement rigide par image à ce que les nœuds de sélection au-dessus laissent sélectionné (tout, si rien ne l'est). Un objet choisi ici, ou branché sur l'entrée attach, le suit comme s'il était porté, depuis sa place à l'image de référence.",
+    "node.stabilise.strength": "force",
+    "node.stabilise.note": "Retire le mouvement rigide de la sélection de tout l'objet, pour que la sélection reste immobile là où elle est à l'image de référence. Sélectionnez au-dessus quelque chose qui ne devrait pas bouger : un mur, le sol.",
     "node.offset.frames": "images",
     "node.offset.outside": "en dehors",
     "node.offset.hide": "masqué",

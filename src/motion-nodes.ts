@@ -60,6 +60,8 @@ const placesObject = (op: EditOp, splat: unknown) => {
     const p: any = principalOp(op);
     if (p instanceof EntityTransformOp || p instanceof TransformNodeOp) return p.splat === splat;
     // eslint-disable-next-line no-use-before-define
+    if (p instanceof StabiliseOp) return p.splat === splat;
+    // eslint-disable-next-line no-use-before-define
     return p instanceof TrackOp && p.target === splat;
 };
 
@@ -298,9 +300,82 @@ class TrackOp extends TrackBase implements FrameDriven {
     }
 }
 
+/**
+ * Stabilise: takes the selection's rigid motion out of the whole object, so
+ * the selection stays where it is at the reference frame and the rest moves
+ * around it - a shaking rig held still by something that should not move.
+ * Strength 0 leaves the object as it is, 1 holds the selection still.
+ */
+class StabiliseOp extends TrackBase implements FrameDriven {
+    name = 'stabiliseNode';
+    strength = 1;
+    private base: Transform | null = null;
+
+    get sourceLabel() {
+        return `ref ${this.ref}`;
+    }
+
+    get applied() {
+        return this.base !== null;
+    }
+
+    /** where the object stands under the node, while it is applied */
+    get under() {
+        return this.base;
+    }
+
+    do() {
+        this.fit();
+        this.base = placementNow(this.splat);
+        this.place(this.splat.timelineFrame);
+    }
+
+    private place(frame: number) {
+        if (!this.base || !this.splat.scene) return;
+        const t = modelTimeAt(this.splat, frame);
+        let m: Mat4 | null = t === null || !this.track ? null : this.track.at(t);
+        if (m && this.strength !== 1) {
+            const s = Math.max(0, Math.min(1, this.strength));
+            const q = new Quat().slerp(Quat.IDENTITY, new Quat().setFromMat4(m), s);
+            m = new Mat4().setTRS(m.getTranslation().mulScalar(s), q, Vec3.ONE);
+        }
+        const E = placementMatrix(this.base);
+        const placed = m ? placementOf(E.mul(m.invert())) : this.base;
+        this.splat.move(placed.position, placed.rotation, placed.scale);
+    }
+
+    animate(frame: number, later: EditOp[]) {
+        if (!this.applied) return false;
+        if (later.some(o => placesObject(o, this.splat))) return true;
+        this.place(frame);
+        return false;
+    }
+
+    undo() {
+        if (this.base && this.splat.scene) this.splat.move(this.base.position, this.base.rotation, this.base.scale);
+        this.base = null;
+    }
+
+    destroy() {
+        this.splat = null;
+        this.track = null;
+    }
+}
+
 // ---- keyable parameters
 
 const registerMotionParams = () => {
+    keyable(StabiliseOp, [{
+        id: 'strength',
+        min: 0,
+        max: 1,
+        get: op => op.strength,
+        set: (op, v) => {
+            op.strength = v;
+        }
+    }]);
+    keyableLive(StabiliseOp, (op, later) => !op.animate(op.splat.timelineFrame, later));
+
 };
 
 // ---- adding them
@@ -310,6 +385,7 @@ type MotionNodeSettings = Record<string, any> & { kind: string };
 /** A node's settings for a project, beside its place and bypass. */
 const motionSettings = (op: EditOp): MotionNodeSettings | null => {
     if (op instanceof TrackOp) return { kind: 'track', ref: op.ref };
+    if (op instanceof StabiliseOp) return { kind: 'stabilise', ref: op.ref, strength: op.strength };
     return null;
 };
 
@@ -319,6 +395,11 @@ const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.i
 const motionNodeFrom = (splat: Splat, stored: MotionNodeSettings): EditOp | null => {
     switch (stored?.kind) {
         case 'track': return new TrackOp(splat, num(stored.ref, 0));
+        case 'stabilise': {
+            const op = new StabiliseOp(splat, num(stored.ref, 0));
+            op.strength = num(stored.strength, 1);
+            return op;
+        }
     }
     return null;
 };
@@ -331,6 +412,7 @@ const registerMotionNodes = (events: Events, scene: Scene, canvas: HTMLElement) 
     const frameOf = (splat: Splat) => Math.max(0, Math.min(Math.round(events.invoke('timeline.frame') ?? 0), Math.max(0, splat.motionFrames - 1)));
 
     events.on('graph.addTrackNode', add(splat => new TrackOp(splat, frameOf(splat))));
+    events.on('graph.addStabiliseNode', add(splat => new StabiliseOp(splat, frameOf(splat))));
 
     // a wire into an attach or reference input
     events.on('graph.connect', (op: EditOp, port: string, source: object) => {
@@ -372,6 +454,7 @@ const registerMotionNodes = (events: Events, scene: Scene, canvas: HTMLElement) 
         for (let at = 0; at < cursor; ++at) {
             const op = principalOp(ops[at]);
             if (ops[at].bypassed) continue;
+            if (op instanceof StabiliseOp && op.splat === splat && op.under) return { at, base: op.under };
             if (op instanceof TrackOp && op.target === splat && op.attachedBase) return { at, base: op.attachedBase };
         }
         return null;
@@ -380,6 +463,7 @@ const registerMotionNodes = (events: Events, scene: Scene, canvas: HTMLElement) 
 
 export {
     TrackOp,
+    StabiliseOp,
     registerMotionNodes,
     motionSettings,
 };
