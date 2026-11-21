@@ -338,6 +338,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     if (splat) {
                         later(stored, () => {
                             const op = events.invoke('transform.addNode', splat, stored);
+                            // an align node's reference, by its place in the list
                             if (op && typeof stored.reference === 'number') op.reference = loaded[stored.reference] ?? null;
                             return op;
                         });
@@ -634,6 +635,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     // keyed parameters (keyframes.ts); the values above are
                     // the frame the project was saved on
                     ...(packKeys(node) ? { keys: packKeys(node) } : {}),
+                    // an align or ground plane node: what it was worked out from
+                    ...((node as any).docSettings ?? {}),
+                    ...((node as any).reference instanceof Splat ? { reference: splats.indexOf((node as any).reference) } : {}),
                     ...placeOf(node)
                 }))),
 

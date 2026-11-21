@@ -614,7 +614,9 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         const position = vec(stored?.position, 0);
         const euler = vec(stored?.rotation, 0);
         const scale = vec(stored?.scale, 1);
-        const op = new TransformNodeOp(splat, position, euler, scale);
+        // an align or ground plane node is a transform node with more to it
+        const op: TransformNodeOp = ((stored as any)?.kind && events.invoke('motion.transformLike', splat, stored, position, euler, scale)) ||
+            new TransformNodeOp(splat, position, euler, scale);
         op.bypassed = !!stored?.bypassed;
         unpackKeys(op, (stored as any)?.keys);
         events.fire('edit.add', op);

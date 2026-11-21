@@ -67,6 +67,7 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const MOTION_NODES: [string, string][] = [
     ['track', 'graph.addTrackNode'],
     ['stabilise', 'graph.addStabiliseNode'],
+    ['align', 'graph.addAlignNode'],
 ];
 
 const OP_LABELS: Record<string, string> = {
@@ -88,6 +89,7 @@ const OP_LABELS: Record<string, string> = {
     offsetNode: 'time offset',
     trackNode: 'track',
     stabiliseNode: 'stabilise',
+    alignNode: 'align',
     splatsTransform: 'transform splats',
     setPivot: 'place pivot',
     setLocalFrame: 'local frame',

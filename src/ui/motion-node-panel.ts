@@ -1,6 +1,6 @@
 import { EditOp } from '../edit-ops';
 import { Events } from '../events';
-import { StabiliseOp, TrackOp } from '../motion-nodes';
+import { AlignOp, ObjectPoint, StabiliseOp, TrackOp } from '../motion-nodes';
 import { Splat } from '../splat';
 import { i18n } from './localization';
 
@@ -75,10 +75,92 @@ const buildStabilise = (kit: PanelKit, op: StabiliseOp, index: number) => {
     kit.note(t('node.stabilise.note'));
 };
 
+/** Pick a point on an object, then hand it over inside the node's refresh. */
+const pickInto = async (kit: PanelKit, op: EditOp, splat: Splat, set: (p: ObjectPoint) => void, solve: () => void) => {
+    const p = await kit.events.invoke('motion.pickPoint', splat) as ObjectPoint | null;
+    if (!p) return;
+    const index = (kit.events.invoke('edit.history') as { ops: EditOp[] }).ops.indexOf(op);
+    if (index < 0) return;
+    kit.events.invoke('edit.refresh', index, () => {
+        set(p);
+        solve();
+    });
+};
+
+const buildAlign = (kit: PanelKit, op: AlignOp, index: number) => {
+    kit.choice(t('node.align.mode'), [
+        ['icp', t('node.align.icp')],
+        ['points', t('node.align.points')]
+    ], op.mode, index, (v) => {
+        op.mode = v;
+    });
+    objectChoice(kit, t('node.align.reference'), op.splat, op.reference, index, (s) => {
+        op.reference = s;
+    });
+
+    const solve = () => kit.events.invoke('edit.refresh', index, () => op.solve());
+
+    if (op.mode === 'icp') {
+        kit.number(t('node.align.radius'), op.radius, 0.01, 0.1, index, (v) => {
+            op.radius = Math.max(1e-4, v);
+        });
+        kit.choice(t('node.align.start'), [
+            ['near', t('node.align.as-is')],
+            ['rough', t('node.align.centres')]
+        ], op.rough ? 'rough' : 'near', index, (v) => {
+            op.rough = v === 'rough';
+        });
+    } else {
+        op.pairs.forEach((pair, k) => {
+            const row = kit.row(`${t('node.align.pair')} ${k + 1}`);
+            const mk = (text: string, done: boolean, splat: Splat | null, set: (p: ObjectPoint) => void) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = `nd-choice${done ? ' nd-choice-active' : ''}`;
+                b.textContent = text;
+                b.disabled = !splat;
+                b.addEventListener('click', () => {
+                    b.textContent = t('node.motion.click');
+                    pickInto(kit, op, splat, set, () => op.solve());
+                });
+                row.appendChild(b);
+            };
+            mk(t('node.align.on-this'), !!pair.from, op.splat, (p) => {
+                pair.from = p;
+            });
+            mk(t('node.align.on-reference'), !!pair.to, op.reference, (p) => {
+                pair.to = p;
+            });
+            kit.body.appendChild(row);
+        });
+        button(kit, t('node.align.add-pair'), () => {
+            kit.events.invoke('edit.refresh', index, () => op.pairs.push({ from: null, to: null }));
+        });
+        if (op.pairs.length) {
+            button(kit, t('node.align.clear'), () => {
+                kit.events.invoke('edit.refresh', index, () => {
+                    op.pairs = [];
+                    op.reset();
+                });
+            });
+        }
+    }
+
+    button(kit, t('node.align.solve'), solve, !op.reference);
+    if (op.result) {
+        kit.stat(t('node.align.pairs'), op.result.pairs.toLocaleString());
+        kit.stat(t('node.align.rms'), fmt(op.result.rms, 4));
+    }
+    kit.stat(t('node.motion.moved'), trio(op.newt.position));
+    kit.stat(t('node.motion.turned'), trio(op.euler));
+    kit.note(t(op.mode === 'icp' ? 'node.align.note-icp' : 'node.align.note-points'));
+};
+
 /** The face of one of these nodes, built into the kit's body; false for any other node. */
 const buildMotionNode = (op: EditOp, index: number, kit: PanelKit) => {
     if (op instanceof TrackOp) buildTrack(kit, op, index);
     else if (op instanceof StabiliseOp) buildStabilise(kit, op, index);
+    else if (op instanceof AlignOp) buildAlign(kit, op, index);
     else return false;
     return true;
 };

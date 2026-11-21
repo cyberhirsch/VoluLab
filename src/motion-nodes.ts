@@ -362,6 +362,142 @@ class StabiliseOp extends TrackBase implements FrameDriven {
     }
 }
 
+// ---- align and ground plane: transform nodes whose values are worked out
+
+/** A point on an object, in the object's own space, so it stays on it as the object is placed. */
+type ObjectPoint = [number, number, number];
+
+const toWorld = (splat: Splat, p: ObjectPoint, base?: Transform) => {
+    const m = base ? placementMatrix(base) : splat.worldTransform;
+    return m.transformPoint(new Vec3(p[0], p[1], p[2]));
+};
+
+/** Static gaussians of an object, in world space at the placement given. */
+const staticWorld = (splat: Splat, max: number, base: Transform) => {
+    const { rows } = sampleRows(splat, max, splat.motion ? 'static' : 'all');
+    const pos = new Float64Array(rows.length * 3);
+    const w = new Float64Array(rows.length);
+    const t = splat.motion ? splat.motionTime : 0;
+    positionsAt(splat, rows, t, pos, w);
+    const m = placementMatrix(base);
+    const p = new Vec3();
+    for (let k = 0; k < rows.length; ++k) {
+        p.set(pos[k * 3], pos[k * 3 + 1], pos[k * 3 + 2]);
+        m.transformPoint(p, p);
+        pos[k * 3] = p.x;
+        pos[k * 3 + 1] = p.y;
+        pos[k * 3 + 2] = p.z;
+    }
+    return { pos, count: rows.length };
+};
+
+type AlignMode = 'icp' | 'points';
+
+/**
+ * Align: moves this object onto another, wired into its "reference" input -
+ * by ICP on the static gaussians where the two overlap, or by point pairs
+ * picked on each. What it comes to is a transform, and the node is a
+ * transform node holding it: it composes in the chain like one, and a
+ * project keeps it as one. Solving again is a button, not something the
+ * node does by itself: an alignment that moved every time anything upstream
+ * changed would be worse than none.
+ */
+class AlignOp extends TransformNodeOp {
+    name = 'alignNode';
+    mode: AlignMode = 'icp';
+    reference: Splat | null = null;
+    /** ICP: how far apart two gaussians may be and still be the same place, in scene units */
+    radius = 0.1;
+    /** ICP: move the centres onto each other before refining */
+    rough = false;
+    /** point pairs: on this object and on the reference, each in its object's space */
+    pairs: { from: ObjectPoint | null, to: ObjectPoint | null }[] = [];
+    /** what the last solve came to */
+    result: { rms: number, pairs: number } | null = null;
+
+    get ports(): PortSpec[] {
+        return [{ name: 'reference', label: 'reference', accepts: ['object'], source: this.reference }];
+    }
+
+    get sourceLabel() {
+        return this.reference ? `→ ${this.reference.name}` : 'no reference';
+    }
+
+    /** the placement under this node while it is applied */
+    get under(): Transform | null {
+        return (this as any).oldt ?? null;
+    }
+
+    /**
+     * Work the alignment out again. Run inside the node's refresh, with the
+     * node taken off: what the object stands on is then its own placement.
+     */
+    solve() {
+        const ref = this.reference;
+        if (!ref?.scene) return false;
+        const base = placementNow(this.splat);
+        const refBase = placementNow(ref);
+        let delta: Mat4 | null = null;
+
+        if (this.mode === 'points') {
+            const done = this.pairs.filter(p => p.from && p.to);
+            if (!done.length) return false;
+            const P = new Float64Array(done.length * 3);
+            const Q = new Float64Array(done.length * 3);
+            const W = new Float64Array(done.length).fill(1);
+            done.forEach((pair, k) => {
+                const a = toWorld(this.splat, pair.from, base);
+                const b = toWorld(ref, pair.to, refBase);
+                P.set([a.x, a.y, a.z], k * 3);
+                Q.set([b.x, b.y, b.z], k * 3);
+            });
+            if (done.length >= 3) {
+                const fit = fitRigid(P, Q, W);
+                if (fit) {
+                    delta = fit.matrix;
+                    this.result = { rms: fit.rms, pairs: done.length };
+                }
+            }
+            if (!delta) {
+                // fewer than three: the move between their centres
+                const c = [0, 1, 2].map(a => done.reduce((s, _, k) => s + Q[k * 3 + a] - P[k * 3 + a], 0) / done.length);
+                delta = new Mat4().setTranslate(c[0], c[1], c[2]);
+                this.result = { rms: NaN, pairs: done.length };
+            }
+        } else {
+            const a = staticWorld(this.splat, 15000, base);
+            const b = staticWorld(ref, 30000, refBase);
+            if (a.count < 6 || b.count < 6) return false;
+            const start = new Mat4();
+            if (this.rough) {
+                const mean = (pts: Float64Array, n: number) => [0, 1, 2].map((k) => {
+                    let s = 0;
+                    for (let i = 0; i < n; ++i) s += pts[i * 3 + k];
+                    return s / n;
+                });
+                const ca = mean(a.pos, a.count);
+                const cb = mean(b.pos, b.count);
+                start.setTranslate(cb[0] - ca[0], cb[1] - ca[1], cb[2] - ca[2]);
+            }
+            const r = icp(a.pos, a.count, b.pos, b.count, Math.max(1e-4, this.radius), start);
+            delta = r.matrix;
+            this.result = { rms: r.rms, pairs: r.pairs };
+        }
+
+        const t = placementOf(delta);
+        this.newt.position.copy(t.position);
+        const e = t.rotation.getEulerAngles();
+        this.setRotation(e.x, e.y, e.z);
+        this.newt.scale.set(1, 1, 1);
+        return true;
+    }
+
+    /** what a project keeps besides the transform */
+    get docSettings() {
+        return { kind: 'align', mode: this.mode, radius: this.radius, rough: this.rough, pairs: this.pairs };
+    }
+}
+
 // ---- keyable parameters
 
 const registerMotionParams = () => {
@@ -376,6 +512,59 @@ const registerMotionParams = () => {
     }]);
     keyableLive(StabiliseOp, (op, later) => !op.animate(op.splat.timelineFrame, later));
 
+};
+
+// ---- picking a point on an object in the viewport
+
+/**
+ * The next click in the viewport, as a point on the object's visible
+ * surface under it (in the object's own space), or null for a click beside
+ * it or Escape. Every other pointer event goes on as usual.
+ */
+const registerPointPick = (events: Events, scene: Scene, canvas: HTMLElement) => {
+    let pending: ((p: ObjectPoint | null) => void) | null = null;
+    let splat: Splat | null = null;
+    let down: { x: number, y: number } | null = null;
+
+    const finish = (p: ObjectPoint | null) => {
+        const done = pending;
+        pending = null;
+        splat = null;
+        canvas.style.cursor = '';
+        done?.(p);
+    };
+
+    canvas.addEventListener('pointerdown', (e: PointerEvent) => {
+        if (pending && e.button === 0) down = { x: e.offsetX, y: e.offsetY };
+    }, true);
+    canvas.addEventListener('pointerup', (e: PointerEvent) => {
+        if (!pending || !down || e.button !== 0) return;
+        const moved = Math.hypot(e.offsetX - down.x, e.offsetY - down.y);
+        down = null;
+        if (moved > 4) return;
+        // the surface point under the click, in the object's own space
+        const local = new Vec3();
+        if (!pickSplatSurfacePoint(scene, splat, e.offsetX, e.offsetY, local)) {
+            finish(null);
+            return;
+        }
+        e.stopPropagation();
+        finish([local.x, local.y, local.z]);
+    }, true);
+    window.addEventListener('keydown', (e) => {
+        if (pending && e.key === 'Escape') finish(null);
+    });
+
+    events.function('motion.pickPoint', (target: Splat) => {
+        finish(null);
+        if (!target) return Promise.resolve(null);
+        splat = target;
+        canvas.style.cursor = 'crosshair';
+        return new Promise<ObjectPoint | null>((resolve) => {
+            pending = resolve;
+        });
+    });
+    events.function('motion.picking', () => !!pending);
 };
 
 // ---- adding them
@@ -404,8 +593,23 @@ const motionNodeFrom = (splat: Splat, stored: MotionNodeSettings): EditOp | null
     return null;
 };
 
+/** An align or ground plane node from what a project kept of it, or null. */
+const transformLikeFrom = (splat: Splat, stored: any, position: Vec3, euler: Vec3, scale: Vec3): TransformNodeOp | null => {
+    const point = (p: unknown): ObjectPoint | null => (Array.isArray(p) && p.length === 3 && p.every(Number.isFinite) ? [p[0], p[1], p[2]] : null);
+    if (stored?.kind === 'align') {
+        const op = new AlignOp(splat, position, euler, scale);
+        op.mode = stored.mode === 'points' ? 'points' : 'icp';
+        op.radius = num(stored.radius, 0.1);
+        op.rough = !!stored.rough;
+        op.pairs = Array.isArray(stored.pairs) ? stored.pairs.map((p: any) => ({ from: point(p?.from), to: point(p?.to) })) : [];
+        return op;
+    }
+    return null;
+};
+
 const registerMotionNodes = (events: Events, scene: Scene, canvas: HTMLElement) => {
     registerMotionParams();
+    registerPointPick(events, scene, canvas);
 
     const history = () => events.invoke('edit.history') as { ops: EditOp[], cursor: number };
     const add = (make: (splat: Splat) => EditOp | null) => (target?: Splat) => events.fire('graph.addNodeFor', make, target);
@@ -413,6 +617,15 @@ const registerMotionNodes = (events: Events, scene: Scene, canvas: HTMLElement) 
 
     events.on('graph.addTrackNode', add(splat => new TrackOp(splat, frameOf(splat))));
     events.on('graph.addStabiliseNode', add(splat => new StabiliseOp(splat, frameOf(splat))));
+
+    // align: onto the other object if there is just one other, which is the
+    // usual case - two captures to be put together
+    events.on('graph.addAlignNode', add((splat) => {
+        const op = new AlignOp(splat);
+        const others = (events.invoke('scene.allSplats') as Splat[]).filter(s => s !== splat);
+        if (others.length === 1) op.reference = others[0];
+        return op;
+    }));
 
     // a wire into an attach or reference input
     events.on('graph.connect', (op: EditOp, port: string, source: object) => {
@@ -423,6 +636,11 @@ const registerMotionNodes = (events: Events, scene: Scene, canvas: HTMLElement) 
                 op.target = source;
             });
         }
+        if (op instanceof AlignOp && port === 'reference' && source !== op.splat) {
+            events.invoke('edit.refresh', index, () => {
+                op.reference = source;
+            });
+        }
     });
     events.on('graph.disconnect', (op: EditOp, port: string) => {
         const index = history().ops.indexOf(op);
@@ -430,6 +648,11 @@ const registerMotionNodes = (events: Events, scene: Scene, canvas: HTMLElement) 
         if (op instanceof TrackOp && port === 'attach' && op.target) {
             events.invoke('edit.refresh', index, () => {
                 op.target = null;
+            });
+        }
+        if (op instanceof AlignOp && port === 'reference' && op.reference) {
+            events.invoke('edit.refresh', index, () => {
+                op.reference = null;
             });
         }
     });
@@ -445,6 +668,7 @@ const registerMotionNodes = (events: Events, scene: Scene, canvas: HTMLElement) 
         events.fire('edit.add', op);
         return op;
     });
+    events.function('motion.transformLike', transformLikeFrom);
 
     // The first applied node that places an object per frame - a stabilise
     // on it, a track attaching it - and the placement it stands on, which is
@@ -464,6 +688,9 @@ const registerMotionNodes = (events: Events, scene: Scene, canvas: HTMLElement) 
 export {
     TrackOp,
     StabiliseOp,
+    AlignOp,
     registerMotionNodes,
     motionSettings,
+    type ObjectPoint,
+    type AlignMode,
 };

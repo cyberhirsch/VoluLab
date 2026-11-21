@@ -9,6 +9,27 @@ months finds out why before they change it.
 
 ---
 
+## Align
+
+An align node moves one object onto another, wired into its "reference"
+input or picked in the node pane (an object with exactly one other in the
+scene gets that one). By overlap: ICP, point to point, on the still
+gaussians of both, with a radius for how far apart two gaussians may be and
+still be the same place, which pulls in towards a few times the residual as
+it settles; it can start from the objects' centres. Or by point pairs picked
+on both, three or more for a full fit (Horn's quaternion method), fewer for
+a move.
+
+What it comes to is a transform: the node is a transform node holding it
+(`AlignOp extends TransformNodeOp`), which a project keeps with the reference
+and the pairs. A merge after it sees two objects in one place.
+
+ICP finds a nearest fit, which on a shape with a symmetry is one of several:
+the test helix (`cloud.ply`) slides along its own screw and still overlaps
+to 0.3 % of its size.
+
+---
+
 ## Stabilise
 
 A stabilise node takes the rigid motion of what the select nodes above it
