@@ -2018,6 +2018,32 @@ type DatasetHandle = {
     dataset: true;
 };
 
+/** What an import node holds, file by kind. */
+type DatasetCounts = {
+    images: number;
+    videos: number;
+    /** COLMAP sparse files, transforms.json, a RealityCapture csv */
+    poses: number;
+    other: number;
+};
+
+/** '99 images', '1 video', '99 images · 3 pose files': the kinds it has. */
+const describeCounts = (counts: DatasetCounts | undefined, t: (key: string, n: number) => string) => {
+    if (!counts) return '';
+    const parts: string[] = [];
+    if (counts.images) parts.push(t('images', counts.images));
+    if (counts.videos) parts.push(t('videos', counts.videos));
+    if (counts.poses) parts.push(t('poses', counts.poses));
+    if (counts.other) parts.push(t('other', counts.other));
+    return parts.join(' · ');
+};
+
+// the graph's own words, which are English everywhere (OP_LABELS)
+const countWords = (kind: string, n: number) => {
+    const word = ({ images: 'image', videos: 'video', poses: 'pose file', other: 'other file' } as Record<string, string>)[kind];
+    return `${n} ${word}${n === 1 ? '' : 's'}`;
+};
+
 /**
  * An import node whose cargo is a capture dataset rather than a scene
  * object. The one import node concept covers both: importing a splat file
@@ -2040,6 +2066,8 @@ class DatasetOp {
     awaitingPoses?: boolean;
     /** transient progress line while the bridge works on this node */
     status?: string;
+    /** the files it holds, by kind; unknown until they have been counted */
+    counts?: DatasetCounts;
     bypassed?: boolean;
 
     constructor(source: unknown | null, sourceName: string) {
@@ -2048,9 +2076,19 @@ class DatasetOp {
         this.output = { name: sourceName, dataset: true };
     }
 
-    /** what the graph labels this node with */
+    /** what the graph labels this node with: the name, and what it holds */
     get sourceLabel() {
-        return this.sourceName;
+        const counts = describeCounts(this.counts, countWords);
+        return counts ? `${this.sourceName} · ${counts}` : this.sourceName;
+    }
+
+    /**
+     * What a train node can read straight from it: a posed dataset (bytes,
+     * a folder, a url). Raw photos and a video need a pose node first.
+     */
+    get trainSource(): unknown {
+        const kind = (this.source as { kind?: string } | null)?.kind;
+        return kind === 'bytes' || kind === 'directory' || kind === 'url' ? this.source : undefined;
     }
 
     setSource(source: unknown, name: string) {
@@ -2073,6 +2111,116 @@ class DatasetOp {
 
     destroy() {
         this.source = null;
+    }
+}
+
+/**
+ * One posed camera, in the scene's frame: where it is, its axes (COLMAP's:
+ * x right, y down, z forward), and its image size and focal lengths in
+ * pixels - enough to draw its frustum.
+ */
+type PoseCamera = {
+    name: string;
+    center: number[];
+    right: number[];
+    down: number[];
+    forward: number[];
+    width: number;
+    height: number;
+    fx: number;
+    fy: number;
+};
+
+type PoseMatcher = 'sequential' | 'exhaustive';
+
+/**
+ * A pose node: camera poses for the import node wired into it.
+ *
+ * Raw photos or a video coming in are posed here (COLMAP, in the browser
+ * or through the bridge; src/training/pose-node.ts); a dataset that
+ * already has poses is read, not posed again. Either way its output is a
+ * posed dataset, a lane marker like the import node's, which a train node
+ * takes through its dataset input. The cameras it found are drawn in the
+ * viewport while the node is applied.
+ *
+ * Like the import node's, the dataset it hands on is session state: the
+ * pose files it estimated are what a project keeps (doc-datasets.ts).
+ */
+class PoseOp {
+    name = 'pose';
+
+    inputs: DatasetHandle[] = [];
+    /** the posed dataset, as the train node sees it */
+    output: DatasetHandle;
+    /** the import node feeding it */
+    datasetOp?: DatasetOp;
+    matcher: PoseMatcher;
+    /** the posed dataset for the trainer; null until there is one */
+    source: unknown | null = null;
+    /** the files estimation produced (sparse/0/...); none when it read them */
+    sparse: { path: string, data: Uint8Array }[] | null = null;
+    /** the images it posed, as they went into the dataset */
+    images: { name: string, data: Blob }[] | null = null;
+    cameras: PoseCamera[] = [];
+    /** images in the dataset, posed or not */
+    total = 0;
+    showCameras = true;
+    /** the progress line while it works, or what went wrong */
+    status?: string;
+    /** the photos went out with the COLMAP kit; poses come back through the import node */
+    awaitingPoses?: boolean;
+    bypassed?: boolean;
+
+    constructor(matcher: PoseMatcher = 'exhaustive') {
+        this.matcher = matcher;
+        this.output = { name: 'poses', dataset: true };
+    }
+
+    get sourceName() {
+        return this.datasetOp?.sourceName ?? 'no dataset';
+    }
+
+    /** the graph's second line: how many of the images have a pose */
+    get sourceLabel() {
+        if (this.status) return this.status;
+        if (this.awaitingPoses) return 'awaiting poses';
+        if (!this.datasetOp) return 'no dataset';
+        if (!this.source) return this.sourceName;
+        return this.total ? `${this.cameras.length} / ${this.total} posed` : `${this.cameras.length} cameras`;
+    }
+
+    /** what a train node reads through it */
+    get trainSource(): unknown {
+        return this.source ?? undefined;
+    }
+
+    get ports(): PortSpec[] {
+        return [{ name: 'dataset', label: 'dataset', accepts: ['dataset'], source: this.datasetOp ?? null }];
+    }
+
+    setPosed(source: unknown, cameras: PoseCamera[], total: number) {
+        this.source = source;
+        this.cameras = cameras;
+        this.total = total;
+        this.awaitingPoses = false;
+        this.output.name = `${this.sourceName} posed`;
+    }
+
+    clear() {
+        this.source = null;
+        this.sparse = null;
+        this.images = null;
+        this.cameras = [];
+        this.total = 0;
+    }
+
+    do() {}
+
+    undo() {}
+
+    destroy() {
+        this.clear();
+        this.datasetOp = undefined;
     }
 }
 
@@ -2467,8 +2615,8 @@ class TrainOp {
     /** null until the first snapshot of the first run */
     output: Splat | null;
     settings: TrainSettings;
-    /** the import node feeding this one - the graph edge made concrete */
-    datasetOp?: DatasetOp;
+    /** the import or pose node feeding this one - the graph edge made concrete */
+    datasetOp?: DatasetOp | PoseOp;
     /** an object whose live gaussians start the run, in place of the dataset's points */
     seed?: Splat;
     bypassed?: boolean;
@@ -2481,7 +2629,7 @@ class TrainOp {
 
     /** the trainer's source, read through the connected import node */
     get dataset(): unknown {
-        return this.datasetOp?.source ?? undefined;
+        return this.datasetOp?.trainSource ?? undefined;
     }
 
     /**
@@ -2596,7 +2744,12 @@ export {
     VoxeliseOp,
     AddVoxelsOp,
     DatasetOp,
+    PoseOp,
+    type PoseCamera,
+    type PoseMatcher,
     type DatasetHandle,
+    type DatasetCounts,
+    describeCounts,
     CameraOp,
     CameraPoseOp,
     type CameraSettings,

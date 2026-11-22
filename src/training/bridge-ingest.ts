@@ -1,8 +1,9 @@
 import { BridgeImage, bridgeReady, estimatePoses } from './bridge-client';
 import { browserPosesReady, estimatePosesInBrowser } from './browser-poses';
 import { packDataset } from './dataset';
+import { camerasFromSparse } from './pose-read';
 import { ingestImages } from './video-ingest';
-import { DatasetOp } from '../edit-ops';
+import { PoseOp } from '../edit-ops';
 import { Events } from '../events';
 import { i18n } from '../ui/localization';
 
@@ -42,24 +43,27 @@ const flattenNames = (images: BridgeImage[]): BridgeImage[] => {
 };
 
 // the pose job each node is running: one per node, the newest wins
-const running = new WeakMap<DatasetOp, AbortController>();
+const running = new WeakMap<PoseOp, AbortController>();
 
 // one pose job at a time across nodes - dropping several videos queues
 // them instead of extracting and posing all of them at once
 let queue: Promise<unknown> = Promise.resolve();
 
 /** Stop the node's pose job, if it has one; its result will not land. */
-const cancelPoseJob = (op: DatasetOp) => {
+const cancelPoseJob = (op: PoseOp) => {
     running.get(op)?.abort();
     running.delete(op);
 };
+
+/** Is a pose job queued or running for the node? */
+const poseJobRunning = (op: PoseOp) => running.has(op);
 
 /**
  * Posing failed and no bridge is running: offer the COLMAP script kit,
  * the manual route. The popup's button is the user gesture the folder
  * picker needs.
  */
-const offerKit = async (op: DatasetOp, images: BridgeImage[], events: Events) => {
+const offerKit = async (op: PoseOp, images: BridgeImage[], events: Events) => {
     const result = await events.invoke('showPopup', {
         type: 'okcancel',
         header: i18n.t('training.dataset'),
@@ -67,25 +71,27 @@ const offerKit = async (op: DatasetOp, images: BridgeImage[], events: Events) =>
     });
     if (result?.action !== 'ok') return;
     if (await ingestImages(images.map(i => new File([i.data], i.name)), events)) {
+        // the poses come back through the import node: its folder, picked
+        // again once COLMAP has run, is read by this node
         op.status = undefined;
-        op.markAwaiting(i18n.t('training.awaiting-poses'));
+        op.awaitingPoses = true;
         events.fire('dataset.statusChanged', op);
         events.fire('edit.changed');
     }
 };
 
 /**
- * Drive a pose job into an import node: the COLMAP stages stream onto
- * the node's status line, and the posed dataset lands as the node's
- * source when the run succeeds. The node exists the whole time, so the
- * graph shows the work where its result will live.
+ * Drive a pose job into a pose node: the COLMAP stages stream onto the
+ * node's status line, and the posed dataset lands as the node's output
+ * when the run succeeds, with the cameras it found. The node exists the
+ * whole time, so the graph shows the work where its result will live.
  *
  * `source` is the images, or a function producing them (video frames),
  * which is called only when the job's turn comes. A newer job on the
  * same node cancels this one, as does the node leaving history; a
  * cancelled job changes nothing on the node.
  */
-const bridgePoseIntoOp = (op: DatasetOp, source: BridgeImage[] | (() => Promise<BridgeImage[]>), matcher: 'sequential' | 'exhaustive', events: Events): Promise<boolean> => {
+const bridgePoseIntoOp = (op: PoseOp, source: BridgeImage[] | (() => Promise<BridgeImage[]>), matcher: 'sequential' | 'exhaustive', events: Events): Promise<boolean> => {
     cancelPoseJob(op);
     const ctrl = new AbortController();
     running.set(op, ctrl);
@@ -142,8 +148,11 @@ const bridgePoseIntoOp = (op: DatasetOp, source: BridgeImage[] | (() => Promise<
             const { zip } = await packDataset(files, signal);
             if (!current() || removed()) return false;
 
-            op.setSource({ kind: 'bytes', bytes: zip, name: 'dataset.zip' }, op.sourceName);
+            op.sparse = sparse.map(f => ({ path: f.path, data: f.data }));
+            op.images = images;
+            op.setPosed({ kind: 'bytes', bytes: zip, name: 'dataset.zip' }, camerasFromSparse(op.sparse), images.length);
             op.status = undefined;
+            events.fire('pose.changed', op);
             events.fire('dataset.statusChanged', op);
             events.fire('edit.changed');
             return true;
@@ -158,6 +167,8 @@ const bridgePoseIntoOp = (op: DatasetOp, source: BridgeImage[] | (() => Promise<
             return false;
         } finally {
             if (running.get(op) === ctrl) running.delete(op);
+            // the node's face enables its buttons by whether a job runs
+            events.fire('pose.changed', op);
         }
     };
 
@@ -167,4 +178,4 @@ const bridgePoseIntoOp = (op: DatasetOp, source: BridgeImage[] | (() => Promise<
     return turn;
 };
 
-export { bridgePoseIntoOp, cancelPoseJob, posesReady };
+export { bridgePoseIntoOp, cancelPoseJob, flattenNames, poseJobRunning, posesReady };

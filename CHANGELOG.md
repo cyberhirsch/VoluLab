@@ -9,6 +9,96 @@ months finds out why before they change it.
 
 ---
 
+## Import, pose and train nodes are kept in a project
+
+A project used to drop every import and train node: reopened, a trained
+object was there but the capture that made it was gone, so nothing could
+be posed or trained again. Now `document.json` has `datasets`, `poses`
+and `trains` (`src/doc-datasets.ts`), each with its place in the history
+and the graph, and the wires between them.
+
+- An import node's files go into the project as they came: a zip as
+  `dataset_<i>.bin`, photos as `dataset_<i>/<k>`, a video as
+  `dataset_<i>.video`. A picked folder cannot be stored (the browser
+  gives a handle, not the files), so that node comes back saying to pick
+  the folder again.
+- A pose node keeps the COLMAP model it estimated (`pose_<j>_<k>.bin`, a
+  few hundred kilobytes) and its cameras, not the posed dataset: on load
+  the posed zip is packed again from the import node's photos and the
+  model, without posing again. A video's frames are not the import node's
+  files, so they are stored with the pose node (`pose_<j>/<k>`). Poses
+  read from a posed dataset are handed on from the import node again.
+- A train node keeps its settings, its seed and the object it trained,
+  which is stored with the other objects; it comes back wired, so it can
+  train again.
+
+Entries are written as streamed blobs, and on load a stored (uncompressed)
+entry is sliced out of the project file rather than read, so photos are
+not copied into memory twice.
+
+Measured: 20 Mira views (2048 px) posed, trained 55 steps, saved: 48.2 MB
+in 1.2 s, loaded in 0.6 s; the three nodes, both wires, 20 cameras and
+their frustums came back, and training started again from the reloaded
+pose node.
+
+---
+
+## Pose node
+
+Camera poses are a node of their own now: import -> pose -> train. Before,
+posing ran hidden inside the import node, and the posed dataset replaced the
+photos it was made from, so the graph showed one node doing two jobs, the
+poses could not be looked at before training, and changing the matcher
+meant importing again. Now the import node holds the files as they came
+(photos, a video, a zip, a folder) and the pose node holds the poses.
+
+- Photos or a video imported (file, folder or the import node's pickers)
+  give an import node and a pose node wired to it, and posing starts at
+  once, as before (COLMAP-wasm on WebGPU, else the bridge, else the COLMAP
+  kit). The import node's source is `{ kind: 'images' }` or
+  `{ kind: 'video' }`; `DatasetOp.trainSource` is empty for those, so a
+  train node wired straight to raw photos says it needs a pose node instead
+  of failing in the trainer.
+- A dataset that already has poses (COLMAP sparse, bin or txt;
+  `transforms.json`) is read, not posed again (`src/training/pose-read.ts`),
+  and handed on as it is. A RealityCapture csv is passed on but not drawn.
+- The cameras are drawn as orange frustums while the node is applied and
+  "show cameras" is on (`PoseFrustums` in `src/training/pose-node.ts`),
+  sized to a twentieth of the cameras' spread. They are turned into the
+  scene frame the way a trained PLY is (180 degrees about z, as
+  `loadImagesTxt` does), so they sit where the trained object appears.
+  The pane says how many of the images were posed.
+- Matcher (sequential for video, exhaustive for photos), estimate again
+  and cancel are on the node's pane. A new source on the import node, or a
+  new wire into the pose node, starts it again; the job queue and the
+  "node left history" check are the ones the import node had.
+- The train node takes an import node or a pose node through its dataset
+  input, so the old import -> train wire still works for posed datasets.
+  Dragging an import node's wire onto empty space offers pose and train.
+
+Trap: COLMAP-wasm needs all photos the same size (one shared camera); that
+limit is unchanged. Frustums do not follow transform nodes on the trained
+object - they are in the dataset's frame.
+
+---
+
+## Import node: what it holds
+
+An import node now says what it holds: how many images, videos, pose files
+(COLMAP sparse files, `transforms.json`, a RealityCapture csv) and other
+files, on its graph node (`photos · 99 images`) and in its pane. Before, a
+dropped folder became a node named after the folder and nothing else, so
+there was no way to tell whether all 99 photos had arrived, or whether the
+zip had its poses in it, before a pose run or a training run failed on it.
+
+Counted whenever the source changes (`dataset.sourceChanged`, editor.ts): a
+zip is listed through its central directory, not read, and a folder is
+walked by name, so a dataset of a few hundred megabytes counts at once.
+Where the files are known up front (photos and videos on their way to be
+posed, the COLMAP kit route) the count is passed in with the node.
+
+---
+
 ## HEIC and HEIF photos
 
 Photos from iPhones and many Android phones (`.heic`, `.heif`) import like

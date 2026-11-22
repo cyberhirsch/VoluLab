@@ -125,6 +125,23 @@ const packDataset = async (files: DatasetFile[], signal?: AbortSignal): Promise<
     return { zip, name: name === poseFile?.filename ? 'dataset' : name };
 };
 
+const VIDEO_RE = /\.(?:mp4|mov|webm|mkv)$/;
+const POSE_RE = /(?:transforms\.json|\.csv|cameras\.(?:txt|bin)|images\.(?:txt|bin)|points3d\.(?:txt|bin)|rigs\.(?:txt|bin)|frames\.(?:txt|bin))$/;
+
+/** How many of the files are images, videos, pose files and the rest. */
+const countFiles = (filenames: string[]) => {
+    const counts = { images: 0, videos: 0, poses: 0, other: 0 };
+    for (const name of filenames) {
+        const lower = name.toLowerCase();
+        if (lower.endsWith('/')) continue;
+        if (IMAGE_RE.test(lower)) counts.images++;
+        else if (VIDEO_RE.test(lower)) counts.videos++;
+        else if (POSE_RE.test(lower)) counts.poses++;
+        else counts.other++;
+    }
+    return counts;
+};
+
 /** The size of a dataset held as bytes or as a blob. */
 const datasetSize = (data: Uint8Array | Blob) => (data instanceof Blob ? data.size : data.length);
 
@@ -183,4 +200,4 @@ const addToZip = async (zip: Uint8Array | Blob, filename: string, data: Uint8Arr
     ], { type: 'application/zip' });
 };
 
-export { addToZip, datasetSize, isIgnoredFile, isImageSet, listDirectory, looksLikeDataset, packDataset, type DatasetFile, type DirEntry };
+export { addToZip, countFiles, datasetSize, isIgnoredFile, isImageSet, listDirectory, looksLikeDataset, packDataset, type DatasetFile, type DirEntry };
