@@ -1164,7 +1164,8 @@ class Splat extends Element {
     // update world bound from local bound (synchronous)
     private updateWorldBound() {
         this.worldBoundStorage.setFromTransformedAabb(this.localBoundStorage, this.entity.getWorldTransform());
-        this.scene.boundDirty = true;
+        // a step still running when the scene was cleared finds no scene
+        if (this.scene) this.scene.boundDirty = true;
     }
 
     // get the selection bound - for a 4D model, at the time of the last

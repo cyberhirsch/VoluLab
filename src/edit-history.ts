@@ -144,8 +144,18 @@ class EditHistory {
         events.function('edit.history', () => ({ ops: this.history, cursor: this.cursor }));
     }
 
+    // bumped when the scene is cleared: work queued (or running) for the
+    // old scene stops, since its objects are already gone
+    private epoch = 0;
+
     private queue<T>(fn: () => T | Promise<T>): Promise<T> {
-        return this.commandQueue.enqueue(fn);
+        const epoch = this.epoch;
+        return this.commandQueue.enqueue(() => (epoch === this.epoch ? fn() : undefined as T));
+    }
+
+    /** the scene this work was started for is still the scene */
+    private live(epoch: number) {
+        return epoch === this.epoch;
     }
 
     // asked inside the queued task, before an edit is added, undone or redone:
@@ -282,12 +292,14 @@ class EditHistory {
      */
     private async replayAround(index: number, mutate: () => void, cursorAfter: (resume: number) => number, changed: EditOp[]) {
         const resume = this.cursor;
+        const epoch = this.epoch;
         let failed = 0;
 
         this.batch++;
         try {
             while (this.cursor > index) {
                 await this._undo();
+                if (!this.live(epoch)) return;
             }
 
             mutate();
@@ -297,6 +309,7 @@ class EditHistory {
             const target = Math.max(0, Math.min(this.history.length, cursorAfter(resume)));
             while (this.cursor < target) {
                 if (!await this.redoTolerant()) failed++;
+                if (!this.live(epoch)) return;
             }
         } finally {
             this.batch--;
@@ -571,12 +584,13 @@ class EditHistory {
 
     private async travel(cursor: number) {
         const target = Math.max(this.floor, Math.min(this.history.length, cursor));
+        const epoch = this.epoch;
         this.batch++;
         try {
-            while (this.cursor > target) {
+            while (this.cursor > target && this.live(epoch)) {
                 await this._undo();
             }
-            while (this.cursor < target) {
+            while (this.cursor < target && this.live(epoch)) {
                 await this._redo();
             }
         } finally {
@@ -624,8 +638,10 @@ class EditHistory {
     }
 
     clear() {
-        // route through the queue so any in-flight add/undo/redo finishes before we wipe
-        // history, preventing queued ops from running against a cleared state.
+        // the scene is emptied before this runs: work still queued or running
+        // for it is dropped (epoch), then the wipe goes through the queue so
+        // it lands after whatever step is in flight
+        this.epoch++;
         return this.queue(() => {
             // one op failing to let go must not keep the history from emptying
             this.history.forEach((editOp) => {
