@@ -6,7 +6,10 @@ import { Splat, type SplatMotion } from '../splat';
 /**
  * A node that changes a 4D model's motion: velocities, temporal centres and
  * falloffs, copied and edited, then handed to the object as its motion.
- * Undo hands back the motion it replaced. On a 3D object it does nothing.
+ * Undo hands back the motion it replaced - only while the object still has
+ * the motion it gave it: data made again since (a merge rebuilt) comes with
+ * its own motion, which must not be swapped for one of the old data. On a 3D
+ * object it does nothing.
  */
 abstract class MotionEditOp implements FieldNode {
     name: string;
@@ -16,6 +19,8 @@ abstract class MotionEditOp implements FieldNode {
     /** how many gaussians it changed when it last applied, or -1 */
     affected = -1;
     private before: SplatMotion | null = null;
+    // the motion it gave the object, to tell whether it still has it
+    private after: SplatMotion | null = null;
 
     constructor(splat: Splat) {
         this.splat = splat;
@@ -41,15 +46,19 @@ abstract class MotionEditOp implements FieldNode {
         this.affected = this.edit(splat, motion, rows, vt, falloff);
         if (!this.affected) return;
         this.before = motion;
-        splat.setMotion({ ...motion, velocityTime: vt, falloff });
+        this.after = { ...motion, velocityTime: vt, falloff };
+        splat.setMotion(this.after);
         splat.retime();
     }
 
     undo() {
-        const { splat, before } = this;
+        const { splat, before, after } = this;
         if (!before) return;
         this.before = null;
+        this.after = null;
         if (!splat?.scene && !splat?.motion) return;
+        // replaced since: the object's motion is not this node's to undo
+        if (splat.motion !== after) return;
         splat.setMotion(before);
         splat.retime();
     }
@@ -57,6 +66,7 @@ abstract class MotionEditOp implements FieldNode {
     destroy() {
         this.splat = null;
         this.before = null;
+        this.after = null;
     }
 
     protected common(note: string): FieldSpec[] {
