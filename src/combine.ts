@@ -14,6 +14,7 @@
  */
 
 import { CombineOp, LayerOp, MergeOp, SwitchOp, defaultLayerSettings, type CombineContext, type LayerSettings, type MergeSettings, type SwitchSettings } from './combine-ops';
+import { produces } from './edit-history';
 import type { EditOp } from './edit-ops';
 import { ElementType } from './element';
 import { placeholderSplat } from './doc-combine';
@@ -212,7 +213,9 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
         const { ops, cursor } = history();
         const index = ops.findIndex((o, i) => i < cursor && o instanceof MergeOp && o.output === b);
         const untouched = index >= 0 && !ops.slice(index + 1, cursor).some(o => (o as any).splat === b || ((o as any).inputs ?? []).includes(b));
-        if (untouched && !(ops[index] as MergeOp).inputs.includes(a)) {
+        // (not when a is made after that merge: it would not be there for it)
+        const madeLater = index >= 0 && ops.slice(index + 1).some(o => produces(o).includes(a));
+        if (untouched && !madeLater && !(ops[index] as MergeOp).inputs.includes(a)) {
             return events.invoke('graph.mergeInput', index, a);
         }
         return makeCombine('merge', [a, b]);
@@ -220,8 +223,19 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
 
     // an object as one more input of a merge or switch node
     events.function('graph.mergeInput', (index: number, splat: Splat) => {
-        const op = history().ops[index];
+        const { ops } = history();
+        const op = ops[index];
         if (!(op instanceof CombineOp) || !splat || op.inputs.includes(splat) || splat === op.output) return null;
+        // an object made after the node (by another merge, a split...) is
+        // not there when the node applies: the node would make nothing
+        if (ops.slice(index + 1).some(o => produces(o).includes(splat))) {
+            events.invoke('showPopup', {
+                type: 'info',
+                header: op.name === 'switch' ? 'Switch' : 'Merge',
+                message: `'${splat.name}' is made after this node, so it cannot be one of its inputs. Merge it with the node's object instead.`
+            });
+            return null;
+        }
         return events.invoke('edit.refresh', index, () => {
             op.inputs.push(splat);
             if (op instanceof MergeOp) op.settings.names.push('');

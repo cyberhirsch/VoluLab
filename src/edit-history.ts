@@ -677,4 +677,4 @@ class EditHistory {
     }
 }
 
-export { EditHistory };
+export { EditHistory, produces };
