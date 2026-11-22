@@ -1,11 +1,12 @@
 import type { ZipReadFileSystem } from '@playcanvas/splat-transform';
 
-import { DatasetOp, EditOp, PoseOp, ResizeOp, TrainOp, defaultResizeSettings, type PoseCamera } from './edit-ops';
+import { CropOp, DatasetOp, EditOp, PoseOp, ResizeOp, TrainOp, defaultImageCropSettings, defaultResizeSettings, isImageNode, type DatasetInput, type PoseCamera } from './edit-ops';
 import type { Events } from './events';
 import type { Scene } from './scene';
 import type { Splat } from './splat';
 import { flattenNames } from './training/bridge-ingest';
 import { packDataset } from './training/dataset';
+import { workKey, type Frame } from './training/image-nodes';
 import { i18n } from './ui/localization';
 
 /**
@@ -23,13 +24,18 @@ import { i18n } from './ui/localization';
  * posing again. The frames of a video are not the import node's files, so
  * those are stored with the pose node.
  *
- * A resize node keeps its settings and the photos it shrank
- * (`resize_<r>/<k>`); a photo it let through is the import node's, named
- * by its place there. The pose node after it posed those very images, so
- * they come back as they were rather than being shrunk again.
+ * An image node - a resize node, a crop node in 2d mode - is kept in
+ * `imageNodes`: its kind, its settings, what feeds it, and the photos it
+ * made (`image_<r>/<k>`, each with its frame); a photo it let through is
+ * its input's, named by its place there. The pose node after it posed
+ * those very images, so they come back as they were rather than being
+ * made again.
  *
- * A train node keeps its settings and which object it trained, which is
- * stored with the other objects.
+ * A train node keeps its settings, its images and cameras inputs, and
+ * which object it trained, which is stored with the other objects. A
+ * project from before the two inputs had one `dataset` wire: a pose node
+ * there is its cameras, with that pose node's images; an import node its
+ * images.
  */
 
 type Place = (op: EditOp | undefined) => { at?: number, pos?: number[] };
@@ -40,7 +46,10 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
     const applied = ops.slice(0, cursor);
     const datasets = applied.filter(o => o instanceof DatasetOp) as DatasetOp[];
     const poses = applied.filter(o => o instanceof PoseOp) as PoseOp[];
-    const resizes = applied.filter(o => o instanceof ResizeOp) as ResizeOp[];
+    const imageNodes = applied.filter(isImageNode);
+    // where a dataset input is, among the import and image nodes stored
+    const refOf = (op: DatasetInput | undefined) => (op instanceof DatasetOp ? { dataset: datasets.indexOf(op) } :
+        (op && isImageNode(op) && imageNodes.includes(op) ? { image: imageNodes.indexOf(op) } : {}));
     const trains = applied.filter(o => o instanceof TrainOp) as TrainOp[];
     const files: ProjectFile[] = [];
     const flags = (op: EditOp) => (op.bypassed ? { bypassed: true } : {});
@@ -79,21 +88,21 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
         };
     });
 
-    const storedResizes = resizes.map((op, r) => {
-        const input = op.datasetOp ? datasets.indexOf(op.datasetOp) : -1;
+    const storedImageNodes = imageNodes.map((op, r) => {
         const source = op.source as any;
         const inputSource = op.datasetOp?.source as any;
         const inputImages: { name: string, data: Blob }[] = inputSource?.kind === 'images' ? inputSource.images : [];
         const images = op.madeFrom && source?.kind === 'images' ?
-            source.images.map((image: { name: string, data: Blob }, k: number) => {
+            source.images.map((image: { name: string, data: Blob, frame?: Frame }, k: number) => {
                 if (inputImages[k]?.data === image.data) return { name: image.name, input: k };
-                const file = `resize_${r}/${k}`;
+                const file = `image_${r}/${k}`;
                 files.push({ name: file, data: image.data });
-                return { name: image.name, file };
+                return { name: image.name, file, ...(image.frame ? { frame: image.frame } : {}) };
             }) : undefined;
         return {
-            dataset: input,
-            settings: { ...op.settings },
+            kind: op instanceof ResizeOp ? 'resize' : 'crop',
+            ...refOf(op.datasetOp),
+            settings: op instanceof ResizeOp ? { ...op.settings } : { ...op.imageCrop },
             ...(op.summary ? { summary: op.summary } : {}),
             ...(images ? { images } : {}),
             ...flags(op),
@@ -102,8 +111,7 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
     });
 
     const storedPoses = poses.map((op, j) => {
-        const input = op.datasetOp instanceof ResizeOp ? { resize: resizes.indexOf(op.datasetOp) } :
-            { dataset: op.datasetOp ? datasets.indexOf(op.datasetOp) : -1 };
+        const input = refOf(op.datasetOp);
         const inputKind = (op.datasetOp?.source as any)?.kind;
         const sparse = op.sparse?.map((f, k) => {
             const file = `pose_${j}_${k}.bin`;
@@ -132,8 +140,10 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
     });
 
     const storedTrains = trains.map((op) => {
-        const input = op.datasetOp instanceof PoseOp ? { pose: poses.indexOf(op.datasetOp) } :
-            (op.datasetOp instanceof DatasetOp ? { dataset: datasets.indexOf(op.datasetOp) } : {});
+        const input = {
+            ...(op.imagesOp ? { images: refOf(op.imagesOp) } : {}),
+            ...(op.camerasOp ? { cameras: poses.indexOf(op.camerasOp) } : {})
+        };
         const splat = op.output ? splats.indexOf(op.output) : -1;
         const seed = op.seed ? splats.indexOf(op.seed) : -1;
         return {
@@ -147,8 +157,8 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
     });
 
     return {
-        document: storedDatasets.length || storedResizes.length || storedPoses.length || storedTrains.length ?
-            { datasets: storedDatasets, resizes: storedResizes, poses: storedPoses, trains: storedTrains } : {},
+        document: storedDatasets.length || storedImageNodes.length || storedPoses.length || storedTrains.length ?
+            { datasets: storedDatasets, imageNodes: storedImageNodes, poses: storedPoses, trains: storedTrains } : {},
         files
     };
 };
@@ -183,10 +193,10 @@ const entryBlob = async (file: Blob, zipFs: ZipReadFileSystem, name: string, typ
  */
 const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSystem, loaded: Splat[], scene: Scene, later: Later, events: Events) => {
     const storedDatasets: any[] = Array.isArray(document.datasets) ? document.datasets : [];
-    const storedResizes: any[] = Array.isArray(document.resizes) ? document.resizes : [];
+    const storedImageNodes: any[] = Array.isArray(document.imageNodes) ? document.imageNodes : [];
     const storedPoses: any[] = Array.isArray(document.poses) ? document.poses : [];
     const storedTrains: any[] = Array.isArray(document.trains) ? document.trains : [];
-    if (!storedDatasets.length && !storedResizes.length && !storedPoses.length && !storedTrains.length) return () => {};
+    if (!storedDatasets.length && !storedImageNodes.length && !storedPoses.length && !storedTrains.length) return () => {};
 
     const datasets: (DatasetOp | null)[] = [];
     for (let i = 0; i < storedDatasets.length; i++) {
@@ -223,34 +233,46 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
         });
     }
 
-    const resizes: ResizeOp[] = [];
-    // the photos each shrank, by place; null for one let through
-    const resizeImages: ({ name: string, data: Blob | null, input?: number }[] | null)[] = [];
-    for (let r = 0; r < storedResizes.length; r++) {
-        const stored = storedResizes[r];
-        const defaults = defaultResizeSettings();
-        const op = new ResizeOp({
-            maxEdge: Number(stored?.settings?.maxEdge) || defaults.maxEdge,
-            quality: Number(stored?.settings?.quality) || defaults.quality
-        });
+    const imageNodes: (ResizeOp | CropOp)[] = [];
+    // the photos each made, by place; one let through is its input's
+    type StoredImage = { name: string, data: Blob | null, input?: number, frame?: Frame };
+    const imageFiles: (StoredImage[] | null)[] = [];
+    for (let r = 0; r < storedImageNodes.length; r++) {
+        const stored = storedImageNodes[r];
+        const given = stored?.settings ?? {};
+        const num = (v: unknown, fallback: number) => (Number.isFinite(Number(v)) && v !== null && v !== undefined ? Number(v) : fallback);
+        let op: ResizeOp | CropOp;
+        if (stored?.kind === 'crop') {
+            const d = defaultImageCropSettings();
+            op = CropOp.image({
+                left: num(given.left, d.left),
+                top: num(given.top, d.top),
+                right: num(given.right, d.right),
+                bottom: num(given.bottom, d.bottom),
+                quality: num(given.quality, d.quality)
+            });
+        } else {
+            const d = defaultResizeSettings();
+            op = new ResizeOp({ maxEdge: num(given.maxEdge, d.maxEdge), quality: num(given.quality, d.quality) });
+        }
         op.summary = stored?.summary;
-        op.bypassed = !!stored?.bypassed;
-        let images: { name: string, data: Blob | null, input?: number }[] | null = null;
+        (op as EditOp).bypassed = !!stored?.bypassed;
+        let images: StoredImage[] | null = null;
         try {
             if (Array.isArray(stored?.images)) {
                 images = [];
                 for (const image of stored.images) {
                     images.push(typeof image?.input === 'number' ?
                         { name: image.name, data: null, input: image.input } :
-                        { name: image.name, data: await entryBlob(file, zipFs, image.file, 'image/jpeg') });
+                        { name: image.name, data: await entryBlob(file, zipFs, image.file, 'image/jpeg'), frame: image.frame });
                 }
             }
         } catch (error) {
             images = null;
-            console.warn(`project: resize node ${r} lost its files: ${error?.message ?? error}`);
+            console.warn(`project: image node ${r} lost its files: ${error?.message ?? error}`);
         }
-        resizes.push(op);
-        resizeImages.push(images);
+        imageNodes.push(op);
+        imageFiles.push(images);
         later(stored, () => {
             events.fire('edit.add', op);
             return op;
@@ -315,32 +337,44 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
 
     // wired once every node is in, whatever order they went in
     return () => {
-        // a resize node first: the pose node after it reads what it hands on
-        storedResizes.forEach((stored, r) => {
-            const op = resizes[r];
-            const input = datasets[stored?.dataset];
-            if (!input) return;
+        // a stored reference to an import or image node
+        const inputOf = (ref: any): DatasetInput | null => (typeof ref?.image === 'number' ? imageNodes[ref.image] ?? null :
+            (typeof ref?.dataset === 'number' ? datasets[ref.dataset] ?? null : null));
+
+        // image nodes first, each after the one feeding it: the pose node
+        // after them reads what they hand on
+        const wired = new Set<number>();
+        const wireImage = (r: number) => {
+            if (wired.has(r)) return;
+            wired.add(r);
+            const stored = storedImageNodes[r];
+            const op = imageNodes[r];
+            if (typeof stored?.image === 'number') wireImage(stored.image);
+            const input = inputOf(stored);
+            if (!input || input === op) return;
             op.datasetOp = input;
             op.inputs = [input.output];
             const inputSource = input.source as any;
-            const stack = resizeImages[r];
+            const stack = imageFiles[r];
             const inputImages: { name: string, data: Blob }[] = inputSource?.kind === 'images' ? inputSource.images : [];
             const images = stack?.map(image => (image.data ? image : inputImages[image.input]));
             if (images && images.every(image => image?.data)) {
-                op.source = { kind: 'images', images: images.map(image => ({ name: image.name, data: image.data })) };
-                op.madeFrom = { source: inputSource, ...op.settings };
+                op.source = { kind: 'images', images: images.map((image: StoredImage) => ({ name: image.name, data: image.data, ...(image.frame ? { frame: image.frame } : {}) })) };
+                op.madeFrom = { source: inputSource, key: workKey(op) };
             } else if (op.summary?.passed && inputSource) {
                 op.source = inputSource;
-                op.madeFrom = { source: inputSource, ...op.settings };
+                op.madeFrom = { source: inputSource, key: workKey(op) };
             } else if (inputSource) {
                 // what it made is gone: made again, and posed again after it
                 op.summary = undefined;
-                events.fire('resize.run', op);
+                events.fire('image.run', op);
             }
-        });
+        };
+        storedImageNodes.forEach((_, r) => wireImage(r));
+
         storedPoses.forEach((stored, j) => {
             const op = poses[j];
-            const input = typeof stored?.resize === 'number' ? resizes[stored.resize] : datasets[stored?.dataset];
+            const input = inputOf(stored);
             if (!input) return;
             op.datasetOp = input;
             op.inputs = [input.output];
@@ -372,11 +406,18 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
         });
         storedTrains.forEach((stored, k) => {
             const op = trains[k];
-            const input = typeof stored?.pose === 'number' ? poses[stored.pose] :
-                (typeof stored?.dataset === 'number' ? datasets[stored.dataset] : null);
-            if (!input) return;
-            op.datasetOp = input;
-            op.inputs = [input.output];
+            if (stored?.images || typeof stored?.cameras === 'number') {
+                op.imagesOp = inputOf(stored.images) ?? undefined;
+                op.camerasOp = typeof stored.cameras === 'number' ? poses[stored.cameras] : undefined;
+            } else if (typeof stored?.pose === 'number' && poses[stored.pose]) {
+                // one dataset wire, from a pose node: its cameras, and the
+                // images it posed
+                op.camerasOp = poses[stored.pose];
+                op.imagesOp = op.camerasOp.datasetOp;
+            } else if (typeof stored?.dataset === 'number') {
+                op.imagesOp = datasets[stored.dataset] ?? undefined;
+            }
+            op.inputs = [op.imagesOp?.output, op.camerasOp?.output].filter(Boolean);
         });
         events.fire('pose.changed', null);
     };

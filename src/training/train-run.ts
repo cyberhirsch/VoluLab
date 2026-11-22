@@ -3,6 +3,7 @@ import { GSplatData } from 'playcanvas';
 
 import { BrushConfig, BrushEngine, TrainLoad, TrainLogLine, TrainPhase, TrainProgress, TrainSource } from './brush-engine';
 import { addToZip, listDirectory, packDataset } from './dataset';
+import { resolveTrainSource } from './train-inputs';
 import { TrainOp } from '../edit-ops';
 import { ElementType } from '../element';
 import { Events } from '../events';
@@ -269,7 +270,13 @@ const registerTraining = (events: Events, scene: Scene) => {
 
         preparing = true;
         try {
-            let source = op.dataset as TrainSource;
+            // the images and the cameras, put together when they are
+            // different copies (train-inputs.ts)
+            let source = await resolveTrainSource(op, (text) => {
+                note(op, { at: performance.now(), level: 'info', text });
+                changed();
+            });
+            if (runOp !== op || !source) return;
 
             // a seed that has since left the scene is not one
             const seed = op.seed && (scene.getElementsByType(ElementType.splat) as Splat[]).includes(op.seed) ? op.seed : null;

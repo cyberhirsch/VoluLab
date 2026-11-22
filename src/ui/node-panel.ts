@@ -251,6 +251,18 @@ class NodePanel extends Container {
             return;
         }
 
+        // a crop of photos has the image nodes' face; a crop of an object
+        // is built here
+        if (op instanceof CropOp && op.mode === '2d') {
+            const panel = this.mounts.get('cropImage');
+            if (panel) {
+                this.empty.hidden = true;
+                (panel as any).bindNode?.(op, index);
+                this.body.appendChild(panel);
+                return;
+            }
+        }
+
         if (op instanceof CropOp) {
             this.empty.hidden = true;
             this.buildCrop(op, index);
@@ -614,6 +626,23 @@ class NodePanel extends Container {
     }
 
     private buildCrop(op: CropOp, index: number) {
+        // the mode follows from where the node sits: on an object's lane it
+        // crops gaussians; '2d' is a crop node on a dataset wire
+        const modeRow = this.row('mode');
+        const mode = document.createElement('select');
+        mode.className = 'nd-select';
+        [['volume', 'volume'], ['2d', '2d (photos)']].forEach(([value, label]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            option.disabled = value !== 'volume';
+            mode.appendChild(option);
+        });
+        mode.value = 'volume';
+        mode.title = '2d crops the photos on a dataset wire: add a crop node from an import or resize node\'s output';
+        modeRow.appendChild(mode);
+        this.body.appendChild(modeRow);
+
         const t = new Vec3();
         const s = new Vec3();
         op.transform.getTranslation(t);

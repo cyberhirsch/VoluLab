@@ -2,7 +2,7 @@ import { Container } from '@playcanvas/pcui';
 
 import { i18n } from './localization';
 import { resolveDropPayload } from '../drop-handler';
-import { DatasetOp, EditOp, PoseMatcher, PoseOp, ResizeOp, describeCounts } from '../edit-ops';
+import { DatasetOp, EditOp, PoseMatcher, PoseOp, describeCounts, isImageNode, type DatasetInput } from '../edit-ops';
 import { Events } from '../events';
 import { isHeic, withHeicAsJpeg } from '../io/heic';
 import { BridgeImage } from '../training/bridge-client';
@@ -253,16 +253,26 @@ class ImportFace extends Container {
         const op = this.op;
         if (!op) return;
         const { ops } = this.events.invoke('edit.history') as { ops: EditOp[] };
-        // fed directly, or through a resize node
-        const resizes = ops.filter(o => o instanceof ResizeOp && o.datasetOp === op) as ResizeOp[];
-        const fed = ops.filter(o => o instanceof PoseOp && (o.datasetOp === op || resizes.includes(o.datasetOp as ResizeOp))) as PoseOp[];
+        // fed directly, or through image nodes (resize, 2d crop)
+        const chain = new Set<DatasetInput>([op]);
+        for (let grew = true; grew;) {
+            grew = false;
+            ops.forEach((o) => {
+                if (isImageNode(o) && o.datasetOp && chain.has(o.datasetOp) && !chain.has(o)) {
+                    chain.add(o);
+                    grew = true;
+                }
+            });
+        }
+        const images = [...chain].filter(o => o !== op);
+        const fed = ops.filter(o => o instanceof PoseOp && o.datasetOp && chain.has(o.datasetOp)) as PoseOp[];
         fed.forEach((pose) => {
             pose.matcher = matcher;
         });
         this.setSource(source, label);
         if (fed.length) return;
-        if (resizes.length) {
-            this.events.invoke('pose.addNode', resizes[0], matcher);
+        if (images.length) {
+            this.events.invoke('pose.addNode', images[images.length - 1], matcher);
         } else {
             this.events.invoke('pose.addNodeFor', op, matcher);
         }

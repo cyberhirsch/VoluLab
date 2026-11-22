@@ -9,6 +9,48 @@ months finds out why before they change it.
 
 ---
 
+## Images and cameras wires, a 2d crop, and the train node's two inputs
+
+The one `dataset` wire kind is now two: `images` (an import node's photos,
+or a posed dataset carrying its own cameras) and `cameras` (what a pose
+node found). Wires only fit inputs of their kind, and every node names its
+output on its title line the way inputs are named.
+
+- Image nodes take `images` and hand on `images`, and chain in any order:
+  the resize node, and a crop node in **2d mode**. The crop node keeps one
+  class (`CropOp`) with `mode: 'volume' | '2d'`. A 2d crop has no object
+  (`splat` null), an `output` lane marker and an `images` port; its
+  `do`/`undo` do nothing; a volume crop has neither `output` nor `ports`,
+  so the graph, the history and `doc-nodes.ts` see it exactly as before.
+  The mode follows from where the node was made - from an object's wire
+  it is volume, from a dataset wire or the graph menu it is 2d - and the
+  node pane shows the mode with the other one disabled, rather than a
+  switch that would have to move the node between lanes.
+- Shared pipeline (`src/training/image-nodes.ts`): a pool of two, a
+  progress line, a cache keyed on the input source and the settings, a
+  video or a posed dataset passed through. Each photo an image node makes
+  carries a `frame` (x = ax·X + bx from the photo as imported).
+- The train node's inputs are `images`, `cameras` and `seed`. A posed
+  dataset on `images` trains alone; photos on `images` need `cameras`.
+  When the photos are not the copy the cameras were found on (import →
+  pose for cameras, import → resize → train for images, say),
+  `src/training/train-inputs.ts` puts them together as the run starts:
+  images and model images matched by file name without extension, each
+  camera fitted to its image from the two frames (a crop after posing
+  moves cx/cy; a size change scales fx, fy, cx, cy; with no frames, the
+  sizes' ratio), one camera per image, image ids kept so the points'
+  tracks still hold, 2D points moved too.
+- Projects: image nodes are `imageNodes` (kind, input as `{ dataset }` or
+  `{ image }`, settings, photos as `image_<r>/<k>` with frames), wired in
+  dependency order; a train node stores `images` and `cameras`. An older
+  project's single `pose` wire becomes cameras plus that pose node's
+  images, and a `dataset` wire becomes images.
+- Graph: a wire dragged out of an import or image node offers resize,
+  crop, pose and train; out of a pose node, train (into `cameras`). The
+  right-click menu has add pose, add resize and add crop node.
+
+---
+
 ## Resize node: photos shrunk before they are posed
 
 In-browser COLMAP registered 0 of 99 12 MP photos (647 s of features,
