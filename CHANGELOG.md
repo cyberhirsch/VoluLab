@@ -441,6 +441,191 @@ does not know time nodes), so after a reload the merge follows the input
 without it. The GSV export writes the model the sequence plays, not a
 merged object. An object's copies from a loop take memory per copy.
 
+## Motion blur
+
+A motion blur node stretches each gaussian of a 4D model along the way it
+travels while the shutter is open, as a shutter angle of a timeline frame
+(180 by default: open for half of it). Seen in the viewport and in video
+output, keyable.
+
+The shader adds the travel over the shutter to the gaussian's scale as the
+variance of a box of that length (L squared over 12), per axis after turning
+the travel into the gaussian's own axes: exact along an axis, the nearest
+axis-aligned shape across them. The amplitude drops by the cube root of the
+ratio of the determinants, so a stretched gaussian keeps roughly the light it
+had instead of smearing brighter. A frame's length in the model's time is
+taken through the object's time nodes, so a retimed model blurs as fast as
+it now moves. Picking stays sharp.
+
+---
+
+## Motion scale
+
+A motion scale node multiplies how far a 4D model's gaussians travel from
+where they are at their temporal centres: 0 freezes each there, 1 is as
+recorded, 2 exaggerates. Keyable, so motion can fade in and out.
+
+It is a uniform (`motionScale`) in the shader and a factor on the travel in
+the sort worker's keys (`k` on the sort request), so what is drawn and what
+is sorted agree. The fades are untouched: each gaussian still lives when it
+lived. The spatial bins the worker built for the model assume the trained
+travel; above 1 a gaussian can land outside its bin's range and is clamped
+into the nearest, which costs a little order accuracy, not correctness of
+what is shown. Bounds, picking and selection still use the trained
+positions. Smoothing the motion over time to remove jitter, which the PRD
+lists as an option, is not built.
+
+---
+
+## Time warp
+
+A time warp node retimes a 4D model with a curve: its speed is a parameter,
+and keying the speed makes a ramp. Frame f of the warped sequence shows the
+model at the integral of the speed up to f (sampled eight times a frame,
+trapezoids), so between frames the model is shown between frames - slow
+motion, not held frames. The sequence is as long as the curve takes to get
+through the model, cut off at ten times its length if the speed stalls.
+
+The map (`WarpMap`) reads the speed's keys itself; the keyframe driver writing
+the speed into the node per frame changes nothing, and a curve edited in the
+curve editor is picked up by the node's frame hook, which retimes the object
+so the timeline gets its new length.
+
+---
+
+## Ground plane
+
+A ground plane node turns an object so its floor is level and puts the
+floor at a height: from three points picked on it in the viewport, or from
+the plane most of its still gaussians lie on (RANSAC with a tolerance as a
+share of the object's size, then the least-squares plane of the inliers).
+The floor's normal is taken to point towards the object's centre, with a
+flip for when that is wrong. A capture that came in on its side is put
+right by the same turn. The floor height can be keyed.
+
+It is a transform node whose values are worked out (`GroundPlaneOp extends
+TransformNodeOp`), so it composes in the chain as one and a project keeps it
+as one, with what it was worked out from. It is fitted once when added;
+fitting again is a button, not something it does whenever anything above it
+changes.
+
+Points are picked by a one-shot viewport click (`motion.pickPoint`), using
+the same surface pick as the orient tool, and stored in the object's own
+space.
+
+---
+
+## Align
+
+An align node moves one object onto another, wired into its "reference"
+input or picked in the node pane (an object with exactly one other in the
+scene gets that one). By overlap: ICP, point to point, on the still
+gaussians of both, with a radius for how far apart two gaussians may be and
+still be the same place, which pulls in towards a few times the residual as
+it settles; it can start from the objects' centres. Or by point pairs picked
+on both, three or more for a full fit (Horn's quaternion method), fewer for
+a move.
+
+What it comes to is a transform: the node is a transform node holding it
+(`AlignOp extends TransformNodeOp`), which a project keeps with the reference
+and the pairs. A merge after it sees two objects in one place.
+
+ICP finds a nearest fit, which on a shape with a symmetry is one of several:
+the test helix (`cloud.ply`) slides along its own screw and still overlaps
+to 0.3 % of its size.
+
+---
+
+## Stabilise
+
+A stabilise node takes the rigid motion of what the select nodes above it
+leave selected out of the whole object, so the selection holds still where
+it is at the reference frame: a shaking rig held by a wall or a floor.
+Strength 0 to 1, keyable. Taking it out of the rest only, the PRD's
+alternative, is a split and a stabilise, and is not built as an option.
+
+On the alley sample the fastest gaussians live about a frame each, so the
+fit there is chained frame to frame rather than straight from the
+reference; a test cannot hold such a selection still, only steadier (the
+drift of what was fitted to over two frames halves).
+
+---
+
+## Track and attach
+
+A track node fits a rigid transform per frame to what the select nodes
+above it leave selected (everything, with nothing selected). An object
+wired into its "attach" input, or picked in the node pane, follows it as if
+carried, from where it stands at the reference frame: a hat on a moving
+head. Attaching a camera is not built.
+
+The fit (`motion-fit.ts`) works on up to 20 000 of the selected gaussians at
+their positions per model frame - the stored centre moved along the velocity
+and weighted by the temporal falloff, as the shader draws them - with
+Horn's quaternion method. Each frame is fitted straight from the reference
+frame while a fifth of the gaussians there are still there, so their centre
+is held exactly; further out, where they have faded and others carry the
+motion, it is fitted from the frame before and chained on. Between frames
+the track is interpolated (lerp and slerp). The fit is kept while the
+selection, the reference frame and the model stay the same: 1.1 s for 9 331
+gaussians over 100 frames.
+
+The keyframe driver asks the node to place the attached object each frame
+(`FrameDriven.animate`); with a node after it that places either object
+again, the node is replayed instead. A project stores the attached object
+where the node found it, and the node puts the motion back on top.
+
+All the nodes that transform over time are in `motion-nodes.ts`, their faces
+in `ui/motion-node-panel.ts`; they are added from the graph's menus like the
+others (`graph.addNodeFor` in `editor.ts`), stored in a project's
+`motionNodes` (or `transforms`, for align and ground plane) and come back
+through `motion.addNode`.
+
+---
+
+## Keyframes on node parameters
+
+Any numeric parameter of a node can now be keyed over time: a key button
+beside the field (a diamond: dim when not keyed, outlined when keyed, filled
+on a key), and a curve under the row with linear, ease and step between keys.
+Transform (position, rotation, scale per axis), crop (centre, size) and both
+colour nodes (temperature, saturation, exposure, brightness, black and white
+point, transparency) are keyed this way.
+
+Keys are not a node. The PRD's first open question - a property of every
+parameter, or a node in the chain - is settled as a property: a keyed node is
+still one node, it bypasses, undoes and stores as before, and its keys go
+with it. They live on the op (`op.keys`, by parameter id), so undoing the node
+takes them and redoing brings them back.
+
+A node does not know it is keyed. What knows is the parameter's description
+(`ParamSpec` in `keyframes.ts`): how to read the value from the op and write
+it back. A node class opts in once with `keyable(Class, [...specs])`
+(`keyframe-params.ts` for the nodes that were there before), and its fields
+in the node pane name the parameter (`replayNumber(..., { op, param })`).
+The driver (`keyframe-driver.ts`) does the rest: as the timeline moves it
+writes each keyed value into its node and replays the node through the
+history (`edit.refresh`), so everything after it follows. Replaying a
+transform node with nothing after it that places the object would be all
+cost and no use, so a class can also say how to show new values in place
+(`keyableLive`): the transform node moves the object, the colour nodes write
+their palette slots or the object's grade. A crop has no such shortcut; it
+re-resolves, which is the price of a moving crop.
+
+A value typed into a keyed field becomes a key on the frame shown, without
+the field knowing: the driver remembers what it put into each node and takes
+anything else it finds there as an edit. The keys are timeline frames, and
+evaluated between frames too - the video export steps the time between
+frames, and a keyed move follows it smoothly.
+
+Projects store the keys with the node: transform nodes in `transforms`, the
+nodes that select and delete (crop among them) in `nodes`, as
+`keys: { id: [[frame, value, interp], ...] }`. A colour node with a selection
+is still baked into the object's grades in a project rather than stored as a
+node, so its keys are not kept; that is how colour nodes were stored before.
+
+---
+
 ## Time nodes and a split node
 
 The graph can now edit time. Five nodes for a 4D model - trim, retime,

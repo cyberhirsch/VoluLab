@@ -3,12 +3,15 @@ import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { buildInspectNode, registerViewerBadge } from './inspect-panel';
 import { buildCombineFace } from './combine-panel';
+import { addKeyControls } from './keyframe-ui';
 import { i18n } from './localization';
+import { buildMotionNode, PanelKit } from './motion-node-panel';
 import { fieldDefault } from './value-fields';
 import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplitOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { isInspectOp } from '../inspect-ops';
 import { type FieldNode, type FieldSpec, isFieldNode } from '../look/fields';
+import { paramOf } from '../keyframes';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
 import type { LoopMode, OffsetOutside } from '../time-map';
@@ -193,8 +196,17 @@ class NodePanel extends Container {
                 if (op instanceof ScopedColorOp) {
                     this.stat('scope', `${op.affected < 0 ? 'not applied' : op.affected.toLocaleString()} selected`);
                 }
+                this.buildColourKeys(op);
                 return;
             }
+        }
+
+        // track, stabilise, align, ground plane, time warp, motion scale and
+        // motion blur: ahead of the transform and time faces, since align
+        // and ground plane are transform nodes and time warp a time node
+        if (buildMotionNode(op, index, this.kit())) {
+            this.empty.hidden = true;
+            return;
         }
 
         if (op instanceof SelectOp) {
@@ -589,7 +601,7 @@ class NodePanel extends Container {
 
         // neutral: what a middle click puts back - a volume at the origin,
         // a unit across
-        const triple = (label: string, v: Vec3, neutral: number) => {
+        const triple = (label: string, v: Vec3, neutral: number, param: string) => {
             const row = this.row(label);
             const fields = (['x', 'y', 'z'] as const).map((axis) => {
                 const input = document.createElement('input');
@@ -610,6 +622,7 @@ class NodePanel extends Container {
                 row.appendChild(input);
                 return input;
             });
+            this.keyControls(op, ['x', 'y', 'z'].map(a => `${param}.${a}`), row, label);
             this.body.appendChild(row);
         };
 
@@ -620,8 +633,8 @@ class NodePanel extends Container {
             op.setVolume(op.shape, op.transform, !op.keepInside);
         });
 
-        triple('centre', t, 0);
-        triple('size', s, 1);
+        triple('centre', t, 0, 'centre');
+        triple('size', s, 1, 'size');
 
         this.stat('removed', op.affected < 0 ? 'not applied' : op.affected.toLocaleString());
     }
@@ -716,7 +729,8 @@ class NodePanel extends Container {
             values: number[],
             neutral: number,
             step: number,
-            apply: (v: number[]) => void
+            apply: (v: number[]) => void,
+            param?: string
         ) => {
             const row = this.row(label);
             const fields = values.map((value, i) => {
@@ -743,12 +757,14 @@ class NodePanel extends Container {
                 row.appendChild(input);
                 return input;
             });
+            // a transform node's axes can be keyed (keyframe-params.ts)
+            if (node && param) this.keyControls(node, ['x', 'y', 'z'].map(a => `${param}.${a}`), row, label);
             this.body.appendChild(row);
         };
 
         triple('position', [op.newt.position.x, op.newt.position.y, op.newt.position.z], 0, 0.01, (v) => {
             op.newt.position.set(v[0], v[1], v[2]);
-        });
+        }, 'position');
 
         triple('rotation', [euler.x, euler.y, euler.z], 0, 1, (v) => {
             if (node) {
@@ -756,13 +772,13 @@ class NodePanel extends Container {
             } else {
                 op.newt.rotation.setFromEulerAngles(v[0], v[1], v[2]);
             }
-        });
+        }, 'rotation');
 
         triple('scale', [op.newt.scale.x, op.newt.scale.y, op.newt.scale.z], 1, 0.01, (v) => {
             // a zero scale collapses the object and cannot be undone by typing,
             // because every later value multiplies through it
             op.newt.scale.set(v[0] || 1e-4, v[1] || 1e-4, v[2] || 1e-4);
-        });
+        }, 'scale');
 
         if (!node) return;
 
@@ -816,7 +832,7 @@ class NodePanel extends Container {
     }
 
     /** A number typed into a node; the change replays the node. */
-    private replayNumber(label: string, value: number, step: number, neutral: number, index: number, apply: (v: number) => void) {
+    private replayNumber(label: string, value: number, step: number, neutral: number, index: number, apply: (v: number) => void, key?: { op: EditOp, param: string }) {
         const row = this.row(label);
         const input = document.createElement('input');
         input.type = 'number';
@@ -830,7 +846,61 @@ class NodePanel extends Container {
             if (Number.isFinite(v)) this.events.invoke('edit.refresh', index, () => apply(v));
         });
         row.appendChild(input);
+        if (key) this.keyControls(key.op, [key.param], row, label);
         this.body.appendChild(row);
+    }
+
+    /**
+     * The key buttons of a row's keyable fields (keyframes.ts), one per
+     * parameter; the parameters a row has several fields for share one
+     * button per field. A parameter the op does not describe adds nothing.
+     */
+    private keyControls(op: EditOp, params: string[], row: HTMLElement, label: string) {
+        if (params.length === 1) {
+            addKeyControls(this.events, op, params[0], row, this.body, label);
+            return;
+        }
+        const keys = document.createElement('div');
+        keys.className = 'kf-keys';
+        // under the row, a button under each field; put there before the
+        // curves look for it (they go in after it, in the same way)
+        queueMicrotask(() => {
+            if (keys.childElementCount) row.after(keys);
+        });
+        params.forEach((param) => {
+            addKeyControls(this.events, op, param, keys, this.body, `${label} ${param.split('.').pop()}`);
+        });
+    }
+
+    /**
+     * The keys of a scoped colour node: the colour panel above edits the
+     * grade, and each of its numbers can be keyed here.
+     */
+    private buildColourKeys(op: EditOp) {
+        const title = document.createElement('div');
+        title.className = 'nd-note';
+        title.textContent = i18n.t('keyframes.colour');
+        this.body.appendChild(title);
+        const PARAMS: [string, string][] = [
+            ['temperature', 'panel.colors.temperature'],
+            ['saturation', 'panel.colors.saturation'],
+            ['exposure', 'panel.colors.exposure'],
+            ['brightness', 'panel.colors.brightness'],
+            ['blackPoint', 'panel.colors.black-point'],
+            ['whitePoint', 'panel.colors.white-point'],
+            ['transparency', 'panel.colors.transparency']
+        ];
+        PARAMS.forEach(([param, text]) => {
+            const label = i18n.t(text);
+            const row = this.row(label);
+            const value = document.createElement('div');
+            value.className = 'nd-value kf-grow';
+            const v = paramOf(op, param)?.get(op) ?? 0;
+            value.textContent = (+v.toFixed(3)).toString();
+            row.appendChild(value);
+            addKeyControls(this.events, op, param, row, this.body, label);
+            this.body.appendChild(row);
+        });
     }
 
     /** One of a few named settings; picking another replays the node. */
@@ -1027,6 +1097,24 @@ class NodePanel extends Container {
                 }
             }
         });
+    }
+
+    /** What a face built elsewhere (motion-node-panel.ts) builds its rows with. */
+    private kit(): PanelKit {
+        return {
+            events: this.events,
+            body: this.body,
+            row: label => this.row(label),
+            stat: (label, value) => this.stat(label, value),
+            note: (text) => {
+                const el = document.createElement('div');
+                el.className = 'nd-note';
+                el.textContent = text;
+                this.body.appendChild(el);
+            },
+            number: (label, value, step, neutral, index, apply, key) => this.replayNumber(label, value, step, neutral, index, apply, key),
+            choice: (label, options, value, index, apply) => this.replayChoice(label, options, value, index, apply)
+        };
     }
 
     private row(label: string): HTMLElement {

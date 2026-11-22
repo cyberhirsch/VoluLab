@@ -180,6 +180,15 @@ class Splat extends Element {
     layerLocked = false;
 
     /**
+     * The motion scale and motion blur nodes applied to this object, in the
+     * order of its chain (motion-nodes.ts): each scales the gaussians'
+     * travel from where they are at their temporal centre, or blurs them
+     * along it. The nodes add and remove themselves, then call
+     * applyMotionLook.
+     */
+    motionLooks: { velocity: number, shutter: number }[] = [];
+
+    /**
      * The debug view nodes applied to this object, in the order of its
      * chain. The last one decides what is drawn; the nodes add and remove
      * themselves (see DebugViewOp). Each holds the colour state it took the
@@ -240,6 +249,8 @@ class Splat extends Element {
                 material.setParameter('splatMotion', this.motionTexture);
                 material.setParameter('splatFalloff', this.falloffTexture);
                 material.setParameter('motionTime', this.shaderTime);
+                material.setParameter('motionScale', this.motionScale);
+                material.setParameter('motionShutter', this.motionShutter);
             }
 
             // the debug view: a define, so an object without one pays nothing
@@ -374,6 +385,7 @@ class Splat extends Element {
         if (this.state.numDeleted) {
             this.motionSorter.setDeleted(this.state.data, State.deleted);
         }
+        this.motionSorter.setVelocityScale(this.motionScale);
         this.motionSorter.show(this.motionTime);
         // The instance tells its sorter the camera only when it has moved,
         // and only when it is drawn; what it told so far went to the
@@ -531,6 +543,30 @@ class Splat extends Element {
     showTime(t: number) {
         this.motionTime = t;
         this.motionSorter.show(t);
+    }
+
+    /** How far the gaussians travel, against how far they were trained to. */
+    get motionScale() {
+        return this.motionLooks.reduce((k, look) => k * look.velocity, 1);
+    }
+
+    /** How long the shutter is open, in normalised time: the last blur node's say. */
+    get motionShutter() {
+        for (let i = this.motionLooks.length - 1; i >= 0; --i) {
+            if (this.motionLooks[i].shutter > 0) return this.motionLooks[i].shutter;
+        }
+        return 0;
+    }
+
+    /** The motion looks changed: the shader and the sort follow. */
+    applyMotionLook() {
+        const material = this.entity.gsplat?.instance?.material;
+        if (material && this.motionTexture) {
+            material.setParameter('motionScale', this.motionScale);
+            material.setParameter('motionShutter', this.motionShutter);
+        }
+        this.motionSorter?.setVelocityScale(this.motionScale);
+        if (this.scene) this.scene.forceRender = true;
     }
 
     /** How many frames the object's sequence has, as its time nodes leave it. */

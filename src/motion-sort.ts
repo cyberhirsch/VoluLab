@@ -182,7 +182,8 @@ const motionSortWorker = () => {
         binSlope: Float64Array
     };
     // `at` is when it was asked, by the asker's clock, ms
-    type Request = { id: number, t: number, at?: number, px: number, py: number, pz: number, dx: number, dy: number, dz: number };
+    // k: how far the gaussians travel against how far they were trained to
+    type Request = { id: number, t: number, k?: number, at?: number, px: number, py: number, pz: number, dx: number, dy: number, dz: number };
 
     // per view direction: the key function, the still rows in key order as
     // (key, row) pairs, and per key how many of them have that key or a
@@ -219,6 +220,7 @@ const motionSortWorker = () => {
     let owed: Request | null = null;
     // what the last answer was of
     let lastT = NaN;
+    let lastK = 1;
     let lastEpoch = -1;
     // for whoever measures: keys and sort of the last still order, ms
     let stillTimes: number[] | null = null;
@@ -542,6 +544,7 @@ const motionSortWorker = () => {
     const sort = (request: Request) => {
         const start = performance.now();
         const { t } = request;
+        const k = request.k ?? 1;
 
         // A direction within the engine worker's tolerance of the one the
         // still rows were sorted for keeps their order - and the moving rows
@@ -569,7 +572,7 @@ const motionSortWorker = () => {
                     return;
                 }
                 owed = request;
-                if (t === lastT && epoch === lastEpoch) {
+                if (t === lastT && k === lastK && epoch === lastEpoch) {
                     // the order would be the one just sent
                     (self as any).postMessage({ id: request.id, t, same: true, exact: false });
                     return;
@@ -592,6 +595,7 @@ const motionSortWorker = () => {
             owed = null;
         }
         lastT = t;
+        lastK = k;
         lastEpoch = epoch;
         const { dx, dy, dz, minDist, invBinRange, binOffset, binSlope } = key;
 
@@ -625,7 +629,7 @@ const motionSortWorker = () => {
             const rows = pieces[p];
             for (let i = 0; i < rows.length; i++) {
                 const n = rows[i];
-                const dt = t - vt[n * 4 + 3];
+                const dt = (t - vt[n * 4 + 3]) * k;
                 const d = Math.min(numBins, Math.max(0, ((centers[n * 3] + vt[n * 4] * dt) * dx + (centers[n * 3 + 1] + vt[n * 4 + 1] * dt) * dy + (centers[n * 3 + 2] + vt[n * 4 + 2] * dt) * dz - minDist) * invBinRange));
                 const bin = d | 0;
                 const key = (binOffset[bin] + binSlope[bin] * d) | 0;
@@ -673,7 +677,7 @@ const motionSortWorker = () => {
         while (lo < hi) {
             const mid = (lo + hi) >>> 1;
             const n = order[mid];
-            const dt = t - vt[n * 4 + 3];
+            const dt = (t - vt[n * 4 + 3]) * k;
             const d = (centers[n * 3] + vt[n * 4] * dt) * dx + (centers[n * 3 + 1] + vt[n * 4 + 1] * dt) * dy + (centers[n * 3 + 2] + vt[n * 4 + 2] * dt) * dz;
             if (d < cameraDist) {
                 lo = mid + 1;
@@ -872,6 +876,7 @@ class MotionSorter {
     private helper: Worker;
     private camera: Camera | null = null;
     private time = 0;
+    private velocityScale = 1;
     // what was asked for last, and what the request out (or answered) asked for
     private wanted = 0;
     private sent = 0;
@@ -923,6 +928,16 @@ class MotionSorter {
     }
 
     /**
+     * The gaussians travel k times as far as trained (a motion scale node):
+     * each is sorted where the shader draws it. Sorts again if it changed.
+     */
+    setVelocityScale(k: number) {
+        if (k === this.velocityScale) return;
+        this.velocityScale = k;
+        this.ask();
+    }
+
+    /**
      * The rows deleted: the state byte per row and the bit that says so,
      * or null when none is. Sorts again.
      */
@@ -956,7 +971,7 @@ class MotionSorter {
         }
         this.waiting = true;
         this.sent = this.wanted;
-        this.worker.postMessage({ sort: { id: this.sent, t: this.time, at: performance.now(), ...this.camera } });
+        this.worker.postMessage({ sort: { id: this.sent, t: this.time, k: this.velocityScale, at: performance.now(), ...this.camera } });
     }
 
     // What the engine's handler does with a result: the order becomes the
