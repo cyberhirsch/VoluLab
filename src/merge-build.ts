@@ -201,6 +201,31 @@ const piecesOf = (times: (number | null)[], frames: number): Piece[] => {
 // a piece's windows cover the whole sequence: then it needs none
 const whole = (windows: number[]) => windows.length === 2 && windows[0] <= 1e-12 && windows[1] >= 1 - 1e-12;
 
+/**
+ * The windows, of the merged object's time u, of a level whose windows are
+ * `inner`, of an input's time scale * u + offset, within a piece's windows
+ * `outer`: the inner ones mapped to u, and cut to the outer ones. Null:
+ * always.
+ */
+const composeWindows = (outer: Float64Array | null, inner: Float64Array | null, scale: number, offset: number) => {
+    if (!inner) return outer;
+    const mapped: number[][] = [];
+    for (let i = 0; i < inner.length; i += 2) {
+        const a = (inner[i] - offset) / scale;
+        const b = (inner[i + 1] - offset) / scale;
+        mapped.push(a <= b ? [a, b] : [b, a]);
+    }
+    mapped.sort((p, q) => p[0] - q[0]);
+    const bounds = outer ? Array.from({ length: outer.length / 2 }, (_, i) => [outer[i * 2], outer[i * 2 + 1]]) : [[-Infinity, Infinity]];
+    const out: number[] = [];
+    bounds.forEach(([a0, b0]) => mapped.forEach(([a1, b1]) => {
+        const a = Math.max(a0, a1);
+        const b = Math.min(b0, b1);
+        if (a < b) out.push(a, b);
+    }));
+    return Float64Array.from(out);
+};
+
 /** The rows of an input's model active at its time t, from its layout; null: all. */
 const activeRows = (motion: SplatMotion, t: number) => {
     if (motion.activeAt) return motion.activeAt(t);
@@ -660,12 +685,17 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
                 }
                 return Uint32Array.from(out);
             };
+            // an input made of others (a merge, a switch) has its own scale,
+            // offset and windows per level, of the input's time: composed
+            // with the piece's, so its cuts stay where they were
             const first = levels.length;
-            layout.levels.forEach((segLen) => {
+            layout.levels.forEach((segLen, l) => {
+                const s = layout.scale?.[l] ?? 1;
+                const o = layout.offset?.[l] ?? 0;
                 levels.push(segLen);
-                scale.push(piece.scale);
-                offset.push(piece.offset);
-                windows.push(pieceWindows);
+                scale.push(s * piece.scale);
+                offset.push(s * piece.offset + o);
+                windows.push(composeWindows(pieceWindows, layout.windows?.[l] ?? null, piece.scale, piece.offset));
             });
             let windowLevel = -1;
             layout.blocks.forEach((block) => {
