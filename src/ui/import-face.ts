@@ -2,12 +2,12 @@ import { Container } from '@playcanvas/pcui';
 
 import { i18n } from './localization';
 import { resolveDropPayload } from '../drop-handler';
-import { DatasetOp } from '../edit-ops';
+import { DatasetOp, describeCounts } from '../edit-ops';
 import { Events } from '../events';
 import { isHeic, withHeicAsJpeg } from '../io/heic';
 import { BridgeImage } from '../training/bridge-client';
 import { bridgePoseIntoOp, cancelPoseJob, posesReady } from '../training/bridge-ingest';
-import { isIgnoredFile, isImageSet, listDirectory, looksLikeDataset, packDataset } from '../training/dataset';
+import { countFiles, isIgnoredFile, isImageSet, listDirectory, looksLikeDataset, packDataset } from '../training/dataset';
 import { ensureWrite, extractVideoFrames, ingestImages, ingestImagesInPlace, ingestVideo } from '../training/video-ingest';
 
 /**
@@ -22,6 +22,7 @@ class ImportFace extends Container {
     private op: DatasetOp | null = null;
 
     private sourceLabel: HTMLElement;
+    private countsLine: HTMLElement;
     private noticeLine: HTMLElement;
 
     constructor(events: Events, args = {}) {
@@ -68,6 +69,12 @@ class ImportFace extends Container {
         this.sourceLabel = document.createElement('div');
         this.sourceLabel.className = 'tf-source';
         section.appendChild(this.sourceLabel);
+
+        // what it holds: images, videos, pose files
+        this.countsLine = document.createElement('div');
+        this.countsLine.className = 'tf-source';
+        this.countsLine.hidden = true;
+        section.appendChild(this.countsLine);
 
         this.noticeLine = document.createElement('div');
         this.noticeLine.className = 'tf-notice';
@@ -251,6 +258,7 @@ class ImportFace extends Container {
         if (!op) return;
         op.sourceName = label;
         op.output.name = label;
+        op.counts = Array.isArray(images) ? countFiles(images.map(i => i.name)) : countFiles([label]);
         this.events.fire('edit.changed');
         bridgePoseIntoOp(op, images, matcher, this.events).catch(() => {});
     }
@@ -262,6 +270,8 @@ class ImportFace extends Container {
         cancelPoseJob(this.op);
         this.op.status = undefined;
         this.op.setSource(source, name);
+        this.op.counts = undefined;
+        this.events.fire('dataset.sourceChanged', this.op);
         this.events.fire('edit.changed');
         this.refresh();
     }
@@ -290,6 +300,9 @@ class ImportFace extends Container {
             (op.source || op.awaitingPoses ?
                 op.sourceName :
                 i18n.t('training.no-dataset'));
+        const counts = describeCounts(op.counts, (kind, n) => `${i18n.t(`import.count-${kind}`)}: ${n}`);
+        this.countsLine.textContent = counts;
+        this.countsLine.hidden = !counts;
     }
 }
 

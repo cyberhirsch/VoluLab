@@ -144,6 +144,7 @@ const bridgePoseIntoOp = (op: DatasetOp, source: BridgeImage[] | (() => Promise<
 
             op.setSource({ kind: 'bytes', bytes: zip, name: 'dataset.zip' }, op.sourceName);
             op.status = undefined;
+            events.fire('dataset.sourceChanged', op);
             events.fire('dataset.statusChanged', op);
             events.fire('edit.changed');
             return true;

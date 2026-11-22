@@ -9,6 +9,23 @@ months finds out why before they change it.
 
 ---
 
+## Import node: what it holds
+
+An import node now says what it holds: how many images, videos, pose files
+(COLMAP sparse files, `transforms.json`, a RealityCapture csv) and other
+files, on its graph node (`photos · 99 images`) and in its pane. Before, a
+dropped folder became a node named after the folder and nothing else, so
+there was no way to tell whether all 99 photos had arrived, or whether the
+zip had its poses in it, before a pose run or a training run failed on it.
+
+Counted whenever the source changes (`dataset.sourceChanged`, editor.ts): a
+zip is listed through its central directory, not read, and a folder is
+walked by name, so a dataset of a few hundred megabytes counts at once.
+Where the files are known up front (photos and videos on their way to be
+posed, the COLMAP kit route) the count is passed in with the node.
+
+---
+
 ## HEIC and HEIF photos
 
 Photos from iPhones and many Android phones (`.heic`, `.heif`) import like

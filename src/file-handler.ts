@@ -14,7 +14,7 @@ import { TghFrameSource } from './tgh/tgh-frame-source';
 import { TghModel } from './tgh/tgh-model';
 import { BridgeImage } from './training/bridge-client';
 import { bridgePoseIntoOp, posesReady } from './training/bridge-ingest';
-import { isIgnoredFile, isImageSet, listDirectory, looksLikeDataset, packDataset } from './training/dataset';
+import { countFiles, isIgnoredFile, isImageSet, listDirectory, looksLikeDataset, packDataset } from './training/dataset';
 import { extractVideoFrames, ingestImages, ingestImagesInPlace, ingestVideo } from './training/video-ingest';
 import { i18n } from './ui/localization';
 
@@ -580,7 +580,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             const imageFiles = files.filter((f, i) => /\.(?:jpg|jpeg|png)$/.test(filenames[i]));
             if (imageFiles.length > 1 && imageFiles.length === files.length) {
                 if (await posesReady()) {
-                    const op = events.invoke('dataset.addNode', null, 'photos');
+                    const op = events.invoke('dataset.addNode', null, 'photos', countFiles(imageFiles.map(f => f.filename)));
                     // named by path: same-named photos in subfolders stay apart
                     const images: BridgeImage[] = imageFiles.map(f => ({ name: f.filename, data: f.contents as Blob }));
                     bridgePoseIntoOp(op, images, 'exhaustive', events).catch(() => {});
@@ -588,7 +588,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 }
                 const wrote = await ingestImages(imageFiles.map(f => f.contents), events);
                 if (wrote) {
-                    const op = events.invoke('dataset.addNode', null, i18n.t('training.awaiting-poses'));
+                    const op = events.invoke('dataset.addNode', null, i18n.t('training.awaiting-poses'), countFiles(imageFiles.map(f => f.filename)));
                     op?.markAwaiting(i18n.t('training.awaiting-poses'));
                 }
                 return result;
@@ -646,7 +646,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                         // frames are extracted when the node's pose job gets
                         // its turn, so several videos do not all sit in memory
                         // at once, and a failed extraction lands on the node
-                        const op = events.invoke('dataset.addNode', null, files[i].filename);
+                        const op = events.invoke('dataset.addNode', null, files[i].filename, countFiles([files[i].filename]));
                         bridgePoseIntoOp(op, async () => {
                             const frames: BridgeImage[] = [];
                             await extractVideoFrames(contents, (frameName, blob) => {
@@ -658,7 +658,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     } else {
                         const wrote = await ingestVideo(contents, events);
                         if (wrote) {
-                            const op = events.invoke('dataset.addNode', null, i18n.t('training.awaiting-poses'));
+                            const op = events.invoke('dataset.addNode', null, i18n.t('training.awaiting-poses'), countFiles([files[i].filename]));
                             op?.markAwaiting(i18n.t('training.awaiting-poses'));
                         }
                     }
@@ -812,7 +812,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             // where they become JPEGs
             if (!names.some(isHeic) && names.length > 1 && isImageSet(names)) {
                 if (await posesReady()) {
-                    const op = events.invoke('dataset.addNode', null, handle.name);
+                    const op = events.invoke('dataset.addNode', null, handle.name, countFiles(names));
                     const images: BridgeImage[] = await Promise.all(entries.map(async e => ({
                         name: e.path,
                         data: await e.handle.getFile() as Blob
@@ -822,7 +822,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 }
                 const wrote = await ingestImagesInPlace(handle, entries, events);
                 if (wrote) {
-                    const op = events.invoke('dataset.addNode', null, i18n.t('training.awaiting-poses'));
+                    const op = events.invoke('dataset.addNode', null, i18n.t('training.awaiting-poses'), countFiles(names));
                     op?.markAwaiting(i18n.t('training.awaiting-poses'));
                 }
                 return;

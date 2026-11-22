@@ -2012,6 +2012,32 @@ type DatasetHandle = {
     dataset: true;
 };
 
+/** What an import node holds, file by kind. */
+type DatasetCounts = {
+    images: number;
+    videos: number;
+    /** COLMAP sparse files, transforms.json, a RealityCapture csv */
+    poses: number;
+    other: number;
+};
+
+/** '99 images', '1 video', '99 images · 3 pose files': the kinds it has. */
+const describeCounts = (counts: DatasetCounts | undefined, t: (key: string, n: number) => string) => {
+    if (!counts) return '';
+    const parts: string[] = [];
+    if (counts.images) parts.push(t('images', counts.images));
+    if (counts.videos) parts.push(t('videos', counts.videos));
+    if (counts.poses) parts.push(t('poses', counts.poses));
+    if (counts.other) parts.push(t('other', counts.other));
+    return parts.join(' · ');
+};
+
+// the graph's own words, which are English everywhere (OP_LABELS)
+const countWords = (kind: string, n: number) => {
+    const word = ({ images: 'image', videos: 'video', poses: 'pose file', other: 'other file' } as Record<string, string>)[kind];
+    return `${n} ${word}${n === 1 ? '' : 's'}`;
+};
+
 /**
  * An import node whose cargo is a capture dataset rather than a scene
  * object. The one import node concept covers both: importing a splat file
@@ -2034,6 +2060,8 @@ class DatasetOp {
     awaitingPoses?: boolean;
     /** transient progress line while the bridge works on this node */
     status?: string;
+    /** the files it holds, by kind; unknown until they have been counted */
+    counts?: DatasetCounts;
     bypassed?: boolean;
 
     constructor(source: unknown | null, sourceName: string) {
@@ -2042,9 +2070,10 @@ class DatasetOp {
         this.output = { name: sourceName, dataset: true };
     }
 
-    /** what the graph labels this node with */
+    /** what the graph labels this node with: the name, and what it holds */
     get sourceLabel() {
-        return this.sourceName;
+        const counts = describeCounts(this.counts, countWords);
+        return counts ? `${this.sourceName} · ${counts}` : this.sourceName;
     }
 
     setSource(source: unknown, name: string) {
@@ -2591,6 +2620,8 @@ export {
     AddVoxelsOp,
     DatasetOp,
     type DatasetHandle,
+    type DatasetCounts,
+    describeCounts,
     CameraOp,
     CameraPoseOp,
     type CameraSettings,
