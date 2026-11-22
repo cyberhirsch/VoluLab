@@ -146,8 +146,28 @@ class EditHistory {
         return this.commandQueue.enqueue(fn);
     }
 
+    // asked inside the queued task, before an edit is added, undone or redone:
+    // a cursor to wind to first, or null. A viewer that wound the history
+    // back to show a point hands back where the chain really ends, so the
+    // edit lands there instead of truncating everything after the point.
+    private beforeEdit: (() => number | null)[] = [];
+
+    onBeforeEdit(fn: () => number | null) {
+        this.beforeEdit.push(fn);
+    }
+
+    private async settle() {
+        for (const fn of this.beforeEdit) {
+            const target = fn();
+            if (target !== null && target !== this.cursor) await this.travel(target);
+        }
+    }
+
     add(editOp: EditOp, suppressOp = false) {
-        return this.queue(() => this._add(editOp, suppressOp));
+        return this.queue(async () => {
+            await this.settle();
+            await this._add(editOp, suppressOp);
+        });
     }
 
     canUndo() {
@@ -160,6 +180,7 @@ class EditHistory {
 
     undo() {
         return this.queue(async () => {
+            await this.settle();
             if (this.canUndo()) {
                 await this._undo();
             }
@@ -168,6 +189,7 @@ class EditHistory {
 
     redo(suppressOp = false) {
         return this.queue(async () => {
+            await this.settle();
             if (this.canRedo()) {
                 await this._redo(suppressOp);
             }
@@ -542,21 +564,23 @@ class EditHistory {
      * through the travel.
      */
     goto(cursor: number) {
-        return this.queue(async () => {
-            const target = Math.max(this.floor, Math.min(this.history.length, cursor));
-            this.batch++;
-            try {
-                while (this.cursor > target) {
-                    await this._undo();
-                }
-                while (this.cursor < target) {
-                    await this._redo();
-                }
-            } finally {
-                this.batch--;
-                this.fireEvents();
+        return this.queue(() => this.travel(cursor));
+    }
+
+    private async travel(cursor: number) {
+        const target = Math.max(this.floor, Math.min(this.history.length, cursor));
+        this.batch++;
+        try {
+            while (this.cursor > target) {
+                await this._undo();
             }
-        });
+            while (this.cursor < target) {
+                await this._redo();
+            }
+        } finally {
+            this.batch--;
+            this.fireEvents();
+        }
     }
 
     /**

@@ -763,6 +763,8 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         const op = history().ops[index];
         if (!(op instanceof OutputOp)) return;
 
+        // a viewer showing an earlier point lets go first: back to the chain's end
+        await events.invoke('viewer.stop');
         const resume = history().cursor;
         await editHistory.goto(index + 1);
 

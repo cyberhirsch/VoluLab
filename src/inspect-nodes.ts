@@ -98,6 +98,9 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
             };
         }
 
+        // the viewer's isolate would hide objects from the frames, and its
+        // point is not this node's: back to the end of the chain first
+        await stopViewing(true);
         const resume = history().cursor;
         await editHistory.goto(index + 1);
         try {
@@ -116,9 +119,28 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
 
     // --- viewer ----------------------------------------------------------
 
+    // Where the chain really ends while the viewer shows an earlier point:
+    // the end of the history, or after the op that was last applied. Kept as
+    // an op, not an index, so removing or moving nodes while viewing does
+    // not shift it.
+    type Resume = { atEnd: boolean, last: EditOp | null, cursor: number };
+
     // what the viewport is showing instead of the end of the chain
-    let viewing: { op: ViewerOp, resume: number, hidden: Splat[] } | null = null;
+    let viewing: { op: ViewerOp, resume: Resume, hidden: Splat[] } | null = null;
     let travelling = false;
+
+    const resumeHere = (): Resume => {
+        const { ops, cursor } = history();
+        return { atEnd: cursor >= ops.length, last: cursor > 0 ? ops[cursor - 1] : null, cursor };
+    };
+
+    const resumeCursor = (resume: Resume) => {
+        const { ops } = history();
+        if (resume.atEnd) return ops.length;
+        if (!resume.last) return 0;
+        const at = ops.indexOf(resume.last);
+        return at >= 0 ? at + 1 : Math.min(resume.cursor, ops.length);
+    };
 
     const fireViewer = () => events.fire('viewer.changed', viewing?.op ?? null);
 
@@ -128,7 +150,7 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
         });
     };
 
-    /** Stop showing the viewer's point; back to where the chain was, unless the user has moved since. */
+    /** Stop showing the viewer's point; back to where the chain ends, unless the user has moved since. */
     const stopViewing = async (goBack = true) => {
         if (!viewing) return;
         const { resume } = viewing;
@@ -138,18 +160,30 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
         if (goBack) {
             travelling = true;
             try {
-                await editHistory.goto(resume);
+                await editHistory.goto(resumeCursor(resume));
             } finally {
                 travelling = false;
             }
         }
     };
 
+    // An edit, undo or redo while viewing is the user working again: the
+    // viewer lets go and the chain goes back to its end first, inside the
+    // same queued task, so nothing after the viewed point is truncated.
+    editHistory.onBeforeEdit(() => {
+        if (!viewing) return null;
+        const { resume } = viewing;
+        unhide();
+        viewing = null;
+        fireViewer();
+        return resumeCursor(resume);
+    });
+
     events.function('viewer.view', async (op: ViewerOp) => {
         const index = indexOf(op);
         if (index < 0 || !(op instanceof ViewerOp)) return false;
         if (viewing?.op === op) return true;
-        const resume = viewing ? viewing.resume : history().cursor;
+        const resume = viewing ? viewing.resume : resumeHere();
         await stopViewing(false);
         travelling = true;
         try {
@@ -169,15 +203,20 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
     events.function('viewer.stop', () => stopViewing(true));
     events.function('viewer.active', () => viewing?.op ?? null);
 
-    // Anything that moves the history while viewing - an undo, a new node, a
-    // changed parameter - is the user working again: the viewer lets go,
-    // where the history now is.
+    // Adds, undos and redos are handled before they happen (onBeforeEdit). An
+    // output or render passes write winds away and back to the viewed point:
+    // the viewer stays. The viewer node itself removed or bypassed: let go,
+    // back to the end of the chain.
     events.on('edit.changed', () => {
         if (!viewing || travelling) return;
-        const index = indexOf(viewing.op);
-        if (index < 0 || history().cursor !== index + 1) {
-            stopViewing(false);
+        if (indexOf(viewing.op) < 0 || viewing.op.bypassed) {
+            stopViewing(true);
         }
+    });
+
+    // the user moving the history cursor on purpose: let go, and stay there
+    events.on('edit.goto', () => {
+        if (viewing && !travelling) stopViewing(false);
     });
 
     events.on('graph.addViewerNode', (target?: Splat) => {
