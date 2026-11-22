@@ -73,6 +73,13 @@ const modelTimeAt = (splat: Splat, frame: number) => {
     return at === null ? null : at / frames;
 };
 
+/**
+ * The whole frame the model shows at a timeline time: playback and the video
+ * export step the time between frames, the model steps a frame at a time
+ * (editor.ts, sequence.ts), and what follows it has to stand on that frame.
+ */
+const shownFrame = (time: number) => Math.floor(time + 1e-4);
+
 /** A fingerprint of which rows are selected: a fit is kept while it does not change. */
 const selectionPrint = (splat: Splat) => {
     const state = splat.splatData.getProp('state') as Uint8Array;
@@ -217,7 +224,7 @@ class TrackBase {
 
     /** The world-space motion of the track at a timeline frame: where the reference pose goes. */
     protected worldMotion(frame: number, base: Transform): Mat4 | null {
-        const t = modelTimeAt(this.splat, frame);
+        const t = modelTimeAt(this.splat, shownFrame(frame));
         if (t === null || !this.track) return null;
         const W = placementMatrix(base);
         const inv = W.clone().invert();
@@ -332,7 +339,7 @@ class StabiliseOp extends TrackBase implements FrameDriven {
 
     private place(frame: number) {
         if (!this.base || !this.splat.scene) return;
-        const t = modelTimeAt(this.splat, frame);
+        const t = modelTimeAt(this.splat, shownFrame(frame));
         let m: Mat4 | null = t === null || !this.track ? null : this.track.at(t);
         if (m && this.strength !== 1) {
             const s = Math.max(0, Math.min(1, this.strength));
