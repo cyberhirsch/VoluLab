@@ -9,6 +9,28 @@ months finds out why before they change it.
 
 ---
 
+## Capture-side nodes: resize, 2d crop, import and pose do more
+
+**Resize.** One number with a hidden preset list was all the resize node
+had. It now shows three linked fields - scale in percent, long edge in
+pixels (with a list of common edges), megapixels. Typing into one sets the
+size and the other two follow, worked out from the first photo's size, or
+the largest one's when the sizes differ (`ResizeOp.reference`, read from
+the headers). Only the field typed into is stored (`by` and `value`), so
+the intent survives new photos: 1600 px stays 1600 px, 25 % stays a
+quarter. Beside them: never enlarge (on), resampling quality (the
+`resizeQuality` of createImageBitmap), and the output format - JPEG, PNG
+or WebP, with the quality slider only for the lossy two. A resized image
+takes its format's extension; one that comes out at its own size goes
+through untouched in its own format, as before. Brush reads WebP (the
+`image` crate's decoder is in its wasm), and pose-read counts .webp.
+
+Each photo's result is remembered per photo and settings key (two keys per
+photo), so going back to the previous settings, or a subset of the photos
+changing upstream, does not resize again. A project from before keeps
+`maxEdge`: `resizeSettingsFrom` reads it as a long edge, never enlarged,
+JPEG - exactly what the node did.
+
 ## Images and cameras wires, a 2d crop, and the train node's two inputs
 
 The one `dataset` wire kind is now two: `images` (an import node's photos,

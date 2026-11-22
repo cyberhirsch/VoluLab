@@ -1,6 +1,6 @@
 import { BridgeImage } from './bridge-client';
 import { isRawCapture } from './dataset-source';
-import { CropOp, DatasetOp, EditOp, ImageCropSettings, PoseMatcher, ResizeOp, ResizeSettings, isDatasetInput, isImageNode } from '../edit-ops';
+import { CropOp, DatasetOp, EditOp, ImageCropSettings, PoseMatcher, ResizeFormat, ResizeOp, ResizeSettings, isDatasetInput, isImageNode, resizeSettingsFrom, resizeTarget } from '../edit-ops';
 import { Events } from '../events';
 import { i18n } from '../ui/localization';
 
@@ -96,36 +96,44 @@ const frameOf = (image: BridgeImage): Frame => (image as FramedImage).frame ?? I
 
 type Done = { image: FramedImage, from: [number, number], to: [number, number], changed: boolean };
 
-const toJpeg = async (bitmap: ImageBitmap, quality: number) => {
+const MIME: Record<ResizeFormat, string> = { jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+
+/** A bitmap as an image file; PNG is lossless and takes no quality. */
+const encode = async (bitmap: ImageBitmap, format: ResizeFormat, quality: number) => {
     const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
     canvas.getContext('2d').drawImage(bitmap, 0, 0);
-    return await canvas.convertToBlob({ type: 'image/jpeg', quality });
+    return await canvas.convertToBlob(format === 'png' ? { type: MIME.png } : { type: MIME[format], quality });
 };
 
-/** One photo with its long edge brought down to `maxEdge`, as a JPEG. */
+const toJpeg = (bitmap: ImageBitmap, quality: number) => encode(bitmap, 'jpeg', quality);
+
+/**
+ * One photo at the size the settings give it, in their format. One that
+ * comes out at its own size goes through as it is, read from its header
+ * when it can be, so it is not even decoded.
+ */
 const shrink = async (image: BridgeImage, settings: ResizeSettings): Promise<Done> => {
-    const { maxEdge, quality } = settings;
     const header = await headerSize(image.data);
-    if (header && Math.max(...header) <= maxEdge) {
-        return { image, from: header, to: header, changed: false };
+    if (header) {
+        // EXIF orientation may swap the header's sides: the rule is the
+        // same either way round
+        const [tw, th] = resizeTarget(settings, header[0], header[1]);
+        if (tw === header[0] && th === header[1]) return { image, from: header, to: header, changed: false };
     }
 
-    // decoded the way it is shown, EXIF orientation applied, so the JPEG
+    // decoded the way it is shown, EXIF orientation applied, so the image
     // that comes out needs no orientation of its own
     const bitmap = await createImageBitmap(image.data);
     const w = bitmap.width;
     const h = bitmap.height;
-    const long = Math.max(w, h);
-    if (long <= maxEdge) {
+    const [tw, th] = resizeTarget(settings, w, h);
+    if (tw === w && th === h) {
         bitmap.close();
         return { image, from: [w, h], to: [w, h], changed: false };
     }
-    const scale = maxEdge / long;
-    const tw = Math.max(1, Math.round(w * scale));
-    const th = Math.max(1, Math.round(h * scale));
     let small: ImageBitmap;
     try {
-        small = await createImageBitmap(bitmap, { resizeWidth: tw, resizeHeight: th, resizeQuality: 'high' });
+        small = await createImageBitmap(bitmap, { resizeWidth: tw, resizeHeight: th, resizeQuality: settings.resample });
     } finally {
         bitmap.close();
     }
@@ -134,7 +142,7 @@ const shrink = async (image: BridgeImage, settings: ResizeSettings): Promise<Don
     const sy = th / h;
     const frame = { ax: f.ax * sx, bx: f.bx * sx, ay: f.ay * sy, by: f.by * sy };
     try {
-        return { image: { name: image.name, data: await toJpeg(small, quality), frame }, from: [w, h], to: [tw, th], changed: true };
+        return { image: { name: image.name, data: await encode(small, settings.format, settings.quality), frame }, from: [w, h], to: [tw, th], changed: true };
     } finally {
         small.close();
     }
@@ -174,10 +182,65 @@ const crop = async (image: BridgeImage, settings: ImageCropSettings): Promise<Do
 const workOf = (op: ResizeOp | CropOp) => {
     if (op instanceof ResizeOp) {
         const settings = { ...op.settings };
-        return { key: JSON.stringify(settings), each: (image: BridgeImage) => shrink(image, settings), progress: 'resize.progress', failed: 'resize.failed' };
+        return { key: `resize ${JSON.stringify(settings)}`, each: (image: BridgeImage) => shrink(image, settings), progress: 'resize.progress', failed: 'resize.failed' };
     }
     const settings = { ...op.imageCrop };
-    return { key: JSON.stringify(settings), each: (image: BridgeImage) => crop(image, settings), progress: 'crop.progress', failed: 'crop.failed' };
+    return { key: `crop ${JSON.stringify(settings)}`, each: (image: BridgeImage) => crop(image, settings), progress: 'crop.progress', failed: 'crop.failed' };
+};
+
+/**
+ * What each photo came out as, by the photo and the work's key: a subset
+ * of the photos changing, or the settings going back to what they were,
+ * does not do again what was done. A few keys per photo at most; the
+ * entries go with the photo.
+ */
+const memo = new WeakMap<object, Map<string, Done>>();
+const MEMO_KEYS = 2;
+
+const remembered = (image: BridgeImage, key: string) => memo.get(image)?.get(key);
+
+const remember = (image: BridgeImage, key: string, done: Done) => {
+    let byKey = memo.get(image);
+    if (!byKey) {
+        byKey = new Map();
+        memo.set(image, byKey);
+    }
+    byKey.delete(key);
+    byKey.set(key, done);
+    while (byKey.size > MEMO_KEYS) byKey.delete(byKey.keys().next().value);
+};
+
+// image sizes from their headers, by blob
+const sizes = new WeakMap<Blob, Promise<[number, number]>>();
+const cachedSize = (blob: Blob) => {
+    let size = sizes.get(blob);
+    if (!size) {
+        size = imageSize(blob);
+        sizes.set(blob, size);
+        size.catch(() => sizes.delete(blob));
+    }
+    return size;
+};
+
+/**
+ * The size a resize node's linked fields are worked out from: the first
+ * photo's, or the largest one's when the photos differ in size.
+ */
+const referenceSize = async (images: BridgeImage[]): Promise<[number, number] | undefined> => {
+    let first: [number, number] | undefined;
+    let largest: [number, number] | undefined;
+    let mixed = false;
+    for (const image of images) {
+        try {
+            const size = await cachedSize(image.data);
+            first ??= size;
+            if (size[0] * size[1] !== first[0] * first[1] || Math.max(...size) !== Math.max(...first)) mixed = true;
+            if (!largest || size[0] * size[1] > largest[0] * largest[1]) largest = size;
+        } catch {
+            // not an image the browser reads: the work will say so
+        }
+    }
+    return mixed ? largest : first;
 };
 
 /** the key a node's result is cached against, for a project to put back */
@@ -199,16 +262,25 @@ const commonSize = (sizes: [number, number][]): [number, number] => {
     return best?.size ?? [0, 0];
 };
 
+// the extension an image file of this type takes, and the ones it may have
+const EXTENSIONS: Record<string, { ext: string, re: RegExp }> = {
+    'image/jpeg': { ext: '.jpg', re: /\.jpe?g$/i },
+    'image/png': { ext: '.png', re: /\.png$/i },
+    'image/webp': { ext: '.webp', re: /\.webp$/i }
+};
+
 /**
- * A JPEG keeps its name; another format, now a JPEG, takes .jpg - unless
- * that name is taken.
+ * An image made keeps its name when the extension fits its format, and
+ * takes the format's extension when it does not (a PNG now a JPEG takes
+ * .jpg) - unless that name is taken.
  */
-const jpegNames = (done: Done[]) => {
+const fittingNames = (done: Done[]) => {
     const taken = new Set(done.map(s => s.image.name.toLowerCase()));
     return done.map((s) => {
         const name = s.image.name;
-        if (!s.changed || /\.jpe?g$/i.test(name)) return s.image;
-        const renamed = `${name.replace(/\.[^./]*$/, '')}.jpg`;
+        const fit = EXTENSIONS[s.image.data.type];
+        if (!s.changed || !fit || fit.re.test(name)) return s.image;
+        const renamed = `${name.replace(/\.[^./]*$/, '')}${fit.ext}`;
         if (taken.has(renamed.toLowerCase())) return s.image;
         taken.add(renamed.toLowerCase());
         return { ...s.image, name: renamed };
@@ -241,6 +313,7 @@ const registerImageNodes = (events: Events) => {
 
         op.status = undefined;
         op.summary = undefined;
+        if (op instanceof ResizeOp) op.reference = undefined;
 
         if (!source || !isRawCapture(source) || source.kind === 'video') {
             // nothing, a video, or a dataset with poses: handed on as it is
@@ -257,6 +330,15 @@ const registerImageNodes = (events: Events) => {
         const images = source.images;
         op.status = i18n.t(work.progress, { done: 0, total: images.length });
         handOn(op);
+        if (op instanceof ResizeOp) {
+            // read from the headers: quick, and the face shows its linked
+            // fields from it while the work goes on
+            referenceSize(images).then((size) => {
+                if (!current()) return;
+                op.reference = size;
+                events.fire('dataset.statusChanged', op);
+            }).catch(() => {});
+        }
 
         const out: Done[] = new Array(images.length);
         let next = 0;
@@ -266,7 +348,8 @@ const registerImageNodes = (events: Events) => {
             while (next < images.length && !failed && current()) {
                 const k = next++;
                 try {
-                    out[k] = await work.each(images[k]);
+                    out[k] = remembered(images[k], work.key) ?? await work.each(images[k]);
+                    remember(images[k], work.key, out[k]);
                 } catch (error) {
                     failed = new Error(`${images[k].name}: ${(error as any)?.message ?? error}`);
                     return;
@@ -293,7 +376,7 @@ const registerImageNodes = (events: Events) => {
         await events.invoke('queue', () => {});
         if (!current()) return;
 
-        op.source = { kind: 'images', images: jpegNames(out) };
+        op.source = { kind: 'images', images: fittingNames(out) };
         op.madeFrom = { source, key: work.key };
         op.summary = {
             images: out.length,
@@ -311,12 +394,10 @@ const registerImageNodes = (events: Events) => {
 
     events.on('resize.setSettings', (op: ResizeOp, settings: Partial<ResizeSettings>) => {
         if (!(op instanceof ResizeOp)) return;
-        const maxEdge = Math.round(Number(settings.maxEdge ?? op.settings.maxEdge));
-        const quality = Number(settings.quality ?? op.settings.quality);
-        op.settings = {
-            maxEdge: Number.isFinite(maxEdge) && maxEdge >= 64 ? Math.min(maxEdge, 16384) : op.settings.maxEdge,
-            quality: Number.isFinite(quality) ? Math.min(1, Math.max(0.1, quality)) : op.settings.quality
-        };
+        const was = JSON.stringify(op.settings);
+        op.settings = resizeSettingsFrom({ ...op.settings, ...settings }, op.settings);
+        // the same settings again: what it made stands
+        if (JSON.stringify(op.settings) === was) return;
         events.fire('edit.changed');
         run(op).catch(() => {});
     });
@@ -362,4 +443,4 @@ const registerImageNodes = (events: Events) => {
     });
 };
 
-export { frameOf, headerSize, imageSize, needsResize, registerImageNodes, workKey, type Frame, type FramedImage };
+export { frameOf, headerSize, imageSize, needsResize, referenceSize, registerImageNodes, workKey, type Frame, type FramedImage };

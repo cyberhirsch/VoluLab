@@ -186,7 +186,7 @@ const camerasFromSparse = (files: { path: string, data: Uint8Array }[]): PoseCam
     return [];
 };
 
-const IMAGE_RE = /\.(?:jpg|jpeg|png)$/i;
+const IMAGE_RE = /\.(?:jpg|jpeg|png|webp)$/i;
 
 /**
  * The poses of a dataset that already has them, and how many images it

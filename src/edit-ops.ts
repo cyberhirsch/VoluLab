@@ -2269,20 +2269,86 @@ type PoseCamera = {
 
 type PoseMatcher = 'sequential' | 'exhaustive';
 
+/**
+ * Which of the resize node's three linked fields was typed in last: the
+ * scale in percent, the long edge in pixels, or the size in megapixels.
+ * Only that one is kept, so the intent holds when the photos change: a
+ * long edge of 1600 px stays 1600 px for larger photos, 50 % stays half.
+ */
+type ResizeBy = 'percent' | 'edge' | 'megapixels';
+
+type ResizeFormat = 'jpeg' | 'png' | 'webp';
+
 type ResizeSettings = {
-    /** the longest an image's long edge may be, in pixels */
-    maxEdge: number;
-    /** JPEG quality of the images it shrinks, 0..1 */
+    by: ResizeBy;
+    /** percent, pixels or megapixels, as `by` says */
+    value: number;
+    /** never make an image larger than it came in */
+    neverEnlarge: boolean;
+    /** createImageBitmap's resizeQuality */
+    resample: 'high' | 'medium' | 'low';
+    /** the format of the images it resizes */
+    format: ResizeFormat;
+    /** quality of the lossy formats (JPEG, WebP), 0..1 */
     quality: number;
 };
 
-const defaultResizeSettings = (): ResizeSettings => ({ maxEdge: 1600, quality: 0.92 });
+const defaultResizeSettings = (): ResizeSettings => ({ by: 'edge', value: 1600, neverEnlarge: true, resample: 'high', format: 'jpeg', quality: 0.92 });
+
+const RESIZE_LIMITS: Record<ResizeBy, [number, number]> = { percent: [1, 400], edge: [16, 16384], megapixels: [0.01, 400] };
+
+/**
+ * Resize settings from anything: a project's, a face's partial change.
+ * A project from before the three fields kept `maxEdge`: that is a long
+ * edge, never enlarged, as JPEG - what the node did then.
+ */
+const resizeSettingsFrom = (given: any, base: ResizeSettings = defaultResizeSettings()): ResizeSettings => {
+    const g = given ?? {};
+    const num = (v: unknown) => (v === null || v === undefined || v === '' ? NaN : Number(v));
+    let by: ResizeBy = (['percent', 'edge', 'megapixels'] as ResizeBy[]).includes(g.by) ? g.by : base.by;
+    let value = num(g.value);
+    if (g.by === undefined && g.value === undefined && Number.isFinite(num(g.maxEdge))) {
+        by = 'edge';
+        value = num(g.maxEdge);
+    }
+    if (!Number.isFinite(value)) value = by === base.by ? base.value : defaultResizeSettings().value;
+    const [lo, hi] = RESIZE_LIMITS[by];
+    value = Math.min(hi, Math.max(lo, value));
+    if (by === 'edge') value = Math.round(value);
+    const quality = num(g.quality);
+    return {
+        by,
+        value,
+        neverEnlarge: typeof g.neverEnlarge === 'boolean' ? g.neverEnlarge : base.neverEnlarge,
+        resample: ['high', 'medium', 'low'].includes(g.resample) ? g.resample : base.resample,
+        format: ['jpeg', 'png', 'webp'].includes(g.format) ? g.format : base.format,
+        quality: Number.isFinite(quality) ? Math.min(1, Math.max(0.1, quality)) : base.quality
+    };
+};
+
+/**
+ * The scale a resize node puts on an image of w × h, before rounding:
+ * the same rule for every image, so mixed sizes each get their own.
+ */
+const resizeScale = (s: ResizeSettings, w: number, h: number) => {
+    let scale = s.by === 'percent' ? s.value / 100 :
+        (s.by === 'edge' ? s.value / Math.max(w, h, 1) : Math.sqrt(s.value * 1e6 / Math.max(1, w * h)));
+    if (s.neverEnlarge) scale = Math.min(1, scale);
+    return scale;
+};
+
+/** the size an image of w × h comes out at */
+const resizeTarget = (s: ResizeSettings, w: number, h: number): [number, number] => {
+    const scale = resizeScale(s, w, h);
+    return [Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale))];
+};
 
 /**
  * A resize node: shrinks the photos an import node holds before they are
  * posed, so the pose node and the trainer see the same smaller images.
  *
- * Images whose long edge is within the cap go through untouched. A video
+ * Images that come out at the size they went in go through untouched,
+ * in their own format; only resized ones take the node's format. A video
  * and a dataset that already has poses go through untouched too: a posed
  * dataset's intrinsics are in pixels of the images it has. The shrunk
  * images are its own state (src/training/image-nodes.ts makes them),
@@ -2295,6 +2361,11 @@ class ResizeOp implements ImageNode {
     output: DatasetHandle;
     datasetOp?: DatasetInput;
     settings: ResizeSettings;
+    /**
+     * the size the face works its linked fields out from: the first
+     * photo's, or the largest one's when they differ; session state
+     */
+    reference?: [number, number];
     source: unknown | null = null;
     madeFrom: { source: unknown, key: string } | null = null;
     summary?: ImageSummary;
@@ -2998,7 +3069,12 @@ export {
     type PoseMatcher,
     ResizeOp,
     type ResizeSettings,
+    type ResizeBy,
+    type ResizeFormat,
     defaultResizeSettings,
+    resizeSettingsFrom,
+    resizeScale,
+    resizeTarget,
     type ImageCropSettings,
     defaultImageCropSettings,
     type ImageSummary,

@@ -1,6 +1,6 @@
 import type { ZipReadFileSystem } from '@playcanvas/splat-transform';
 
-import { CropOp, DatasetOp, EditOp, PoseOp, ResizeOp, TrainOp, defaultImageCropSettings, defaultResizeSettings, isImageNode, type DatasetInput, type PoseCamera } from './edit-ops';
+import { CropOp, DatasetOp, EditOp, PoseOp, ResizeOp, TrainOp, defaultImageCropSettings, isImageNode, resizeSettingsFrom, type DatasetInput, type PoseCamera } from './edit-ops';
 import type { Events } from './events';
 import type { Scene } from './scene';
 import type { Splat } from './splat';
@@ -252,8 +252,8 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
                 quality: num(given.quality, d.quality)
             });
         } else {
-            const d = defaultResizeSettings();
-            op = new ResizeOp({ maxEdge: num(given.maxEdge, d.maxEdge), quality: num(given.quality, d.quality) });
+            // a project from before the linked fields has maxEdge
+            op = new ResizeOp(resizeSettingsFrom(given));
         }
         op.summary = stored?.summary;
         (op as EditOp).bypassed = !!stored?.bypassed;
