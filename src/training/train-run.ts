@@ -145,7 +145,7 @@ const registerTraining = (events: Events, scene: Scene) => {
             // PLY parsed. The first snapshot (which fixes the object's
             // transform) and the final one (which takes the morton reorder)
             // go the PLY way
-            if (!final && op.output && !op.pending) {
+            if (!final && op.output) {
                 const direct = await engine.readSplats();
                 if (runOp !== op || !opStillApplied(op)) return;
                 if (direct && direct.count > 0) {
@@ -182,13 +182,6 @@ const registerTraining = (events: Events, scene: Scene) => {
                 op.output = new Splat(asset, transform.rotation);
                 await scene.add(op.output);
                 // the graph moves the node from the scene lane onto its own
-                events.fire('edit.changed');
-            } else if (op.pending) {
-                // the empty object the node was made with: it takes the
-                // trained gaussians and the orientation they load with
-                op.pending = false;
-                op.output.entity.setLocalRotation(transform.rotation);
-                await op.output.replaceData(asset);
                 events.fire('edit.changed');
             } else {
                 await op.output.replaceData(asset);

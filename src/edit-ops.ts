@@ -2619,11 +2619,6 @@ class TrainOp {
     datasetOp?: DatasetOp | PoseOp;
     /** an object whose live gaussians start the run, in place of the dataset's points */
     seed?: Splat;
-    /**
-     * its output is still the empty object it was made with, so nodes can
-     * hang off it before any gaussians exist; the first snapshot fills it
-     */
-    pending?: boolean;
     bypassed?: boolean;
 
     constructor(scene: Scene, output: Splat | null, settings: TrainSettings) {

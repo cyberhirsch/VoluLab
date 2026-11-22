@@ -112,7 +112,6 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
             settings: { ...op.settings, config: { ...op.settings.config } },
             ...(splat >= 0 ? { splat } : {}),
             ...(seed >= 0 ? { seed } : {}),
-            ...(op.pending ? { pending: true } : {}),
             ...flags(op),
             ...placeOf(op)
         };
@@ -241,7 +240,6 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
             config: { ...(stored?.settings?.config ?? {}) }
         };
         const op = new TrainOp(scene, output, settings);
-        if (stored?.pending) op.pending = true;
         if (typeof stored?.seed === 'number') op.seed = loaded[stored.seed];
         op.bypassed = !!stored?.bypassed;
         trains.push(op);
