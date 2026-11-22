@@ -80,7 +80,19 @@ type MergeBuilt = {
     rows: number[];
     /** per input, how many times it came in (one per distinct run of time) */
     copies: number[];
+    /** per input, whether it had more runs than it may come in for: some of its time shows nothing */
+    limited: boolean[];
 };
+
+/**
+ * How often an input may come in, and how many gaussians the copies past
+ * the first may come to over all inputs: a time warp with a keyed speed
+ * or a loop of many turns cuts an input's time into as many runs, each a
+ * copy of its gaussians. Past these, the runs that cover the most time
+ * are kept, and the others show the kept one nearest their time.
+ */
+const MAX_COPIES = 16;
+const MAX_EXTRA_ROWS = 4_000_000;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 const shBandCoeffs = [0, 3, 8, 15];
@@ -118,6 +130,22 @@ const inputTime = (splat: Splat, f: number, rate: number, timelineFrames: number
  * a still, at `offset`.
  */
 type Piece = { scale: number, offset: number, windows: number[] };
+
+/** (from, to) pairs in order, the touching ones joined. */
+const joinWindows = (windows: number[]) => {
+    const pairs: number[][] = [];
+    for (let i = 0; i < windows.length; i += 2) pairs.push([windows[i], windows[i + 1]]);
+    pairs.sort((a, b) => a[0] - b[0]);
+    const out: number[] = [];
+    pairs.forEach(([a, b]) => {
+        if (out.length && a <= out[out.length - 1] + 1e-12) {
+            out[out.length - 1] = Math.max(out[out.length - 1], b);
+        } else {
+            out.push(a, b);
+        }
+    });
+    return out;
+};
 
 const close = (a: number, b: number) => Math.abs(a - b) <= 1e-7 * Math.max(1, Math.abs(a), Math.abs(b));
 
@@ -180,20 +208,8 @@ const piecesOf = (times: (number | null)[], frames: number): Piece[] => {
         }
     });
 
-    // windows in order, the touching ones joined
     pieces.forEach((p) => {
-        const pairs: number[][] = [];
-        for (let i = 0; i < p.windows.length; i += 2) pairs.push([p.windows[i], p.windows[i + 1]]);
-        pairs.sort((a, b) => a[0] - b[0]);
-        const out: number[] = [];
-        pairs.forEach(([a, b]) => {
-            if (out.length && a <= out[out.length - 1] + 1e-12) {
-                out[out.length - 1] = Math.max(out[out.length - 1], b);
-            } else {
-                out.push(a, b);
-            }
-        });
-        p.windows = out;
+        p.windows = joinWindows(p.windows);
     });
     return pieces;
 };
@@ -538,6 +554,46 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
         return piecesOf(times, frames);
     });
 
+    // no more copies than memory allows: the runs that cover the most time
+    const limited = inputs.map(() => false);
+    let extraRows = 0;
+    piecesFor.forEach((pieces, i) => {
+        if (pieces.length < 2) return;
+        const covered = (p: Piece) => {
+            let sum = 0;
+            for (let w = 0; w < p.windows.length; w += 2) sum += p.windows[w + 1] - p.windows[w];
+            return sum;
+        };
+        const rowsEach = parts[i].rows.length;
+        const ranked = pieces.slice().sort((a, b) => covered(b) - covered(a));
+        const kept = new Set<Piece>([ranked[0]]);
+        for (let k = 1; k < ranked.length && kept.size < MAX_COPIES && extraRows + rowsEach <= MAX_EXTRA_ROWS; ++k) {
+            kept.add(ranked[k]);
+            extraRows += rowsEach;
+        }
+        if (kept.size < pieces.length) {
+            // a run left out shows the kept one nearest its time instead:
+            // the input steps rather than drops out
+            limited[i] = true;
+            const keep = pieces.filter(p => kept.has(p)).map(p => ({ ...p, windows: p.windows.slice() }));
+            pieces.filter(p => !kept.has(p)).forEach((p) => {
+                for (let w = 0; w < p.windows.length; w += 2) {
+                    const u = (p.windows[w] + p.windows[w + 1]) / 2;
+                    const t = p.scale * u + p.offset;
+                    let best = keep[0];
+                    keep.forEach((q) => {
+                        if (Math.abs(q.scale * u + q.offset - t) < Math.abs(best.scale * u + best.offset - t)) best = q;
+                    });
+                    best.windows.push(p.windows[w], p.windows[w + 1]);
+                }
+            });
+            keep.forEach((p) => {
+                p.windows = joinWindows(p.windows);
+            });
+            piecesFor[i] = keep;
+        }
+    });
+
     // per piece: the input's rows it takes. A still takes those active at
     // its time; one that moves takes them all and lets the levels decide
     type Taken = { input: number, piece: Piece, rows: Uint32Array /* indices into the part's rows */ };
@@ -801,7 +857,7 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
         };
     }
 
-    return { data, motion, frames: moving ? frames : 0, bands, rows: rowsPerInput, copies };
+    return { data, motion, frames: moving ? frames : 0, bands, rows: rowsPerInput, copies, limited };
 };
 
 /** The rotation the merged object is placed with: that of a loaded PLY, since its data is in a file's space. */

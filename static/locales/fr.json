@@ -527,6 +527,7 @@
     "node.merge.note": "Fait de ses entrées un seul objet, trié et dessiné comme un seul, pour qu'elles se superposent correctement en profondeur. Chaque entrée garde son placement, ses nœuds de transformation et de couleur et ses nœuds de temps. Il suit ses entrées telles que leurs voies les laissent : une modification d'une entrée le refait. Dépose le fil d'un autre objet dessus pour ajouter une entrée ; bypass ou annuler montre de nouveau les entrées.",
     "node.merge.note-4d": "Une entrée 4D garde son mouvement et son temps : la séquence fusionnée dure autant que l'entrée la plus longue, et une entrée hors de sa propre séquence n'apporte rien. Les entrées à une autre cadence sont lues en secondes.",
     "node.merge.note-copies": "Une boucle, un aller-retour, une image figée ou un maintien sur une entrée la fait entrer une fois par segment de son temps (×n ci-dessus), ce qui coûte de la mémoire.",
+    "node.merge.note-limited": "Le temps d'une entrée est découpé en plus de segments qu'elle ne peut entrer (au plus 16 copies, 4 millions de gaussiennes en tout) : les segments les plus courts montrent le temps gardé le plus proche, elle y avance par à-coups.",
     "node.split.what": "sélection",
     "node.split.move": "déplacer",
     "node.split.copy": "copier",

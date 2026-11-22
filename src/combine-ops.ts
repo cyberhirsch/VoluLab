@@ -71,7 +71,7 @@ abstract class CombineOp {
     bypassed?: boolean;
 
     /** what the last build came to, for the node pane */
-    built: { rows: number[], copies: number[], frames: number, bands: number, total: number } | null = null;
+    built: { rows: number[], copies: number[], limited: boolean[], frames: number, bands: number, total: number } | null = null;
 
     protected context: CombineContext;
     private cache: PartCache = new Map();
@@ -127,6 +127,7 @@ abstract class CombineOp {
         this.built = {
             rows: built.rows,
             copies: built.copies,
+            limited: built.limited,
             frames: built.frames,
             bands: built.bands,
             total: built.rows.reduce((a, b) => a + b, 0)

@@ -165,6 +165,7 @@ const buildMerge = (face: Face, op: MergeOp) => {
     face.note(i18n.t('node.merge.note'));
     if (op.inputs.some(s => s.motion)) face.note(i18n.t('node.merge.note-4d'));
     if (op.built?.copies.some(c => c > 1)) face.note(i18n.t('node.merge.note-copies'));
+    if (op.built?.limited.some(Boolean)) face.note(i18n.t('node.merge.note-limited'));
 };
 
 // "0:1, 48:2" - from frame 0 input 1, from frame 48 input 2 (1-based, as shown)
