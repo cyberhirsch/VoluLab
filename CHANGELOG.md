@@ -68,6 +68,38 @@ scored again. A project from before has no subset: all photos, as before.
 With the resize memo, changing the subset under a resize node only resizes
 photos not seen before (every 2nd of 60 after a full run: 0.1 s).
 
+**Pose.** The node passes COLMAP's options on (`PoseOp.options`): camera
+model (simple radial, pinhole, OpenCV), one camera for all, max features
+per image, and the overlap for sequential matching. The bridge takes all
+four (new query parameters on `/run`, checked against a list before they
+reach the command line; an old bridge reads the matcher only). colmap-wasm
+has one shared SIMPLE_PINHOLE camera and no option for any of it, so the
+browser run is now done step by step - extract, cap, match, map - to cap
+the features between extraction and matching (the largest-scale ones are
+kept, as COLMAP's max_num_features drops the finest octaves first), and
+the overlap is its sequential window. The wasm build kept every feature
+(13 928 and 10 590 on two 1200×1600 photos); the default cap is COLMAP's
+8192, so the browser now matches what the bridge did. A pose node made for
+photos of several sizes gets one camera per image; of one size, one shared
+camera. Changing an option leaves the cameras in place and says they were
+found with other settings (`madeWith` against `settingsKey`).
+
+After a run the face shows images placed n / N, the mean reprojection
+error of the sparse points (from the reconstruction in the browser, from
+points3D.bin or .txt for the bridge), and the images not placed; clicking
+one shows its thumbnail and marks it on the import node's grid. A project
+keeps the options and the report; one from before gets what the bridge
+always ran (OPENCV, one camera, 8192, 10).
+
+The status said "COLMAP: mapping cameras 0/1": the package reports the
+mapper as one step, so the numbers meant nothing. Stages now read in
+words with what their numbers count ("pose estimation: finding features,
+image 12 of 99", "matching features, image pair 300 of 4851"); mapping
+shows the phase the mapper's log names (rotation averaging, track
+establishment, global positioning, bundle adjustment, retriangulation),
+the time it has run, and images placed when the log says so, and the
+newest log line sits under the status.
+
 ## Images and cameras wires, a 2d crop, and the train node's two inputs
 
 The one `dataset` wire kind is now two: `images` (an import node's photos,

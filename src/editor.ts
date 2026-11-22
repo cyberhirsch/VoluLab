@@ -6,7 +6,7 @@ import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { registerCombineEvents } from './combine';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, TimeNodeSettings, timeNodeFrom, TrimOp, RetimeOp, LoopOp, FreezeOp, OffsetOp, CameraOp, CleanupOp, CropOp, DatasetCounts, DatasetOp, PoseOp, PoseMatcher, ResizeOp, ResizeSettings, DatasetInput, ImageCropSettings, isDatasetInput, isImageNode, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, SplitOp, SplitBuilt, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
+import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, TimeNodeSettings, timeNodeFrom, TrimOp, RetimeOp, LoopOp, FreezeOp, OffsetOp, CameraOp, CleanupOp, CropOp, DatasetCounts, DatasetOp, PoseOp, PoseMatcher, PoseOptions, poseOptionsFrom, ResizeOp, ResizeSettings, DatasetInput, ImageCropSettings, isDatasetInput, isImageNode, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, SplitOp, SplitBuilt, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -1715,8 +1715,9 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
      * A pose node, wired to the import node given (if any) and started on
      * it: photos and video are posed, a posed dataset is read.
      */
-    events.function('pose.addNode', (dataset?: DatasetInput, matcher: PoseMatcher = 'exhaustive') => {
+    events.function('pose.addNode', (dataset?: DatasetInput, matcher: PoseMatcher = 'exhaustive', options?: Partial<PoseOptions>) => {
         const op = new PoseOp(matcher);
+        if (options) op.options = poseOptionsFrom({ ...op.options, ...options });
         const index = history().cursor;
         events.fire('edit.add', op);
         if (dataset) events.fire('graph.connect', op, 'images', dataset);

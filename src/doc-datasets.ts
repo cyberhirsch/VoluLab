@@ -1,6 +1,6 @@
 import type { ZipReadFileSystem } from '@playcanvas/splat-transform';
 
-import { CropOp, DatasetOp, EditOp, PoseOp, ResizeOp, TrainOp, DEFAULT_VIDEO_FPS, defaultImportSubset, imageCropFrom, importSubsetFrom, isImageNode, resizeSettingsFrom, type DatasetInput, type PoseCamera } from './edit-ops';
+import { CropOp, DatasetOp, EditOp, PoseOp, ResizeOp, TrainOp, DEFAULT_VIDEO_FPS, defaultImportSubset, imageCropFrom, importSubsetFrom, isImageNode, poseOptionsFrom, resizeSettingsFrom, type DatasetInput, type PoseCamera } from './edit-ops';
 import type { Events } from './events';
 import type { Scene } from './scene';
 import type { Splat } from './splat';
@@ -129,6 +129,9 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
         return {
             ...input,
             matcher: op.matcher,
+            options: op.options,
+            ...(op.madeWith ? { madeWith: op.madeWith } : {}),
+            ...(op.report ? { report: op.report } : {}),
             showCameras: op.showCameras,
             total: op.total,
             cameras: op.cameras,
@@ -291,6 +294,18 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
         const stored = storedPoses[j];
         const op = new PoseOp(stored?.matcher === 'sequential' ? 'sequential' : 'exhaustive');
         op.showCameras = stored?.showCameras !== false;
+        // a project from before has no options: what the bridge ran then
+        op.options = poseOptionsFrom(stored?.options);
+        if (typeof stored?.madeWith === 'string') op.madeWith = stored.madeWith;
+        const report = stored?.report;
+        if (report && Number.isFinite(report.registered) && Number.isFinite(report.total)) {
+            op.report = {
+                registered: report.registered,
+                total: report.total,
+                ...(Number.isFinite(report.meanError) ? { meanError: report.meanError } : {}),
+                unregistered: Array.isArray(report.unregistered) ? report.unregistered.filter((n: unknown) => typeof n === 'string') : []
+            };
+        }
         op.cameras = Array.isArray(stored?.cameras) ? stored.cameras as PoseCamera[] : [];
         op.total = Number(stored?.total) || op.cameras.length;
         op.awaitingPoses = !!stored?.awaitingPoses;

@@ -11,7 +11,7 @@ import { bridgePoseIntoOp, cancelPoseJob } from './bridge-ingest';
 import { isRawCapture, isTrainable, openDataset } from './dataset-source';
 import { readDatasetPoses } from './pose-read';
 import { extractVideoFrames } from './video-ingest';
-import { DatasetOp, EditOp, PoseCamera, PoseOp } from '../edit-ops';
+import { DatasetOp, EditOp, PoseCamera, PoseOp, PoseOptions, poseOptionsFrom } from '../edit-ops';
 import { Element, ElementType } from '../element';
 import { Events } from '../events';
 import { Scene } from '../scene';
@@ -215,6 +215,7 @@ const registerPoseNodes = (events: Events, scene: Scene) => {
             if (op.datasetOp?.source !== source) return;
             // a camera can be in the model with its image left out of the dataset
             op.setPosed(source, read.cameras, Math.max(read.total, read.cameras.length));
+            op.report = read.found ? { registered: read.cameras.length, total: op.total, unregistered: [] } : undefined;
             op.status = read.found ? undefined : i18n.t('pose.none-found');
         } catch (error) {
             if (op.datasetOp?.source !== source) return;
@@ -233,6 +234,16 @@ const registerPoseNodes = (events: Events, scene: Scene) => {
         if (!(op instanceof PoseOp)) return;
         cancelPoseJob(op);
         op.status = i18n.t('pose.cancelled');
+        changed(op);
+    });
+
+    // COLMAP's options: the cameras found stand until it runs again, and
+    // the face says they were found with other settings
+    events.on('pose.setOptions', (op: PoseOp, options: Partial<PoseOptions>) => {
+        if (!(op instanceof PoseOp)) return;
+        const was = JSON.stringify(op.options);
+        op.options = poseOptionsFrom({ ...op.options, ...options }, op.options);
+        if (JSON.stringify(op.options) === was) return;
         changed(op);
     });
 

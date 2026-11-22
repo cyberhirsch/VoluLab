@@ -1,9 +1,9 @@
 import { BridgeImage, bridgeReady, estimatePoses } from './bridge-client';
-import { browserPosesReady, estimatePosesInBrowser } from './browser-poses';
+import { PoseRun, StageFn, browserPosesReady, estimatePosesInBrowser } from './browser-poses';
 import { packDataset } from './dataset';
-import { camerasFromSparse } from './pose-read';
+import { camerasFromSparse, meanReprojectionError } from './pose-read';
 import { ingestImages } from './video-ingest';
-import { PoseOp } from '../edit-ops';
+import { PoseOp, PoseOptions } from '../edit-ops';
 import { Events } from '../events';
 import { i18n } from '../ui/localization';
 
@@ -13,18 +13,30 @@ const posesReady = async (): Promise<boolean> => await browserPosesReady() || aw
 /**
  * Estimate poses in the browser when it can, else through the bridge.
  * The browser run needs equal-sized images (one shared camera); when it
- * fails and the bridge is running, the bridge gets a go.
+ * fails and the bridge is running, the bridge gets a go. Either way the
+ * model files come back with what the run came to: the images placed and
+ * not, and the mean reprojection error of the points.
  */
-const estimateAny = async (images: BridgeImage[], matcher: 'sequential' | 'exhaustive', stage: (key: string, detail?: string) => void, signal: AbortSignal) => {
+const estimateAny = async (images: BridgeImage[], matcher: 'sequential' | 'exhaustive', stage: StageFn, signal: AbortSignal, options: PoseOptions, onLog: (line: string) => void): Promise<PoseRun> => {
     if (await browserPosesReady()) {
         try {
-            return await estimatePosesInBrowser(images, matcher, stage, signal);
+            return await estimatePosesInBrowser(images, matcher, stage, signal, options, onLog);
         } catch (error) {
             if (signal.aborted || !await bridgeReady()) throw error;
         }
     }
-    return estimatePoses(images, matcher, stage, signal);
+    const files = await estimatePoses(images, matcher, stage, signal, options);
+    // the bridge renames images it stores; images.txt names them so
+    const placed = new Set(camerasFromSparse(files).map(c => c.name));
+    const unregistered = images.map(i => i.name).filter(name => !placed.has(name));
+    return {
+        files,
+        report: { registered: images.length - unregistered.length, total: images.length, meanError: meanReprojectionError(files), unregistered }
+    };
 };
+
+/** seconds as m:ss */
+const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 
 /**
  * Images arrive named by their path in the dropped folder; the dataset
@@ -112,13 +124,59 @@ const bridgePoseIntoOp = (op: PoseOp, source: BridgeImage[] | (() => Promise<Bri
         return seen;
     };
 
-    const stage = (key: string, detail = '') => {
-        if (!current()) return;
+    // the mapper is one global solve with no progress of its own: its
+    // status says the phase its log names and how long it has run
+    let mapping: { since: number, phase: string, placed: number, detail: string } | null = null;
+    let ticker: ReturnType<typeof setInterval> | null = null;
+    const stopTicker = () => {
+        if (ticker) clearInterval(ticker);
+        ticker = null;
+    };
+    const mappingText = () => {
+        const m = mapping;
+        const parts = [m.phase || i18n.t('bridge.phase-start'), clock((performance.now() - m.since) / 1000)];
+        if (m.placed) parts.push(i18n.t('bridge.placed', { count: m.placed }));
+        if (m.detail) parts.push(m.detail);
+        return `${i18n.t('bridge.stage-mapping')} — ${parts.join(' · ')}`;
+    };
+
+    const stage: StageFn = (key, detail = '') => {
+        if (!current()) {
+            stopTicker();
+            return;
+        }
         if (removed()) {
+            stopTicker();
             ctrl.abort();
             return;
         }
-        op.status = `${i18n.t(`bridge.stage-${key}`)}${detail ? ` ${detail}` : ''}`;
+        if (key === 'mapping') {
+            mapping ??= { since: performance.now(), phase: '', placed: 0, detail: '' };
+            mapping.detail = typeof detail === 'string' ? detail : '';
+            ticker ??= setInterval(() => stage('mapping', mapping?.detail), 1000);
+            op.status = mappingText();
+        } else {
+            stopTicker();
+            mapping = null;
+            op.status = typeof detail === 'object' ?
+                i18n.t(`bridge.stage-${key}-n`, detail) :
+                `${i18n.t(`bridge.stage-${key}`)}${detail ? ` ${detail}` : ''}`;
+        }
+        events.fire('dataset.statusChanged', op);
+    };
+
+    /** the mapper's log: its newest line, and the phase it names */
+    const onLog = (line: string) => {
+        if (!current()) return;
+        const text = line.trim();
+        if (!text) return;
+        op.log = text;
+        if (mapping) {
+            const phase = /^Running (.+)/i.exec(text);
+            if (phase) mapping.phase = phase[1].replace(/\.+$/, '');
+            if (/^Registered frame/i.test(text)) mapping.placed++;
+            op.status = mappingText();
+        }
         events.fire('dataset.statusChanged', op);
     };
 
@@ -135,7 +193,10 @@ const bridgePoseIntoOp = (op: PoseOp, source: BridgeImage[] | (() => Promise<Bri
             signal.throwIfAborted();
             images = flattenNames(images);
 
-            const sparse = await estimateAny(images, matcher, stage, signal);
+            const madeWith = op.settingsKey;
+            op.log = undefined;
+            const { files: sparse, report } = await estimateAny(images, matcher, stage, signal, { ...op.options }, onLog);
+            stopTicker();
             if (!current() || removed()) return false;
 
             // the zip is a Blob over the images' own blobs: packing reads
@@ -151,6 +212,8 @@ const bridgePoseIntoOp = (op: PoseOp, source: BridgeImage[] | (() => Promise<Bri
             op.sparse = sparse.map(f => ({ path: f.path, data: f.data }));
             op.images = images;
             op.setPosed({ kind: 'bytes', bytes: zip, name: 'dataset.zip' }, camerasFromSparse(op.sparse), images.length);
+            op.report = report;
+            op.madeWith = madeWith;
             op.status = undefined;
             events.fire('pose.changed', op);
             events.fire('dataset.statusChanged', op);
@@ -166,6 +229,7 @@ const bridgePoseIntoOp = (op: PoseOp, source: BridgeImage[] | (() => Promise<Bri
             }
             return false;
         } finally {
+            stopTicker();
             if (running.get(op) === ctrl) running.delete(op);
             // the node's face enables its buttons by whether a job runs
             events.fire('pose.changed', op);

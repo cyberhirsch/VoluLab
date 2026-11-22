@@ -429,12 +429,28 @@ const registerImageNodes = (events: Events) => {
     /**
      * Photos coming in get a pose node; when any is larger than
      * AUTO_RESIZE_ABOVE a resize node goes between, at the default cap.
+     * Photos of one size are taken as one camera's: the pose node gets one
+     * shared camera; photos of several sizes one camera each.
      */
     events.function('pose.addNodeFor', async (dataset: DatasetOp, matcher: PoseMatcher = 'exhaustive') => {
         const source = dataset?.source;
-        const big = isRawCapture(source) && source.kind === 'images' && await needsResize(source.images);
+        const photos = isRawCapture(source) && source.kind === 'images' ? source.images : null;
+        const big = photos && await needsResize(photos);
+        let sharedCamera = true;
+        if (photos) {
+            const sizes = new Set<string>();
+            for (const image of photos) {
+                try {
+                    const [w, h] = await cachedSize(image.data);
+                    sizes.add(`${Math.max(w, h)}x${Math.min(w, h)}`);
+                } catch {
+                    // not an image the browser reads: posing will say so
+                }
+            }
+            sharedCamera = sizes.size <= 1;
+        }
         const input = big ? events.invoke('resize.addNode', dataset) : dataset;
-        return events.invoke('pose.addNode', input, matcher);
+        return events.invoke('pose.addNode', input, matcher, { sharedCamera });
     });
 };
 

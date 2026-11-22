@@ -2391,6 +2391,53 @@ type PoseCamera = {
 
 type PoseMatcher = 'sequential' | 'exhaustive';
 
+type PoseCameraModel = 'SIMPLE_RADIAL' | 'PINHOLE' | 'OPENCV';
+
+/**
+ * COLMAP's options a pose node passes on. The bridge takes all of them;
+ * the in-browser build (colmap-wasm) has one shared SIMPLE_PINHOLE camera
+ * whatever these say, and takes the feature cap and the overlap.
+ */
+type PoseOptions = {
+    cameraModel: PoseCameraModel;
+    /** one camera for all images: photos from one camera at one zoom */
+    sharedCamera: boolean;
+    /** SIFT features kept per image, the largest-scale ones */
+    maxFeatures: number;
+    /** sequential matching: how many following images each is matched with */
+    overlap: number;
+};
+
+const POSE_CAMERA_MODELS: PoseCameraModel[] = ['SIMPLE_RADIAL', 'PINHOLE', 'OPENCV'];
+
+// what the bridge ran before these were options: OPENCV, one camera,
+// COLMAP's 8192 features, an overlap of 10 (the browser's window too)
+const defaultPoseOptions = (): PoseOptions => ({ cameraModel: 'OPENCV', sharedCamera: true, maxFeatures: 8192, overlap: 10 });
+
+const poseOptionsFrom = (given: any, base: PoseOptions = defaultPoseOptions()): PoseOptions => {
+    const g = given ?? {};
+    const int = (v: unknown, old: number, lo: number, hi: number) => {
+        const n = v === null || v === undefined || v === '' ? NaN : Math.round(Number(v));
+        return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : old;
+    };
+    return {
+        cameraModel: POSE_CAMERA_MODELS.includes(g.cameraModel) ? g.cameraModel : base.cameraModel,
+        sharedCamera: typeof g.sharedCamera === 'boolean' ? g.sharedCamera : base.sharedCamera,
+        maxFeatures: int(g.maxFeatures, base.maxFeatures, 256, 65536),
+        overlap: int(g.overlap, base.overlap, 1, 200)
+    };
+};
+
+/** What a pose run came to: how many images it placed, and how well. */
+type PoseReport = {
+    registered: number;
+    total: number;
+    /** mean reprojection error of the sparse points, in pixels */
+    meanError?: number;
+    /** the images it could not place, by name */
+    unregistered: string[];
+};
+
 /**
  * Which of the resize node's three linked fields was typed in last: the
  * scale in percent, the long edge in pixels, or the size in megapixels.
@@ -2567,6 +2614,13 @@ class PoseOp {
     /** the import node feeding it, or an image node between */
     datasetOp?: DatasetInput;
     matcher: PoseMatcher;
+    options: PoseOptions = defaultPoseOptions();
+    /** the matcher and options the cameras it has were found with */
+    madeWith?: string;
+    /** what the last run came to */
+    report?: PoseReport;
+    /** the newest line of the run's log */
+    log?: string;
     /** the posed dataset for the trainer; null until there is one */
     source: unknown | null = null;
     /** the files estimation produced (sparse/0/...); none when it read them */
@@ -2628,6 +2682,14 @@ class PoseOp {
         this.images = null;
         this.cameras = [];
         this.total = 0;
+        this.report = undefined;
+        this.madeWith = undefined;
+        this.log = undefined;
+    }
+
+    /** what the cameras depend on, to tell when they are out of date */
+    get settingsKey() {
+        return JSON.stringify({ matcher: this.matcher, ...this.options });
     }
 
     do() {}
@@ -3193,6 +3255,12 @@ export {
     PoseOp,
     type PoseCamera,
     type PoseMatcher,
+    type PoseCameraModel,
+    type PoseOptions,
+    type PoseReport,
+    POSE_CAMERA_MODELS,
+    defaultPoseOptions,
+    poseOptionsFrom,
     ResizeOp,
     type ResizeSettings,
     type ResizeBy,

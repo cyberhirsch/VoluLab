@@ -294,7 +294,25 @@ const runStage = (job, stage, command, args, cwd) => new Promise((resolve, rejec
     child.on('close', code => (code === 0 ? resolve() : reject(new Error(`${stage} exited with ${code}\n${job.tail.lines.slice(-8).join('\n')}`))));
 });
 
-const runJob = async (job, matcher) => {
+/**
+ * COLMAP's options for a job, from the run request: only known camera
+ * models and numbers in range get through to the command line.
+ */
+const jobOptions = (params) => {
+    const model = ['SIMPLE_RADIAL', 'PINHOLE', 'OPENCV'].includes(params.get('camera_model')) ? params.get('camera_model') : 'OPENCV';
+    const int = (name, fallback, lo, hi) => {
+        const n = Math.round(Number(params.get(name)));
+        return params.has(name) && Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+    };
+    return {
+        model,
+        single: params.get('single_camera') === '0' ? '0' : '1',
+        maxFeatures: int('max_features', 8192, 256, 65536),
+        overlap: int('overlap', 10, 1, 200)
+    };
+};
+
+const runJob = async (job, matcher, options = jobOptions(new URLSearchParams())) => {
     const command = await locateColmap();
     if (!command) {
         job.stage = 'error';
@@ -306,11 +324,13 @@ const runJob = async (job, matcher) => {
         await mkdir(path.join(dir, 'sparse'), { recursive: true });
         await runStage(job, 'features', command, [
             'feature_extractor', '--database_path', 'colmap.db', '--image_path', 'images',
-            '--ImageReader.camera_model', 'OPENCV', '--ImageReader.single_camera', '1'
+            '--ImageReader.camera_model', options.model, '--ImageReader.single_camera', options.single,
+            '--SiftExtraction.max_num_features', String(options.maxFeatures)
         ], dir);
         await runStage(job, 'matching', command, [
             matcher === 'exhaustive' ? 'exhaustive_matcher' : 'sequential_matcher',
-            '--database_path', 'colmap.db'
+            '--database_path', 'colmap.db',
+            ...(matcher === 'exhaustive' ? [] : ['--SequentialMatching.overlap', String(options.overlap)])
         ], dir);
         await runStage(job, 'mapping', command, [
             'mapper', '--database_path', 'colmap.db', '--image_path', 'images', '--output_path', 'sparse'
@@ -485,7 +505,7 @@ const server = http.createServer(async (req, res) => {
             const matcher = url.searchParams.get('matcher') === 'exhaustive' ? 'exhaustive' : 'sequential';
             // taken synchronously, so a second run request is refused
             job.stage = 'features';
-            runJob(job, matcher).catch(() => {});
+            runJob(job, matcher, jobOptions(url.searchParams)).catch(() => {});
             json(res, 200, { ok: true });
             return;
         }
