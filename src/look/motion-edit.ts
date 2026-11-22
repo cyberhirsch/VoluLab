@@ -63,6 +63,11 @@ abstract class MotionEditOp implements FieldNode {
         splat.retime();
     }
 
+    /** the motion it replaced while applied, which a project stores under the node (doc-motion.ts) */
+    get base(): SplatMotion | null {
+        return this.before;
+    }
+
     destroy() {
         this.splat = null;
         this.before = null;

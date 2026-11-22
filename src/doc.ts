@@ -4,6 +4,7 @@ import { Vec3 } from 'playcanvas';
 import { combineOutputs, placeholderSplat, restoreCombine, storeCombine } from './doc-combine';
 import { restoreInspectNode, storeInspectNodes } from './doc-inspect';
 import { storeLookNodes } from './doc-looks';
+import { packMotion, storedMotion, unpackMotion } from './doc-motion';
 import { restoreStateNode, storeStateNodes } from './doc-nodes';
 import { DebugViewOp, EditOp, LightOp, PrimitiveOp, RelightOp, TransformNodeOp } from './edit-ops';
 import { ElementType } from './element';
@@ -241,6 +242,14 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     // load splat directly from the zip filesystem (streams on-demand)
                     // skipReorder=true because ssproj PLY files are already in morton order
                     splat = await scene.assetLoader.load(filename, zipFs, false, true);
+                    // a 4D object with no file of its own (a split part): its motion
+                    if (splatSettings.motionData?.file) {
+                        const motion = unpackMotion(await readEntry(zipFs, splatSettings.motionData.file));
+                        if (motion && motion.falloff.length === splat.splatData.numSplats) {
+                            splat.setMotion(motion);
+                            splat.showFrame(0, Math.max(1, Math.floor(splatSettings.motionData.frames ?? 1)));
+                        }
+                    }
 
                     await scene.add(splat);
                 }
@@ -555,6 +564,11 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             // merge, switch and layer nodes; a merged object's data is not written
             const combined = storeCombine(allOps, cursor, splats, placeOf);
 
+            // a 4D object with no file of its own - a part split off a 4D
+            // model - is stored as a PLY of its gaussians at their temporal
+            // centres, and its motion beside it (doc-motion.ts)
+            const ownMotions = splats.map((s, i) => (!motions[i] && !combined.outputs.has(i) && s.motionFrames > 0 ? storedMotion(s, allOps, cursor, !!stateNodes[i]) : null));
+
             // what a 4D model has deleted or hidden, a byte per row, where
             // no nodes say it: its file holds every gaussian
             const motionStates = splats.map((s, i) => {
@@ -655,7 +669,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                                 ...(motionGrades[i] ? { grades: { file: `splat_${i}.grades`, palette: motionGrades[i].palette } } : {}),
                                 ...(motionStates[i] ? { state: `splat_${i}.state` } : {})
                             }
-                        } : {})
+                        } : {}),
+                        ...(ownMotions[i] ? { motionData: { file: `splat_${i}.motion`, frames: s.motionFrames } } : {})
                     };
                 }),
 
@@ -799,6 +814,11 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 if (!source) {
                     // with its nodes stored, every gaussian: the nodes delete
                     await writeSplatFile([splats[i]], { ...serializeSettings, keepDeleted: !!stateNodes[i] }, 'ply', `splat_${i}.ply`, {}, zipFs);
+                    if (ownMotions[i]) {
+                        const motionWriter = await zipFs.createWriter(`splat_${i}.motion`);
+                        await motionWriter.write(packMotion(ownMotions[i]));
+                        await motionWriter.close();
+                    }
                     continue;
                 }
 
