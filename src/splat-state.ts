@@ -120,6 +120,14 @@ class SplatState {
     // idempotent and cheap when nothing is dirty.
     flush(): void {
         if (this.dirtyLo < 0) return;
+        // the texture is gone with its object (Splat.destroy): nothing to
+        // upload to, as when a holdout lets go of a cleared object
+        if (!this.gpu.device) {
+            this.recount();
+            this.dirtyLo = -1;
+            this.dirtyHi = -1;
+            return;
+        }
         // full upload. sub-rect upload is a worthwhile future optimisation
         // (would drop a 4M-byte upload to a few KB for small selections) but
         // requires engine-side support; current path keeps the same behaviour
