@@ -239,8 +239,9 @@ const rgb = { r: 0, g: 0, b: 0 };
 const bakeColumns = (splat: Splat, rows: Uint32Array, bands: number, columns: Map<string, Float32Array>, transforms: SplatTransformCache) => {
     const count = rows.length;
     // the columns as they are: the SH bands an sh-bands node leaves, and
-    // zeros above them
-    const srcCoeffs = shBandCoeffs[splatSHBands(splat)];
+    // zeros above them. The data holds all its bands, so the stride is theirs
+    const srcCoeffs = shBandCoeffs[splatSHBands(splat, false)];
+    const keptCoeffs = shBandCoeffs[splatSHBands(splat)];
     const dstCoeffs = shBandCoeffs[bands];
     columns.forEach((to, name) => {
         const sh = shNames.indexOf(name);
@@ -248,7 +249,7 @@ const bakeColumns = (splat: Splat, rows: Uint32Array, bands: number, columns: Ma
         if (sh >= 0) {
             const channel = Math.floor(sh / dstCoeffs);
             const coeff = sh % dstCoeffs;
-            from = coeff < srcCoeffs ? splat.splatData.getProp(shNames[channel * srcCoeffs + coeff]) as Float32Array : null;
+            from = coeff < keptCoeffs ? splat.splatData.getProp(shNames[channel * srcCoeffs + coeff]) as Float32Array : null;
         } else {
             from = splat.splatData.getProp(name) as Float32Array;
         }
