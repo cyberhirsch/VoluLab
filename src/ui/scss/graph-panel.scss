@@ -126,13 +126,13 @@
     color: $ink-4;
 }
 
-// the little connector studs on the left and right edges
+// the little connector studs: inputs on the left edge, the output on the
+// right. How far down each sits is set where it is drawn, since a node's
+// named inputs stack under its title.
 .gn-port {
     position: absolute;
-    top: 50%;
     width: 5px;
     height: 5px;
-    margin-top: -3px;
     border: $border-width solid $ink-4;
     background-color: $ink-0;
 }
@@ -145,11 +145,8 @@
     right: -3px;
 }
 
-// a named input, on the top edge: a wire comes down into it
-.gn-port-top {
-    top: -3px;
-    margin-top: 0;
-
+// a named input, on the left edge in a row of its own under the title
+.gn-port-named {
     &.gn-port-wired {
         border-color: $ink-5;
     }
@@ -166,15 +163,31 @@
     border-color: $ink-7;
 }
 
-// the input's name, just over it
+// the input's name, inside the node beside its stud
 .gn-port-label {
     position: absolute;
-    bottom: 100%;
-    margin-bottom: 1px;
+    left: $pad-x;
+    right: $pad-x;
+    transform: translateY(-50%);
     color: $ink-4;
     font-size: $font-size-xs;
     line-height: 1;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+
+    &.gn-port-wired {
+        color: $ink-5;
+    }
+}
+
+// the hairline between the title and the input rows under it
+.gn-port-rule {
+    position: absolute;
+    left: 0;
+    right: 0;
+    border-top: $border-width solid $ink-2;
     pointer-events: none;
 }
 
