@@ -2,7 +2,7 @@ import { Container } from '@playcanvas/pcui';
 
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
-import { TrainOp } from '../edit-ops';
+import { PoseOp, TrainOp } from '../edit-ops';
 import { Events } from '../events';
 import { TrainLoad, TrainLogLine } from '../training/brush-engine';
 import { RunState } from '../training/train-run';
@@ -205,6 +205,11 @@ class TrainingFace extends Container {
             }
         });
 
+        // the dataset it is wired to becoming ready (or not) enables Start
+        events.on('dataset.statusChanged', (op: unknown) => {
+            if (this.op && op === this.op.datasetOp) this.refresh();
+        });
+
         events.on('training.warning', (text: string) => {
             this.noticeLine.textContent = text;
             this.noticeLine.hidden = false;
@@ -285,11 +290,14 @@ class TrainingFace extends Container {
         const op = this.op;
         if (!op) return;
 
-        this.sourceLabel.textContent = op.datasetOp ?
-            (op.datasetOp.awaitingPoses ?
-                i18n.t('training.awaiting-poses') :
-                op.datasetOp.sourceName) :
-            i18n.t('training.needs-import');
+        const input = op.datasetOp;
+        this.sourceLabel.textContent = !input ? i18n.t('training.needs-import') :
+            (input.awaitingPoses ? i18n.t('training.awaiting-poses') :
+                (!input.trainSource ?
+                    // photos or a video straight from an import node, or a
+                    // pose node still at work
+                    i18n.t(input instanceof PoseOp ? 'training.poses-pending' : 'training.needs-pose') :
+                    input.sourceName));
 
         const state = this.events.invoke('training.state', op) as RunState;
         const paused = this.events.invoke('training.isPaused', op);

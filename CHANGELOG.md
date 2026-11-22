@@ -9,6 +9,45 @@ months finds out why before they change it.
 
 ---
 
+## Pose node
+
+Camera poses are a node of their own now: import -> pose -> train. Before,
+posing ran hidden inside the import node, and the posed dataset replaced the
+photos it was made from, so the graph showed one node doing two jobs, the
+poses could not be looked at before training, and changing the matcher
+meant importing again. Now the import node holds the files as they came
+(photos, a video, a zip, a folder) and the pose node holds the poses.
+
+- Photos or a video imported (file, folder or the import node's pickers)
+  give an import node and a pose node wired to it, and posing starts at
+  once, as before (COLMAP-wasm on WebGPU, else the bridge, else the COLMAP
+  kit). The import node's source is `{ kind: 'images' }` or
+  `{ kind: 'video' }`; `DatasetOp.trainSource` is empty for those, so a
+  train node wired straight to raw photos says it needs a pose node instead
+  of failing in the trainer.
+- A dataset that already has poses (COLMAP sparse, bin or txt;
+  `transforms.json`) is read, not posed again (`src/training/pose-read.ts`),
+  and handed on as it is. A RealityCapture csv is passed on but not drawn.
+- The cameras are drawn as orange frustums while the node is applied and
+  "show cameras" is on (`PoseFrustums` in `src/training/pose-node.ts`),
+  sized to a twentieth of the cameras' spread. They are turned into the
+  scene frame the way a trained PLY is (180 degrees about z, as
+  `loadImagesTxt` does), so they sit where the trained object appears.
+  The pane says how many of the images were posed.
+- Matcher (sequential for video, exhaustive for photos), estimate again
+  and cancel are on the node's pane. A new source on the import node, or a
+  new wire into the pose node, starts it again; the job queue and the
+  "node left history" check are the ones the import node had.
+- The train node takes an import node or a pose node through its dataset
+  input, so the old import -> train wire still works for posed datasets.
+  Dragging an import node's wire onto empty space offers pose and train.
+
+Trap: COLMAP-wasm needs all photos the same size (one shared camera); that
+limit is unchanged. Frustums do not follow transform nodes on the trained
+object - they are in the dataset's frame.
+
+---
+
 ## Import node: what it holds
 
 An import node now says what it holds: how many images, videos, pose files

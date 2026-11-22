@@ -1,6 +1,6 @@
 import { Container } from '@playcanvas/pcui';
 
-import { AnimTrackEditOp, DatasetOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, PortSpec, PrimitivePoseOp, SelectOp, SelectStep, ShapeTransformOp, SourceKind, principalOp } from '../edit-ops';
+import { AnimTrackEditOp, DatasetOp, PoseOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, PortSpec, PrimitivePoseOp, SelectOp, SelectStep, ShapeTransformOp, SourceKind, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { LOOK_LABELS, LOOK_NODES } from '../look/nodes';
 import { SceneLight } from '../scene-light';
@@ -118,6 +118,7 @@ const OP_LABELS: Record<string, string> = {
     voxelise: 'voxelise',
     addVoxels: 'import voxels',
     dataset: 'import',
+    pose: 'pose',
     camera: 'camera',
     light: 'light',
     lightPose: 'aim light',
@@ -358,6 +359,16 @@ class GraphPanel extends Container {
 
         const refresh = () => this.rebuild();
         events.on('edit.changed', refresh);
+        // an import or pose node's progress line is its second line here;
+        // stages can come many a second, so one rebuild per frame at most
+        let statusFrame = 0;
+        events.on('dataset.statusChanged', () => {
+            if (statusFrame) return;
+            statusFrame = requestAnimationFrame(() => {
+                statusFrame = 0;
+                this.rebuild();
+            });
+        });
 
         // Something added a node and wants it open. It may not exist yet - the
         // add is queued - so the request is held and honoured by the first
@@ -839,7 +850,7 @@ class GraphPanel extends Container {
         // what each node's wire carries, for the inputs it can be dropped on
         nodes.forEach((node) => {
             const offers: Offer[] = [];
-            if (node.key instanceof DatasetOp) offers.push({ kind: 'dataset', source: node.key });
+            if (node.key instanceof DatasetOp || node.key instanceof PoseOp) offers.push({ kind: 'dataset', source: node.key });
             if (node.select) offers.push({ kind: 'selection', source: node.key });
             if (node.splat instanceof Splat) offers.push({ kind: 'object', source: node.splat });
             if (node.splat instanceof ScenePrimitive) offers.push({ kind: 'primitive', source: node.splat });
@@ -1144,10 +1155,19 @@ class GraphPanel extends Container {
                     return;
                 }
 
-                if (node.key instanceof DatasetOp) {
+                if (node.key instanceof DatasetOp || node.key instanceof PoseOp) {
                     // released over nothing: offer what a dataset can feed,
-                    // created at the drop point and wired up
+                    // created at the drop point and wired up - a pose node
+                    // only from an import node
+                    const dataset = node.key;
                     showContextMenu(doc, ev.clientX, ev.clientY, [
+                        ...(dataset instanceof DatasetOp ? [{
+                            label: 'pose',
+                            action: () => {
+                                const op = this.events.invoke('pose.addNode', dataset);
+                                this.positions.set(op, { x: at.x, y: at.y - NODE_H / 2 });
+                            }
+                        }] : []),
                         {
                             label: 'train',
                             action: () => {

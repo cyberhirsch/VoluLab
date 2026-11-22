@@ -2,13 +2,13 @@ import { Container } from '@playcanvas/pcui';
 
 import { i18n } from './localization';
 import { resolveDropPayload } from '../drop-handler';
-import { DatasetOp, describeCounts } from '../edit-ops';
+import { DatasetOp, EditOp, PoseMatcher, PoseOp, describeCounts } from '../edit-ops';
 import { Events } from '../events';
 import { isHeic, withHeicAsJpeg } from '../io/heic';
 import { BridgeImage } from '../training/bridge-client';
-import { bridgePoseIntoOp, cancelPoseJob, posesReady } from '../training/bridge-ingest';
-import { countFiles, isIgnoredFile, isImageSet, listDirectory, looksLikeDataset, packDataset } from '../training/dataset';
-import { ensureWrite, extractVideoFrames, ingestImages, ingestImagesInPlace, ingestVideo } from '../training/video-ingest';
+import { posesReady } from '../training/bridge-ingest';
+import { isIgnoredFile, isImageSet, listDirectory, looksLikeDataset, packDataset } from '../training/dataset';
+import { ensureWrite, ingestImages, ingestImagesInPlace, ingestVideo } from '../training/video-ingest';
 
 /**
  * The dataset import node's face, mounted in the node pane like the colour
@@ -158,7 +158,7 @@ class ImportFace extends Container {
                     name: e.path,
                     data: await e.handle.getFile() as Blob
                 })));
-                this.runBridge(images, 'exhaustive', handle.name);
+                this.runPose({ kind: 'images', images }, 'exhaustive', handle.name);
             } else if (await ensureWrite(handle)) {
                 await ingestImagesInPlace(handle, entries, this.events);
                 this.markAwaiting();
@@ -201,17 +201,9 @@ class ImportFace extends Container {
             const name = lower[0];
             if (file.type.startsWith('video/') || ['.mp4', '.mov', '.webm', '.mkv'].some(ext => name.endsWith(ext))) {
                 if (await posesReady()) {
-                    // frames go straight to pose estimation - nothing touches
-                    // disk; extracted inside the job, so a failure lands on
-                    // the node's status line
-                    this.runBridge(async () => {
-                        const frames: BridgeImage[] = [];
-                        await extractVideoFrames(file, (frameName, blob) => {
-                            frames.push({ name: frameName, data: blob });
-                            return Promise.resolve();
-                        });
-                        return frames;
-                    }, 'sequential', file.name);
+                    // the video is held here; its pose node extracts the
+                    // frames and poses them - nothing touches disk
+                    this.runPose({ kind: 'video', file }, 'sequential', file.name);
                 } else if (await ingestVideo(file, this.events)) {
                     this.markAwaiting();
                 }
@@ -242,7 +234,7 @@ class ImportFace extends Container {
             // bare photos are posed in place (browser or bridge); failing
             // both they are copied out with the COLMAP kit for a manual run
             if (await posesReady()) {
-                this.runBridge(files.map((f, i) => ({ name: filenames[i], data: f as Blob })), 'exhaustive', 'photos');
+                this.runPose({ kind: 'images', images: files.map((f, i) => ({ name: filenames[i], data: f as Blob })) }, 'exhaustive', 'photos');
             } else if (await ingestImages(files, this.events)) {
                 this.markAwaiting();
             }
@@ -252,22 +244,24 @@ class ImportFace extends Container {
         this.notice(i18n.t('import.folder-unrecognized'));
     }
 
-    /** Estimate poses for the images; progress lands on the node's status line. */
-    private runBridge(images: BridgeImage[] | (() => Promise<BridgeImage[]>), matcher: 'sequential' | 'exhaustive', label: string) {
+    /**
+     * Photos or a video, held here as they are: the pose node this one
+     * feeds poses them, and one is made when there is none.
+     */
+    private runPose(source: { kind: 'images', images: BridgeImage[] } | { kind: 'video', file: File }, matcher: PoseMatcher, label: string) {
         const op = this.op;
         if (!op) return;
-        op.sourceName = label;
-        op.output.name = label;
-        op.counts = Array.isArray(images) ? countFiles(images.map(i => i.name)) : countFiles([label]);
-        this.events.fire('edit.changed');
-        bridgePoseIntoOp(op, images, matcher, this.events).catch(() => {});
+        const { ops } = this.events.invoke('edit.history') as { ops: EditOp[] };
+        const fed = ops.filter(o => o instanceof PoseOp && o.datasetOp === op) as PoseOp[];
+        fed.forEach((pose) => {
+            pose.matcher = matcher;
+        });
+        this.setSource(source, label);
+        if (!fed.length) this.events.invoke('pose.addNode', op, matcher);
     }
 
     private setSource(source: unknown, name: string) {
         if (!this.op) return;
-        // a pose job still running for the previous dataset must not land
-        // on top of this one
-        cancelPoseJob(this.op);
         this.op.status = undefined;
         this.op.setSource(source, name);
         this.op.counts = undefined;
@@ -279,7 +273,6 @@ class ImportFace extends Container {
     /** The dataset is out being posed; the node waits for its return. */
     private markAwaiting() {
         if (this.op) {
-            cancelPoseJob(this.op);
             this.op.status = undefined;
             this.op.markAwaiting(i18n.t('training.awaiting-poses'));
             this.events.fire('edit.changed');

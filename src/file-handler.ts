@@ -13,7 +13,7 @@ import { readGsv, writeGsv } from './tgh/gsv';
 import { TghFrameSource } from './tgh/tgh-frame-source';
 import { TghModel } from './tgh/tgh-model';
 import { BridgeImage } from './training/bridge-client';
-import { bridgePoseIntoOp, posesReady } from './training/bridge-ingest';
+import { posesReady } from './training/bridge-ingest';
 import { countFiles, isIgnoredFile, isImageSet, listDirectory, looksLikeDataset, packDataset } from './training/dataset';
 import { extractVideoFrames, ingestImages, ingestImagesInPlace, ingestVideo } from './training/video-ingest';
 import { i18n } from './ui/localization';
@@ -574,16 +574,17 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 }
             }
 
-            // a set of bare photos is a dataset waiting for poses: they are
-            // estimated right here, in the browser or by the bridge; failing
-            // both they are copied out with the COLMAP kit and a node waits
+            // a set of bare photos is a dataset waiting for poses: an import
+            // node holds them and a pose node poses them right here, in the
+            // browser or by the bridge; failing both they are copied out
+            // with the COLMAP kit and the import node waits
             const imageFiles = files.filter((f, i) => /\.(?:jpg|jpeg|png)$/.test(filenames[i]));
             if (imageFiles.length > 1 && imageFiles.length === files.length) {
                 if (await posesReady()) {
-                    const op = events.invoke('dataset.addNode', null, 'photos', countFiles(imageFiles.map(f => f.filename)));
                     // named by path: same-named photos in subfolders stay apart
                     const images: BridgeImage[] = imageFiles.map(f => ({ name: f.filename, data: f.contents as Blob }));
-                    bridgePoseIntoOp(op, images, 'exhaustive', events).catch(() => {});
+                    const op = events.invoke('dataset.addNode', { kind: 'images', images }, 'photos', countFiles(imageFiles.map(f => f.filename)));
+                    events.invoke('pose.addNode', op, 'exhaustive');
                     return result;
                 }
                 const wrote = await ingestImages(imageFiles.map(f => f.contents), events);
@@ -643,18 +644,12 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     // COLMAP kit and an import node waits
                     const contents = files[i].contents ?? new File([await (await fetch(files[i].url)).blob()], files[i].filename);
                     if (await posesReady()) {
-                        // frames are extracted when the node's pose job gets
-                        // its turn, so several videos do not all sit in memory
-                        // at once, and a failed extraction lands on the node
-                        const op = events.invoke('dataset.addNode', null, files[i].filename, countFiles([files[i].filename]));
-                        bridgePoseIntoOp(op, async () => {
-                            const frames: BridgeImage[] = [];
-                            await extractVideoFrames(contents, (frameName, blob) => {
-                                frames.push({ name: frameName, data: blob });
-                                return Promise.resolve();
-                            });
-                            return frames;
-                        }, 'sequential', events).catch(() => {});
+                        // the import node holds the video; its pose node
+                        // extracts the frames when its job gets its turn, so
+                        // several videos do not all sit in memory at once
+                        const file = contents instanceof File ? contents : new File([contents], files[i].filename);
+                        const op = events.invoke('dataset.addNode', { kind: 'video', file }, files[i].filename, countFiles([files[i].filename]));
+                        events.invoke('pose.addNode', op, 'sequential');
                     } else {
                         const wrote = await ingestVideo(contents, events);
                         if (wrote) {
@@ -812,12 +807,12 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             // where they become JPEGs
             if (!names.some(isHeic) && names.length > 1 && isImageSet(names)) {
                 if (await posesReady()) {
-                    const op = events.invoke('dataset.addNode', null, handle.name, countFiles(names));
                     const images: BridgeImage[] = await Promise.all(entries.map(async e => ({
                         name: e.path,
                         data: await e.handle.getFile() as Blob
                     })));
-                    bridgePoseIntoOp(op, images, 'exhaustive', events).catch(() => {});
+                    const op = events.invoke('dataset.addNode', { kind: 'images', images }, handle.name, countFiles(names));
+                    events.invoke('pose.addNode', op, 'exhaustive');
                     return;
                 }
                 const wrote = await ingestImagesInPlace(handle, entries, events);

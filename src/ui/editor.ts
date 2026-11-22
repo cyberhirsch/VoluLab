@@ -19,6 +19,7 @@ import { Menu } from './menu';
 import { NodePanel } from './node-panel';
 import { OutlinerPanel } from './outliner-panel';
 import { Popup, ShowOptions } from './popup';
+import { PoseFace } from './pose-face';
 import { PrimitiveFace } from './primitive-face';
 import { Progress } from './progress';
 import { PublishSettingsDialog } from './publish-settings-dialog';
@@ -145,6 +146,9 @@ class EditorUI {
         nodePanel.mount('train', trainingFace.dom);
         const importFace = new ImportFace(events);
         nodePanel.mount('dataset', importFace.dom);
+        // the pose node: matcher, progress, and the cameras it found
+        const poseFace = new PoseFace(events);
+        nodePanel.mount('pose', poseFace.dom);
         // the camera node's exposure, depth of field and lens
         const cameraFace = new CameraFace(events);
         nodePanel.mount('camera', cameraFace.dom);
