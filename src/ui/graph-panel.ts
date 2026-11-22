@@ -3,6 +3,7 @@ import { Container } from '@playcanvas/pcui';
 import { AnimTrackEditOp, DatasetOp, PoseOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, PortSpec, PrimitivePoseOp, SelectOp, SelectStep, ShapeTransformOp, SourceKind, TransformNodeOp, isDatasetInput, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { LOOK_LABELS, LOOK_NODES } from '../look/nodes';
+import { SceneCamera } from '../scene-camera';
 import { SceneLight } from '../scene-light';
 import { ScenePrimitive } from '../scene-primitive';
 import { SelectionNodeOp } from '../select-nodes';
@@ -237,6 +238,17 @@ const camerasOf = (key: object): PoseOp | null => {
     if (key instanceof PoseOp) return key;
     const subject = key instanceof TransformNodeOp ? key.subject : null;
     return subject instanceof PoseOp ? subject : null;
+};
+
+/**
+ * What a transform node can be put on besides an object, out of a node in
+ * its lane: a light, a primitive, a camera object, a pose node's cameras.
+ */
+const placeableOf = (node: { key: object, splat: unknown }): object | null => {
+    const cameras = camerasOf(node.key);
+    if (cameras) return cameras;
+    const s = node.splat;
+    return s instanceof SceneLight || s instanceof ScenePrimitive || s instanceof SceneCamera ? s : null;
 };
 
 // What a wire dragged out of a node carries. A select node's wire carries its
@@ -768,9 +780,10 @@ class GraphPanel extends Container {
                 return;
             }
 
-            // A transform node on a pose node's cameras goes in the pose
-            // node's lane, which is its output's.
-            const placed = op instanceof TransformNodeOp && op.subject instanceof PoseOp ? op.subject : null;
+            // A transform node on a light, a primitive, a camera object or a
+            // pose node's cameras goes in the lane that thing has, after
+            // the node that made it - a pose node's lane is its output's.
+            const placed = op instanceof TransformNodeOp && !(op.subject instanceof Splat) ? op.subject : null;
             const placedLane = placed instanceof PoseOp ? placed.output : placed;
             if (placedLane && lanes.has(placedLane)) {
                 add(placedLane, {
@@ -1294,8 +1307,18 @@ class GraphPanel extends Container {
                     return;
                 }
 
-                // only an object's lane takes these - a light's or a camera's
-                // lane holds that light or camera, not an object to edit
+                // a light's, a primitive's or a camera's lane holds that
+                // thing, not an object to edit: only a transform goes on it
+                const placeable = placeableOf(node);
+                if (placeable) {
+                    showContextMenu(doc, ev.clientX, ev.clientY, [{
+                        label: 'transform',
+                        action: () => this.events.fire('graph.addTransformNode', placeable)
+                    }]);
+                    return;
+                }
+
+                // only an object's lane takes these
                 const splat = node.splat instanceof Splat ? node.splat : null;
                 const items: MenuEntry[] = splat ? [
                     {

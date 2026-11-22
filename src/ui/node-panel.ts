@@ -13,6 +13,8 @@ import { Events } from '../events';
 import { isInspectOp } from '../inspect-ops';
 import { paramOf } from '../keyframes';
 import { type FieldNode, type FieldSpec, isFieldNode } from '../look/fields';
+import { SceneCamera } from '../scene-camera';
+import { SceneLight } from '../scene-light';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
 import type { LoopMode, OffsetOutside } from '../time-map';
@@ -850,8 +852,10 @@ class NodePanel extends Container {
 
         const note = document.createElement('div');
         note.className = 'nd-note';
-        // a pose node's cameras, or an object
-        note.textContent = i18n.t(node.subject instanceof PoseOp ? 'node.transform.cameras-note' : 'node.transform.note');
+        // a pose node's cameras, a light's or a camera's aim, or an object
+        const subject = node.subject;
+        note.textContent = i18n.t(subject instanceof PoseOp ? 'node.transform.cameras-note' :
+            (subject instanceof SceneLight || subject instanceof SceneCamera ? 'node.transform.aim-note' : 'node.transform.note'));
         this.body.appendChild(note);
     }
 

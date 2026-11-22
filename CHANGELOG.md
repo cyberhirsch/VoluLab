@@ -9,6 +9,42 @@ months finds out why before they change it.
 
 ---
 
+## Transform nodes on lights, primitives and camera objects
+
+The same transform node goes on a light's, a primitive's or a camera
+node's lane: drag out of the node and pick transform, the only thing
+offered there. On a light or a camera object it carries the position and
+the aim point through the node's matrix, so a turn turns where it points
+and a scale scales its distance to the aim point; on a primitive it
+composes like an object's placement, with the size as the scale (a
+mirror's sign dropped, since a size has none). A click on the transform
+node selects the light, primitive or camera, as a click on its own node
+does, and a primitive's wire into a select node's mesh input comes from
+the end of its lane, as the shape stands after its transforms.
+
+These kept their poses as plain fields moved by gesture edits
+(LightPoseOp, PrimitivePoseOp, CameraPoseOp), and those stay as they
+were: a gizmo drag still sets the pose outright, so one made after a
+transform node decides where the thing ends up, as an EntityTransformOp
+does for an object. `placedBy` (edit-ops.ts) names what any edit places,
+so the node pane's live preview and keyed transform nodes stand back
+when something later places the same thing, gizmo drags included.
+
+**Saving.** As with an object, the thing is stored where it stands
+without its transform nodes and they go back on top on load: a light's
+and a camera's position and aim point through the inverse of the nodes'
+matrix (exact for any matrix that has one), a primitive's placement
+through `TransformNodeOp.baseOf`. Where none exists - a scale of nothing,
+or a primitive turned and stretched into a shear - it is stored as it
+stands and its nodes are dropped, the rule objects already follow. The
+entries in `transforms` name `light`, `primitive` or `camera` by their
+place in those lists.
+
+Not covered: a camera object's keyframes are absolute and are not moved
+by a transform node; playing them overrides it.
+
+---
+
 ## Transform nodes on a pose node's cameras
 
 A transform node now stands on anything with a position and a turn, not

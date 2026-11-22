@@ -278,10 +278,12 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
             // camera objects come back as camera nodes, so they land in the
             // graph and in history the same way a fresh one does
+            const cameraOps: { output?: SceneCamera }[] = [];
             if (Array.isArray(document.cameras)) {
                 for (const stored of document.cameras) {
                     const op = events.invoke('camera.addNode');
                     op?.output?.docDeserialize(stored);
+                    cameraOps.push(op);
                 }
                 events.fire('edit.changed');
                 events.fire('camera.effects.refresh');
@@ -478,8 +480,13 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             restoreColourNodes(document, loaded, later, events);
             // import, pose and train nodes, wired once all are in (doc-datasets.ts)
             const { wire: wireDatasets, poses } = await restoreDatasets(document, file, zipFs, loaded, scene, later, events);
-            // transform nodes on pose nodes' cameras (doc-transforms.ts)
-            restoreSubjectTransforms(document, { light: [], primitive: [], camera: [], pose: poses }, later, events);
+            // transform nodes on lights, primitives, cameras and pose nodes' cameras (doc-transforms.ts)
+            restoreSubjectTransforms(document, {
+                light: lightOps.map(op => op?.output),
+                primitive: primitiveOps.map(op => op?.output),
+                camera: cameraOps.map(op => op?.output),
+                pose: poses
+            }, later, events);
 
             // in, in order (the sort is stable, so nodes without a place
             // keep the order they were listed in), and where they were put
@@ -662,8 +669,14 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 return base ? { base, nodes } : null;
             });
 
-            // the transform nodes on pose nodes' cameras
-            const subjectTransforms = storeSubjectTransforms(allOps, cursor, { light: [], primitive: [], camera: [], pose: posesOf(allOps, cursor) }, placeOf);
+            // the transform nodes on lights, primitives, cameras and pose
+            // nodes' cameras, and where those are stored without them
+            const subjectTransforms = storeSubjectTransforms(allOps, cursor, {
+                light: lights,
+                primitive: primitives,
+                camera: cameras,
+                pose: posesOf(allOps, cursor)
+            }, placeOf);
 
             const document = {
                 // .vlp starts its own numbering; an .ssproj is version 0 of a
@@ -707,7 +720,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 }),
 
                 // each object's transform nodes, in the order of its chain,
-                // then those on pose nodes' cameras
+                // then those on lights, primitives, cameras and pose nodes
                 transforms: [...placements.flatMap((placed, i) => (placed?.nodes ?? []).map(node => ({
                     splat: i,
                     position: pack3(node.newt.position),
@@ -751,14 +764,15 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     }];
                 }),
 
-                // the camera objects: pose, lens, lock and their animation
-                cameras: cameras.map(c => c.docSerialize()),
+                // the camera objects: pose, lens, lock and their animation,
+                // each where it stands without its transform nodes
+                cameras: cameras.map(c => ({ ...c.docSerialize(), ...subjectTransforms.base(c) })),
 
                 // the lights
-                lights: lights.map(l => l.docSerialize()),
+                lights: lights.map(l => ({ ...l.docSerialize(), ...subjectTransforms.base(l) })),
 
                 // the boxes, spheres and cylinders
-                primitives: primitives.map(p => p.docSerialize()),
+                primitives: primitives.map(p => ({ ...p.docSerialize(), ...subjectTransforms.base(p) })),
 
                 // voxel objects; each grid's cells and colours are in voxels_<i>.bin
                 voxels: voxels.map(v => ({
