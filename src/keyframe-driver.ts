@@ -1,3 +1,4 @@
+import { CombineOp } from './combine-ops';
 import { EditOp, principalOp } from './edit-ops';
 import { Events } from './events';
 import { Keyed, ParamSpec, paramsOf, setKey, trackOf, valueAt } from './keyframes';
@@ -98,6 +99,12 @@ const registerKeyframeDriver = (events: Events) => {
             const at = frame;
             const { ops, cursor } = history();
             const replays: { op: EditOp, apply: () => void }[] = [];
+            // the objects changed in place, which no edit tells anyone about
+            const touched = new Set<unknown>();
+            const touch = (o: any) => {
+                touched.add(o.splat);
+                if (o.target) touched.add(o.target);
+            };
 
             for (let i = 0; i < cursor; ++i) {
                 const outer = ops[i];
@@ -133,14 +140,23 @@ const registerKeyframeDriver = (events: Events) => {
                         if (update) {
                             apply();
                             done = update(op, later);
+                            if (done) touch(op);
                         }
                         if (!done) replays.push({ op: outer, apply });
                     }
                 }
 
-                if (isFrameDriven(op) && op.animate(at, later)) {
-                    replays.push({ op: outer, apply: () => {} });
+                if (isFrameDriven(op)) {
+                    if (op.animate(at, later)) replays.push({ op: outer, apply: () => {} });
+                    else touch(op);
                 }
+            }
+
+            // A merge or switch fed by one of them is built again when it
+            // finds its input changed, which it looks for after an edit; a
+            // replay is one, a change in place is not
+            if (touched.size && ops.slice(0, cursor).some(o => o instanceof CombineOp && !o.bypassed && o.inputs.some(s => touched.has(s)))) {
+                events.invoke('combine.check');
             }
 
             // in chain order; each finds its index again, since a replay

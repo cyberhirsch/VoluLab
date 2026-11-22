@@ -5,6 +5,7 @@ import { CropOp, EditOp, EntityTransformOp, ScopedColorOp, SetSplatColorAdjustme
 import { composeGrades, toGrade } from './grade-palette';
 import { keyableLive } from './keyframe-driver';
 import { keyable, ParamSpec } from './keyframes';
+import { GradeRowsOp } from './look/grade-rows';
 
 /**
  * The keyable parameters of the nodes that were there before keys: transform,
@@ -130,11 +131,16 @@ const registerKeyframeParams = () => {
     ]);
 
     // A scoped colour node holds palette slots, each its source slot's grade
-    // composed with its own. With no colour node after it on the object, no slot
-    // was composed from these, and they can be written again in place.
+    // composed with its own. With no colour node after it on the object - a
+    // scoped one, or a look node grading rows (opacity, colour match,
+    // exposure) - no slot was composed from these, and they can be written
+    // again in place.
     keyableLive(ScopedColorOp, (op, later) => {
         const map = (op as any).paletteMap as Map<number, number> | null;
-        if (!map || later.some(o => principalOp(o) instanceof ScopedColorOp && (principalOp(o) as ScopedColorOp).splat === op.splat)) {
+        if (!map || later.some((o) => {
+            const p = principalOp(o);
+            return (p instanceof ScopedColorOp || p instanceof GradeRowsOp) && p.splat === op.splat;
+        })) {
             return false;
         }
         const palette = op.splat.gradePalette;
