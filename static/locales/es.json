@@ -527,7 +527,7 @@
     "node.merge.note": "Convierte sus entradas en un solo objeto, ordenado y dibujado como uno, para que se solapen correctamente en profundidad. Cada entrada conserva su colocación, sus nodos de transformación y de color y sus nodos de tiempo. Sigue a sus entradas tal como las dejan sus carriles: un cambio en una entrada lo rehace. Suelta el cable de otro objeto sobre él para añadir una entrada; bypass o deshacer vuelve a mostrar las entradas.",
     "node.merge.note-4d": "Una entrada 4D conserva su movimiento y su tiempo: la secuencia combinada dura lo que la entrada más larga, y una entrada fuera de su propia secuencia no aporta nada. Las entradas con otra frecuencia de fotogramas se leen por segundos.",
     "node.merge.note-copies": "Un bucle, ida y vuelta, fotograma congelado o retención en una entrada la hace entrar una vez por tramo de su tiempo (×n arriba), lo que cuesta memoria.",
-    "node.merge.note-limited": "El tiempo de una entrada está dividido en más tramos de los que puede entrar (como mucho 16 copias, 4 millones de gaussianas en total): los tramos más cortos muestran el tiempo conservado más cercano, así que allí se mueve a saltos.",
+    "node.merge.note-limited": "El tiempo de una entrada está dividido en más tramos de los que puede entrar (como mucho 16 copias, 4 millones de gaussianas en total): los tramos más cortos muestran el tiempo conservado más cercano, así que allí se mueve a saltos, o nada donde no hay ninguno cerca (las vueltas de un bucle).",
     "node.split.what": "selección",
     "node.split.move": "mover",
     "node.split.copy": "copiar",

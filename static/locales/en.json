@@ -527,7 +527,7 @@
     "node.merge.note": "Makes its inputs one object, sorted and drawn as one, so they overlap in depth correctly. Each input keeps its placement, its transform and colour nodes and its time nodes. It follows its inputs as their lanes leave them: an edit to an input remakes it. Drop another object's wire on it to add an input; bypass or undo shows the inputs again.",
     "node.merge.note-4d": "A 4D input keeps its motion and its time: the merged sequence is as long as the longest input, and an input outside its own sequence contributes nothing. Inputs at another frame rate are read by seconds.",
     "node.merge.note-copies": "A loop, ping-pong, freeze frame or hold on an input brings it in once per run of its time (×n above), which costs memory.",
-    "node.merge.note-limited": "An input's time is cut into more runs than it can come in for (at most 16 copies, 4 million gaussians in all): the shortest runs show the nearest kept time, so it moves in steps there.",
+    "node.merge.note-limited": "An input's time is cut into more runs than it can come in for (at most 16 copies, 4 million gaussians in all): the shortest runs show the nearest kept time, so it moves in steps there, or nothing where no kept time is near (the turns of a loop).",
     "node.split.what": "selection",
     "node.split.move": "move",
     "node.split.copy": "copy",

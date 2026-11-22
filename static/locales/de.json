@@ -527,7 +527,7 @@
     "node.merge.note": "Macht aus seinen Eingängen ein Objekt, das als eines sortiert und gezeichnet wird, sodass sie sich in der Tiefe richtig überlagern. Jeder Eingang behält seine Platzierung, seine Transform- und Farb-Nodes und seine Time-Nodes. Er folgt seinen Eingängen so, wie ihre Lanes sie lassen: eine Änderung an einem Eingang baut ihn neu. Zieh das Kabel eines weiteren Objekts darauf, um einen Eingang hinzuzufügen; Bypass oder Undo zeigt die Eingänge wieder.",
     "node.merge.note-4d": "Ein 4D-Eingang behält seine Bewegung und seine Zeit: die zusammengeführte Sequenz ist so lang wie der längste Eingang, und ein Eingang außerhalb seiner eigenen Sequenz trägt nichts bei. Eingänge mit anderer Framerate werden nach Sekunden gelesen.",
     "node.merge.note-copies": "Ein Loop, Ping-Pong, Freeze Frame oder Halten an einem Eingang bringt ihn einmal pro Zeitabschnitt hinein (×n oben), was Speicher kostet.",
-    "node.merge.note-limited": "Die Zeit eines Eingangs ist in mehr Abschnitte geteilt, als er hineinkommen kann (höchstens 16 Kopien, insgesamt 4 Millionen Gaussians): Die kürzesten Abschnitte zeigen die nächste behaltene Zeit, dort bewegt er sich in Stufen.",
+    "node.merge.note-limited": "Die Zeit eines Eingangs ist in mehr Abschnitte geteilt, als er hineinkommen kann (höchstens 16 Kopien, insgesamt 4 Millionen Gaussians): Die kürzesten Abschnitte zeigen die nächste behaltene Zeit, dort bewegt er sich in Stufen, oder nichts, wo keine behaltene Zeit nahe ist (die Durchläufe eines Loops).",
     "node.split.what": "Auswahl",
     "node.split.move": "verschieben",
     "node.split.copy": "kopieren",

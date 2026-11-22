@@ -97,10 +97,13 @@ type MergeBuilt = {
  * the first may come to over all inputs: a time warp with a keyed speed
  * or a loop of many turns cuts an input's time into as many runs, each a
  * copy of its gaussians. Past these, the runs that cover the most time
- * are kept, and the others show the kept one nearest their time.
+ * are kept, and the others show the kept one nearest their time, or
+ * nothing where none is near.
  */
 const MAX_COPIES = 16;
 const MAX_EXTRA_ROWS = 4_000_000;
+// how far, in the input's normalised time, a kept run may be from a left-out one it stands in for
+const MAX_TIME_GAP = 0.25;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 const shBandCoeffs = [0, 3, 8, 15];
@@ -600,8 +603,10 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
             extraRows += rowsEach;
         }
         if (kept.size < pieces.length) {
-            // a run left out shows the kept one nearest its time instead:
-            // the input steps rather than drops out
+            // a run left out shows the kept one nearest its time instead,
+            // so the input steps rather than drops out - where one is near:
+            // the runs of a loop are whole turns apart, and a model shown
+            // that far from its time is nowhere it was
             limited[i] = true;
             const keep = pieces.filter(p => kept.has(p)).map(p => ({ ...p, windows: p.windows.slice() }));
             pieces.filter(p => !kept.has(p)).forEach((p) => {
@@ -612,7 +617,7 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
                     keep.forEach((q) => {
                         if (Math.abs(q.scale * u + q.offset - t) < Math.abs(best.scale * u + best.offset - t)) best = q;
                     });
-                    best.windows.push(p.windows[w], p.windows[w + 1]);
+                    if (Math.abs(best.scale * u + best.offset - t) <= MAX_TIME_GAP) best.windows.push(p.windows[w], p.windows[w + 1]);
                 }
             });
             keep.forEach((p) => {
