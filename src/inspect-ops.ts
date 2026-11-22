@@ -117,6 +117,16 @@ class CacheOp {
     hits = 0;
     misses = 0;
     clears = 0;
+    /** frames dropped from memory to stay inside the budget */
+    evicted = 0;
+    /** the node's own name for its files in a folder; stored with the project */
+    uid = '';
+    /** what stood above it when it last looked (inspect-nodes.ts stampOf) */
+    stamp: string | null = null;
+    /** counts clears, so work started before one does not land after it */
+    generation = 0;
+    /** the folder work, one after another */
+    diskChain: Promise<void> = Promise.resolve();
     /** the folder entries also go to, while disk is on; not stored */
     dir: FileSystemDirectoryHandle | null = null;
     destroyed = false;

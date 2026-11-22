@@ -5,7 +5,7 @@ import { EditOp, StateOp } from './edit-ops';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
 import {
-    CacheEntry, CacheOp, FrameChange, PASS_NAMES, RenderPassesOp, RenderPassSettings, StatsOp, ViewerOp, defaultRenderPassSettings
+    CacheEntry, CacheOp, FrameChange, PASS_NAMES, RenderPassesOp, RenderPassSettings, StatsOp, ViewerOp, defaultRenderPassSettings, isInspectOp
 } from './inspect-ops';
 import { BrowserFileSystem } from './io';
 import { PassSink, renderPasses } from './render-passes';
@@ -100,7 +100,7 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
 
         // the viewer's isolate would hide objects from the frames, and its
         // point is not this node's: back to the end of the chain first
-        await stopViewing(true);
+        await events.invoke('viewer.stop');
         const resume = history().cursor;
         await editHistory.goto(index + 1);
         try {
@@ -237,10 +237,14 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
     // each wrapped node's own question, and the cache that answers for it
     type Wrapped = { original: (splat: Splat) => IndexRanges | Promise<IndexRanges>, cache: CacheOp, lastKey: string | null };
     const wrapped = new WeakMap<StateOp, Wrapped>();
-    const cacheIds = new WeakMap<CacheOp, number>();
-    let nextCacheId = 1;
 
-    /** The state nodes above a cache on its object, top down. */
+    // every cache made this session, to check against upstream changes
+    const caches = new Set<CacheOp>();
+
+    // above this, the frames least recently used leave memory (the folder keeps them)
+    const MEMORY_BUDGET = 512 * 1024 * 1024;
+
+    /** The state nodes above a cache on its object that run, top down: bypassed ones never do. */
     const upstreamOf = (cache: CacheOp) => {
         const ops = history().ops;
         const at = ops.indexOf(cache);
@@ -248,9 +252,10 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
         const out: StateOp[] = [];
         for (let i = 0; i < at; i++) {
             const op = ops[i];
+            if (op.bypassed) continue;
             const all = (op as any).ops instanceof Array ? (op as any).ops : [op];
             all.forEach((inner: EditOp) => {
-                if (inner instanceof StateOp && inner.splat === cache.splat) out.push(inner);
+                if (inner instanceof StateOp && inner.splat === cache.splat && !(inner as EditOp).bypassed) out.push(inner);
             });
         }
         return out;
@@ -258,81 +263,229 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
 
     const live = (cache: CacheOp) => !cache.destroyed && !cache.bypassed && history().ops.includes(cache);
 
-    const fileOf = (cache: CacheOp, key: string) => {
-        if (!cacheIds.has(cache)) cacheIds.set(cache, nextCacheId++);
-        return `cache_${cacheIds.get(cache)}_${key.replace(/[^a-z0-9]+/gi, '_').slice(0, 80)}.bin`;
+    // --- validity stamp: what stands above the cache, as a hash ---
+
+    const fnv = (h: number, s: string) => {
+        for (let i = 0; i < s.length; i++) {
+            h ^= s.charCodeAt(i);
+            h = Math.imul(h, 16777619);
+        }
+        return h >>> 0;
     };
 
-    const writeDisk = async (cache: CacheOp, key: string) => {
-        if (!cache.settings.disk || !cache.dir) return;
+    // fields that are what an op holds or points at, not what it was asked
+    const NOT_PARAMS = new Set(['splat', 'ranges', 'resolved', 'resolver', 'output', 'inputs', 'events', 'scene', 'parent']);
+
+    /** An op's parameters as text: its own fields, without the objects it works on. */
+    const describe = (op: EditOp) => {
+        const seen = new WeakSet<object>();
+        try {
+            return JSON.stringify(op, (key, value) => {
+                if (key && (NOT_PARAMS.has(key) || key.startsWith('_'))) return undefined;
+                if (value instanceof Splat || value instanceof IndexRanges) return undefined;
+                if (ArrayBuffer.isView(value)) {
+                    // a frozen hit set can be millions long: its length and an even sample
+                    const a = value as unknown as ArrayLike<number>;
+                    const step = Math.max(1, Math.floor(a.length / 64));
+                    const sample: number[] = [];
+                    for (let i = 0; i < a.length; i += step) sample.push(a[i]);
+                    return `${a.length}:${sample.join(',')}`;
+                }
+                if (value && typeof value === 'object') {
+                    if (seen.has(value)) return undefined;
+                    seen.add(value);
+                }
+                return value;
+            });
+        } catch {
+            return op.name ?? '?';
+        }
+    };
+
+    /**
+     * Everything above the cache that runs - not only the state nodes on its
+     * object, since a transform or a combine above changes what they find -
+     * by kind and parameters. A cached frame is only good under the stamp it
+     * was made under.
+     */
+    const stampOf = (cache: CacheOp) => {
+        const ops = history().ops;
+        const at = ops.indexOf(cache);
+        let h = 2166136261;
+        for (let i = 0; i < at; i++) {
+            const op = ops[i];
+            if (op.bypassed || isInspectOp(op)) continue;
+            h = fnv(h, `${op.name}|${describe(op)}|`);
+        }
+        return h.toString(16).padStart(8, '0');
+    };
+
+    // --- memory ---
+
+    /** Drop the least recently used frames until the cache fits its budget; `keep` stays. */
+    const evict = (cache: CacheOp, keep: string) => {
+        let bytes = cache.bytes;
+        for (const [key, entry] of cache.frames) {
+            if (bytes <= MEMORY_BUDGET) break;
+            if (key === keep) continue;
+            for (const r of entry.values()) bytes -= r.data.byteLength;
+            cache.frames.delete(key);
+            cache.evicted++;
+        }
+    };
+
+    /** A frame's entry, marked as the most recently used. */
+    const touch = (cache: CacheOp, key: string) => {
         const entry = cache.frames.get(key);
-        if (!entry) return;
+        if (entry) {
+            cache.frames.delete(key);
+            cache.frames.set(key, entry);
+        }
+        return entry;
+    };
+
+    // --- disk ---
+    //
+    // A file per frame: vlcache_<node uid>_<stamp>_<frame>.bin. The uid is
+    // the node's own and is stored with the project, so a folder shared by
+    // several nodes, projects or sessions only ever serves a node its own
+    // files, and only those made under what stands above it now. The header
+    // says the same again and is checked on read.
+    //
+    // All folder work of one cache runs in order (inOrder): a clear waits
+    // for the writes before it, a read for the clear before it.
+
+    const MAGIC = 0x31434c56; // 'VLC1'
+    const keyHash = (key: string) => fnv(2166136261, key);
+
+    const safe = (s: string) => s.replace(/[^a-z0-9]+/gi, '_').slice(0, 60);
+    const prefixOf = (cache: CacheOp) => `vlcache_${cache.uid}_`;
+    const fileOf = (cache: CacheOp, stamp: string, key: string) => `${prefixOf(cache)}${stamp}_${safe(key)}_${keyHash(key).toString(16)}.bin`;
+
+    const inOrder = <T>(cache: CacheOp, fn: () => Promise<T>): Promise<T> => {
+        const next = cache.diskChain.then(fn, fn);
+        cache.diskChain = next.then(() => {}, () => {});
+        return next;
+    };
+
+    const writeDisk = (cache: CacheOp, key: string) => {
+        if (!cache.settings.disk || !cache.dir) return Promise.resolve();
+        const entry = cache.frames.get(key);
+        if (!entry) return Promise.resolve();
         const upstream = upstreamOf(cache);
-        const parts: number[] = [];
-        let words = 1;
-        entry.forEach((ranges, op) => {
-            const at = upstream.indexOf(op as StateOp);
-            if (at < 0) return;
-            parts.push(at);
-            words += 2 + ranges.data.length;
+        // only a frame every node above that runs has answered for
+        if (!upstream.length || !upstream.every(op => entry.has(op))) return Promise.resolve();
+        const stamp = stampOf(cache);
+        const { generation, dir } = cache;
+
+        let words = 5;
+        upstream.forEach((op) => {
+            words += 2 + entry.get(op).data.length;
         });
         const out = new Uint32Array(words);
-        out[0] = parts.length;
-        let w = 1;
-        entry.forEach((ranges, op) => {
-            const at = upstream.indexOf(op as StateOp);
-            if (at < 0) return;
+        out[0] = MAGIC;
+        out[1] = parseInt(stamp, 16);
+        out[2] = keyHash(key);
+        out[3] = upstream.length;
+        out[4] = words;
+        let w = 5;
+        upstream.forEach((op, at) => {
+            const { data } = entry.get(op);
             out[w++] = at;
-            out[w++] = ranges.data.length;
-            out.set(ranges.data, w);
-            w += ranges.data.length;
+            out[w++] = data.length;
+            out.set(data, w);
+            w += data.length;
         });
-        try {
-            const file = await cache.dir.getFileHandle(fileOf(cache, key), { create: true });
-            const stream = await file.createWritable();
-            await stream.write(out.buffer);
-            await stream.close();
-        } catch (error) {
-            console.warn('cache: could not write to the folder', error);
-        }
+
+        return inOrder(cache, async () => {
+            // cleared since: this frame is no longer what the cache holds
+            if (cache.generation !== generation || cache.dir !== dir) return;
+            try {
+                const file = await dir.getFileHandle(fileOf(cache, stamp, key), { create: true });
+                const stream = await file.createWritable();
+                await stream.write(out.buffer);
+                await stream.close();
+            } catch (error) {
+                console.warn('cache: could not write to the folder', error);
+            }
+        });
     };
 
-    const readDisk = async (cache: CacheOp, key: string): Promise<CacheEntry | null> => {
-        if (!cache.settings.disk || !cache.dir) return null;
-        try {
-            const file = await (await cache.dir.getFileHandle(fileOf(cache, key))).getFile();
-            const words = new Uint32Array(await file.arrayBuffer());
-            const upstream = upstreamOf(cache);
-            const entry: CacheEntry = new Map();
-            let w = 1;
-            for (let k = 0; k < words[0]; k++) {
-                const at = words[w++];
-                const n = words[w++];
-                if (upstream[at]) entry.set(upstream[at], IndexRanges.fromData(words.slice(w, w + n)));
-                w += n;
+    const readDisk = (cache: CacheOp, key: string): Promise<CacheEntry | null> => {
+        if (!cache.settings.disk || !cache.dir) return Promise.resolve(null);
+        const upstream = upstreamOf(cache);
+        const stamp = stampOf(cache);
+        const { dir } = cache;
+        return inOrder(cache, async () => {
+            try {
+                const file = await (await dir.getFileHandle(fileOf(cache, stamp, key))).getFile();
+                if (file.size % 4 || file.size < 20) return null;
+                const words = new Uint32Array(await file.arrayBuffer());
+                if (words[0] !== MAGIC || words[1] !== parseInt(stamp, 16) || words[2] !== keyHash(key) ||
+                    words[3] !== upstream.length || words[4] !== words.length) return null;
+                const entry: CacheEntry = new Map();
+                let w = 5;
+                for (let k = 0; k < words[3]; k++) {
+                    const at = words[w++];
+                    const n = words[w++];
+                    if (at >= upstream.length || w + n > words.length) return null;
+                    entry.set(upstream[at], IndexRanges.fromData(words.slice(w, w + n)));
+                    w += n;
+                }
+                return entry.size === upstream.length ? entry : null;
+            } catch {
+                return null;
             }
-            return entry;
-        } catch {
-            return null;
-        }
+        });
     };
 
-    const clearDisk = async (cache: CacheOp) => {
-        if (!cache.dir) return;
-        const prefix = `cache_${cacheIds.get(cache)}_`;
-        try {
-            for await (const name of (cache.dir as any).keys()) {
-                if (name.startsWith(prefix)) await cache.dir.removeEntry(name);
+    /** Remove this node's files; with `except`, those made under that stamp stay. */
+    const clearDisk = (cache: CacheOp, except?: string) => {
+        const { dir } = cache;
+        if (!dir) return Promise.resolve();
+        const prefix = prefixOf(cache);
+        const keep = except ? `${prefix}${except}_` : null;
+        return inOrder(cache, async () => {
+            try {
+                const names: string[] = [];
+                for await (const name of (dir as any).keys()) {
+                    if (name.startsWith(prefix) && !(keep && name.startsWith(keep))) names.push(name);
+                }
+                for (const name of names) await dir.removeEntry(name);
+            } catch {
+                // the folder went away; nothing to clear
             }
-        } catch {
-            // the folder went away; nothing to clear
-        }
+        });
+    };
+
+    /** Forget what memory holds; writes still queued for it are dropped. */
+    const forget = (cache: CacheOp) => {
+        cache.clear();
+        cache.generation++;
     };
 
     const clearCache = (cache: CacheOp) => {
-        cache.clear();
-        clearDisk(cache);
+        forget(cache);
+        return clearDisk(cache);
     };
+
+    // What stands above a cache changed - a parameter, a bypass, a node added
+    // or removed above it: what it holds in memory was made under something
+    // else. Checked on every history change, not only when a node asks again,
+    // so a cache bypassed while the change happened does not serve it after.
+    // The folder's files carry their stamp, so they need no clearing here.
+    events.on('edit.changed', () => {
+        caches.forEach((cache) => {
+            if (cache.destroyed) {
+                caches.delete(cache);
+                return;
+            }
+            if (!history().ops.includes(cache)) return;
+            const stamp = stampOf(cache);
+            if (cache.stamp !== null && cache.stamp !== stamp) forget(cache);
+            cache.stamp = stamp;
+        });
+    });
 
     /**
      * Put the cache between each state node above it and its question.
@@ -344,6 +497,7 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
      * the whole cache goes.
      */
     const wrap = (cache: CacheOp) => {
+        cache.stamp = stampOf(cache);
         upstreamOf(cache).forEach((op) => {
             const known = wrapped.get(op);
             if (known && known.cache === cache) return;
@@ -356,15 +510,21 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
                 if (!live(c) || !upstreamOf(c).includes(op)) return w.original(splat);
                 const key = frameKey(splat);
                 if (w.lastKey === key) {
-                    clearCache(c);
+                    await clearCache(c);
                 }
                 w.lastKey = key;
-                let entry = c.frames.get(key);
+                // what stands above may have changed since edit.changed last looked
+                const stamp = stampOf(c);
+                if (c.stamp !== stamp) forget(c);
+                c.stamp = stamp;
+                let entry = touch(c, key);
                 if (!entry?.has(op)) {
+                    const generation = c.generation;
                     const fromDisk = await readDisk(c, key);
-                    if (fromDisk?.has(op)) {
+                    if (fromDisk?.has(op) && c.generation === generation) {
                         entry = fromDisk;
                         c.frames.set(key, entry);
+                        evict(c, key);
                     }
                 }
                 const hit = entry?.get(op);
@@ -373,10 +533,14 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
                     return hit;
                 }
                 c.misses++;
+                const generation = c.generation;
                 const ranges = await w.original(splat);
+                // cleared while it was working: the answer is for what stood here before
+                if (c.generation !== generation) return ranges;
                 if (!c.frames.has(key)) c.frames.set(key, new Map());
                 c.frames.get(key).set(op, ranges);
-                if (op === upstreamOf(c).at(-1)) writeDisk(c, key);
+                evict(c, key);
+                writeDisk(c, key);
                 return ranges;
             };
             // what it already resolved is the frame it stands on now
@@ -390,9 +554,16 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
         writeDisk(cache, frameKey(cache.splat));
     };
 
-    const makeCache = (splat: Splat, disk = false) => {
+    const newUid = () => {
+        const c = (globalThis as any).crypto;
+        if (c?.randomUUID) return (c.randomUUID() as string).replace(/-/g, '').slice(0, 16);
+        return Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+    };
+
+    const makeCache = (splat: Splat, disk = false, uid?: string) => {
         const op = new CacheOp(splat, { disk });
-        cacheIds.set(op, nextCacheId++);
+        op.uid = typeof uid === 'string' && /^[a-z0-9]{1,32}$/i.test(uid) ? uid : newUid();
+        caches.add(op);
         const doIt = op.do.bind(op);
         op.do = () => {
             doIt();
@@ -405,21 +576,25 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
         addTarget(target).forEach(splat => appendAndOpen(makeCache(splat)));
     });
 
-    events.function('cache.addNode', (splat: Splat, bypassed?: boolean) => {
+    events.function('cache.addNode', (splat: Splat, bypassed?: boolean, uid?: string) => {
         if (!splat) return null;
         // the folder is not stored: disk comes back off until one is picked
-        const op = makeCache(splat, false);
+        const op = makeCache(splat, false, uid);
         if (bypassed) op.bypassed = true;
         events.fire('edit.add', op);
         return op;
     });
 
-    events.function('cache.clear', (op: CacheOp) => {
-        clearCache(op);
+    events.function('cache.clear', async (op: CacheOp) => {
+        await clearCache(op);
         events.fire('edit.changed');
     });
 
-    /** Turn writing to a folder on (one picked, or handed in) or off. */
+    /**
+     * Turn writing to a folder on (one picked, or handed in) or off. Turning
+     * it on drops this node's files made under anything other than what
+     * stands above it now; its files that still hold are read when asked.
+     */
     events.function('cache.setDisk', async (op: CacheOp, on: boolean, dir?: FileSystemDirectoryHandle) => {
         if (!on) {
             op.settings.disk = false;
@@ -438,7 +613,8 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
         }
         op.dir = folder;
         op.settings.disk = true;
-        for (const key of op.frames.keys()) await writeDisk(op, key);
+        await clearDisk(op, stampOf(op));
+        await Promise.all([...op.frames.keys()].map(key => writeDisk(op, key)));
         events.fire('edit.changed');
         return true;
     });
