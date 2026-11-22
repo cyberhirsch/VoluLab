@@ -280,6 +280,167 @@ whole at 38.6 and 40.0 dB at frames 10 and 60 (the two are sorted apart,
 as with any split); the split takes 4.7 s. Bypass and undo rejoin them.
 A 3D object is all still and makes no new object.
 
+## An instance node: copies that share the data
+
+The instance node draws copies of an object at other places without
+copying it. There are two ways to place them. A grid takes a count and a
+spacing per axis; the object itself is the first cell. A list takes one
+entry per copy: `x y z`, then an optional turn about y in degrees and an
+optional number of frames the copy plays later.
+
+How (`instance-ops.ts`). Each copy is an entity with its own gsplat
+component on the source's asset, so it uses the same GPU resource. The
+gaussians are uploaded once whatever the count. Each frame (`prerender`),
+the copy takes the object's world transform with its offset and turn on
+top. It also copies the main material's parameters, except the ones that
+belong to each copy: its sort order, texture size, count and motion time.
+That way grading, debug views and deletions show on the copies as soon as
+they show on the object. Each copy is sorted for its own position. A 4D
+object's copies each get their own MotionSorter. A copy shows the time
+that the object's own time nodes give for the timeline frame minus the
+copy's frame offset. A copy with an offset is hidden before it starts and
+after it ends.
+
+What copies are not. They are drawn only. Picking, selection, bounds,
+merges and exports see the object alone, and two copies that overlap in
+depth do not interleave, since each is sorted apart. Making them real
+gaussians is what a merge of real duplicates is for. There are at most
+256 copies (`MAX_COPIES`), each one a sort of the whole object.
+
+---
+
+## Layer nodes and the layer list
+
+A layer node names the branch up to it. It has a visibility, a solo, a
+lock and an opacity multiplier, and it shows as one row of the layer list
+in the graph pane's corner. It changes no data. `combine.ts` works out
+what all the layers come to and sets each object's `layerHidden`,
+`layerOpacity` and `layerLocked`. Hidden objects are not drawn. The
+opacity scales the grade's alpha. A locked object is left out of
+`selectedSplats`, so the viewport's selection tools do not touch it.
+
+Composition. An object's own layers combine: it is hidden if any of them
+is, the opacities multiply, and it is locked if any of them is. Solo is
+worked out through the merges, because that is what makes it useful in a
+composite. An object is in a soloed branch when it is soloed itself
+(`within`), when a merge it feeds into is soloed (`within` again, through
+the consumers), or when it is a merge with a soloed input (`holds`). That
+last merge stays visible but holds only the soloed input. Anything else is
+hidden while any solo is on.
+
+A merge or switch takes the layers of its inputs in. A hidden input adds
+no rows, and an input's opacity is baked into its part. So a layer change
+upstream makes the merge stale and rebuilds it. On large inputs that
+takes seconds, the cost of keeping the merged object one sorted set.
+
+Trap: a layer's state is read by whether the layer is applied, not by the
+history cursor. During a redo the op runs before the cursor moves past
+it, so counting layers below the cursor left out the layer being
+reapplied. A refresh of a layer on a merged object (lock, hide) then
+lost its own change. The flags are also set again on every history
+change, because solo depends on what feeds what.
+
+---
+
+## A switch node: one input at a time, or cut between them
+
+The switch node shows one of its inputs. With no cuts it is the input
+picked, built as a merge of that input alone, so it carries the input's
+transform, colour and time nodes like a merge does. With cuts
+(`frame:input`, 1-based in the face, e.g. `0:1, 48:2`) it changes input
+at each cut's frame.
+
+Why cuts build every input into one object (`SwitchOp.options`,
+`MergeBuildOptions.pick`). A switch that swapped which object is shown at
+a cut would rebuild or re-upload at every cut while playing. Instead the
+build bakes all the inputs once and gives each one time windows: an input
+is drawn only in the frames the cuts give it, through the sort worker's
+level windows that the merge node added. A cut then costs nothing when it
+plays. A 3D input with cuts becomes still rows that have windows, so a
+switch between 3D objects is a 4D object. It is as long as the timeline,
+or as long as the last cut needs (`minFrames`). The timeline length is
+part of the build's signature only when there are cuts.
+
+The settings are plain numbers: the index, and the cuts as a list.
+Keyframing the index belongs to the keyframe work of the time nodes.
+
+---
+
+## A merge node for 3D and 4D objects
+
+The merge node made two 3D objects into one by writing both out as a PLY
+and reading it back. It now takes two or more inputs, 3D or 4D, and keeps
+each one's placement, transform and colour nodes, debug view and time
+nodes: the merged object is what the inputs show, as one set of gaussians
+that is sorted and drawn as one. That is the point of merging rather than
+showing two objects side by side - two objects are sorted each on their
+own, so where they overlap in depth one is in front of all of the other.
+
+How an input's time gets in (`merge-build.ts`). A 4D object is drawn at
+one time of its own, and its time nodes say which time a timeline frame
+shows. The merged object has one clock, the timeline's. Where an input's
+time runs on linearly with it - no time node, a trim, a retime, a time
+offset - its time is `scale * u + offset` of the merged one, and the
+gaussians carry that exactly: centre, velocity and fade rewritten for the
+merged clock. The hierarchy's segments are of the input's clock, so the
+sort worker learned levels with a scale, an offset and time windows
+(`MotionLayout.scale/offset/windows`); a level is drawn only inside its
+windows. A loop, ping-pong, freeze frame or hold is not one line, so the
+timeline is cut into the runs that are, and the input comes in once per
+distinct run, drawn in its run's windows (a loop of two: twice the rows).
+A held or frozen run is a still - the gaussians at that time, faded as
+they are then. Outside its own sequence an input contributes nothing; a
+3D input is there always. An input at another frame rate
+(`Splat.motionFps`) is read by seconds, between frames if need be - the
+model is continuous in time, so nothing is resampled; today one 4D model
+is imported at a time, so every 4D object plays at the timeline's rate.
+
+The still/moving split carries over: an input's global gaussians that are
+there the whole merged sequence stay global, and the worker finds again
+which of them stand still; those of an input that is there only part of
+the time are in a windowed level and sorted as moving. Merging the alley
+(1.87M) with a PLY keeps 1.46M of them global, and playback sorts once per
+frame as before (75 frames asked, 76 orders drawn in 2.5 s).
+
+The SH bands are made equal: padded with zeros to the most any input
+has, or cut to the fewest (the node's `sh bands`). Each input can be given
+the name it goes by in the merge.
+
+The merged object follows its inputs as their lanes leave them, which is
+what the graph draws - the wire into a merge comes from the end of the
+input's lane. So an edit to an input, before the merge in the history or
+after it, leaves the merged object stale; once the history has settled it
+is made again in place (`combine.ts`), the same object, and the nodes
+standing on it are applied again to the new data (`edit.reapplyAll`). What
+the object is made from is a signature - each input's data, deletions,
+placement, transform and grade textures, time nodes - so nothing is built
+when nothing changed. Each input's baked part is kept, so a change to one
+input re-bakes that input alone. Baking is column by column (the same
+arithmetic as the export's `SingleSplat`, which is kept for an input under
+a debug view): baking the alley's 1.87M takes 4.7 s and putting the
+parts together 0.8 s; the whole merge takes 17 s, the rest being the
+engine's GPU resource and the sort worker, and a rebuild after an edit to
+the other input 7 to 10 s.
+
+A merge node is made by dropping one object's wire on another (as
+before), "merge with ..." in the canvas menu, "add merge node" (the
+selected object and every other one shown) or "merge" when a wire is
+dropped on nothing. Dropped on a merge node's object that nothing has
+changed since, a wire adds an input to that merge; an input can be taken
+out in the node pane.
+
+A project stores the node, not its object: kind, inputs by their places
+in the object list, settings. The object keeps its place in the list
+without a file and opens empty; the node makes it again once the project's
+nodes are in (`doc-combine.ts`). Measured: a merge of two PLYs and a node
+after it reload identical; the alley with a PLY saves at 298.6 MB (the
+merge adds nothing) and comes back as the same 4D object.
+
+Left out: a time node on an input is not stored by a project yet (doc.ts
+does not know time nodes), so after a reload the merge follows the input
+without it. The GSV export writes the model the sequence plays, not a
+merged object. An object's copies from a loop take memory per copy.
+
 ## Time nodes and a split node
 
 The graph can now edit time. Five nodes for a 4D model - trim, retime,

@@ -1,0 +1,117 @@
+@use 'colors.scss' as *;
+
+// The layer list, in the graph pane's top right corner. Same ink ladder as
+// the graph: "on" is the bright end, nothing carries a hue.
+
+.ly-list {
+    position: absolute;
+    top: $gap;
+    right: $gap;
+    z-index: 2;
+    min-width: 200px;
+    max-width: 280px;
+    max-height: calc(100% - 2 * #{$gap});
+    overflow-y: auto;
+    border: $border-width solid $ink-3;
+    background-color: $ink-1;
+    font-family: $font-mono;
+    font-size: $font-size-sm;
+    color: $ink-6;
+    cursor: default;
+
+    &[hidden] {
+        display: none;
+    }
+}
+
+.ly-header {
+    height: $h-row;
+    line-height: $h-row;
+    padding: 0 $pad-x;
+    border-bottom: $border-width solid $ink-3;
+    color: $ink-5;
+    cursor: pointer;
+    user-select: none;
+
+    &:hover {
+        color: $ink-7;
+    }
+}
+
+.ly-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: $h-row;
+    padding: 0 $pad-x-sm;
+
+    &.ly-hidden .ly-name {
+        color: $ink-4;
+    }
+
+    &.ly-bypassed .ly-name {
+        text-decoration: line-through;
+        color: $ink-4;
+    }
+}
+
+.ly-toggle {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 16px;
+    padding: 0;
+    border: $border-width solid $ink-3;
+    border-radius: 0;
+    outline: none;
+    background-color: $ink-1;
+    color: $ink-4;
+    font-family: $font-mono;
+    font-size: $font-size-xs;
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover {
+        border-color: $ink-5;
+        color: $ink-7;
+    }
+
+    &.ly-on {
+        border-color: $ink-6;
+        color: $ink-7;
+    }
+}
+
+.ly-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0 $pad-x-sm;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+
+    &:hover {
+        color: $ink-7;
+    }
+}
+
+.ly-opacity {
+    flex: 0 0 40px;
+    width: 40px;
+    height: 16px;
+    padding: 0 2px;
+    border: $border-width solid $ink-3;
+    border-radius: 0;
+    outline: none;
+    background-color: $ink-0;
+    color: $ink-6;
+    font-family: $font-mono;
+    font-size: $font-size-xs;
+    text-align: right;
+
+    &::-webkit-outer-spin-button,
+    &::-webkit-inner-spin-button {
+        appearance: none;
+        margin: 0;
+    }
+}

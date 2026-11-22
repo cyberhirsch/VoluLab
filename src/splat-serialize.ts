@@ -945,6 +945,10 @@ const serializeSpz = async (splats: Splat[], settings: SpzSettings, fs: FileSyst
 
 export {
     bakeDebugColor,
+    SingleSplat,
+    SplatTransformCache,
+    gradeLookup,
+    splatSHBands,
     Writer,
     writeSplatFile,
     serializeSog,

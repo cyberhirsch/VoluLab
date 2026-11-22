@@ -91,6 +91,9 @@ const OP_LABELS: Record<string, string> = {
     addSplat: 'add object',
     splatRename: 'rename',
     merge: 'merge',
+    switch: 'switch',
+    layer: 'layer',
+    instance: 'instance',
     splitNode: 'split',
     voxelise: 'voxelise',
     addVoxels: 'import voxels',
@@ -1189,6 +1192,22 @@ class GraphPanel extends Container {
                         action: () => this.events.fire('graph.addLookNode', n.kind, splat)
                     })),
                     {
+                        label: 'merge',
+                        action: () => this.events.fire('graph.addMergeNode', splat)
+                    },
+                    {
+                        label: 'switch',
+                        action: () => this.events.fire('graph.addSwitchNode', splat)
+                    },
+                    {
+                        label: 'layer',
+                        action: () => this.events.fire('graph.addLayerNode', splat)
+                    },
+                    {
+                        label: 'instance',
+                        action: () => this.events.fire('graph.addInstanceNode', splat)
+                    },
+                    {
                         label: 'cleanup',
                         action: () => this.events.fire('graph.addCleanupNode', splat)
                     },
@@ -1518,6 +1537,34 @@ class GraphPanel extends Container {
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addLookNode', n.kind)
             })),
+            {
+                // the selected object and every other one shown, as one
+                label: 'add merge node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addMergeNode')
+            },
+            {
+                // one of the selected object and the others shown at a time
+                label: 'add switch node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addSwitchNode')
+            },
+            {
+                // the branch as a layer of the layer list
+                label: 'add layer node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addLayerNode')
+            },
+            {
+                // copies of the object elsewhere, its data shared
+                label: 'add instance node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addInstanceNode')
+            },
             {
                 label: 'add cleanup node',
                 disabled: !splat,

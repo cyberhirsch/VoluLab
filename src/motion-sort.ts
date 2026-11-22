@@ -57,6 +57,34 @@ type MotionLayout = {
     // set, in every active set; a row of level l, segment s is active while
     // floor(t / levels[l]) is s
     blocks: { level: number, segment: number, rows: Uint32Array }[];
+    // Optional, per level, for a model made of others (a merge node): the
+    // level's own time is t * scale + offset, so segment s is active while
+    // floor((t * scale + offset) / levels[l]) is s - and only within the
+    // level's windows, ascending (from, to) pairs, from <= t < to; null:
+    // always. A level of infinite length has one segment, 0: rows that are
+    // active whenever the level is.
+    scale?: Float64Array;
+    offset?: Float64Array;
+    windows?: (Float64Array | null)[];
+};
+
+const inWindows = (windows: Float64Array | null | undefined, t: number) => {
+    if (!windows) return true;
+    for (let i = 0; i < windows.length; i += 2) {
+        if (t >= windows[i] && t < windows[i + 1]) return true;
+    }
+    return false;
+};
+
+/**
+ * The segment of a level active at time t, or NaN for none. The worker
+ * has its own copy of this (it must stay self-contained).
+ */
+const layoutSegment = (layout: MotionLayout, l: number, t: number) => {
+    if (!inWindows(layout.windows?.[l], t)) return NaN;
+    const segLen = layout.levels[l];
+    if (!Number.isFinite(segLen)) return 0;
+    return Math.floor((t * (layout.scale?.[l] ?? 1) + (layout.offset?.[l] ?? 0)) / segLen);
 };
 
 /** What the worker holds of a model; rows are the splat data's. */
@@ -94,7 +122,43 @@ const motionSortWorker = () => {
     let globals: Uint32Array = new Uint32Array(0);
     let stillAll: Uint32Array = new Uint32Array(0);
     let movingAll: Uint32Array = new Uint32Array(0);
-    let levels: { segLen: number, segments: Map<number, Uint32Array> }[] = [];
+    // a level's own time is t * scale + offset, and it is drawn only within
+    // its windows, (from, to) pairs, or always when null (see MotionLayout)
+    type Level = { segLen: number, scale: number, offset: number, windows: Float64Array | null, segments: Map<number, Uint32Array> };
+    let levels: Level[] = [];
+
+    // the segment of a level active at t, or NaN for none
+    const segmentOf = (level: Level, t: number) => {
+        const w = level.windows;
+        if (w) {
+            let inside = false;
+            for (let i = 0; i < w.length && !inside; i += 2) {
+                inside = t >= w[i] && t < w[i + 1];
+            }
+            if (!inside) return NaN;
+        }
+        if (!Number.isFinite(level.segLen)) return 0;
+        return Math.floor((t * level.scale + level.offset) / level.segLen);
+    };
+
+    // when a segment of a level can be active: from..to, empty if never.
+    // Across all its windows, which is wider than it is but bounds it
+    const segmentSpan = (level: Level, segment: number) => {
+        const w = level.windows;
+        let a = w?.length ? w[0] : -Infinity;
+        let b = w?.length ? w[w.length - 1] : Infinity;
+        if (Number.isFinite(level.segLen)) {
+            if (level.scale === 0) {
+                if (Math.floor(level.offset / level.segLen) !== segment) return [1, 0];
+            } else {
+                const u0 = (segment * level.segLen - level.offset) / level.scale;
+                const u1 = ((segment + 1) * level.segLen - level.offset) / level.scale;
+                a = Math.max(a, Math.min(u0, u1));
+                b = Math.min(b, Math.max(u0, u1));
+            }
+        }
+        return [Math.max(0, a), Math.min(1, b)];
+    };
 
     // the same without the deleted rows
     let still = stillAll;
@@ -232,7 +296,8 @@ const motionSortWorker = () => {
         span(globals, 0, 1);
         levels.forEach((level) => {
             level.segments.forEach((rows, segment) => {
-                span(rows, Math.max(0, segment * level.segLen), Math.min(1, (segment + 1) * level.segLen));
+                const [from, to] = segmentSpan(level, segment);
+                if (from <= to) span(rows, from, to);
             });
         });
         if (!(boxMin[0] <= boxMax[0])) {
@@ -535,8 +600,8 @@ const motionSortWorker = () => {
         const pieces: Uint32Array[] = [movingGlobal];
         let numMoving = movingGlobal.length;
         for (let l = 0; l < levels.length; l++) {
-            const segment = Math.floor(t / levels[l].segLen);
-            if (segment !== levelSeg[l]) {
+            const segment = segmentOf(levels[l], t);
+            if (segment !== levelSeg[l] && !(Number.isNaN(segment) && Number.isNaN(levelSeg[l]) && !levelRows[l])) {
                 const rows = levels[l].segments.get(segment);
                 levelSeg[l] = segment;
                 levelRows[l] = rows ? live(rows) : null;
@@ -714,7 +779,14 @@ const motionSortWorker = () => {
             globals = new Uint32Array(0);
             levels = [];
             if (model.layout) {
-                levels = Array.from(model.layout.levels as Float64Array, segLen => ({ segLen, segments: new Map<number, Uint32Array>() }));
+                const layout = model.layout;
+                levels = Array.from(layout.levels as Float64Array, (segLen, l) => ({
+                    segLen,
+                    scale: layout.scale?.[l] ?? 1,
+                    offset: layout.offset?.[l] ?? 0,
+                    windows: layout.windows?.[l] ?? null,
+                    segments: new Map<number, Uint32Array>()
+                }));
                 for (const block of model.layout.blocks) {
                     if (block.level < 0) {
                         globals = block.rows;
@@ -928,4 +1000,4 @@ class MotionSorter {
     }
 }
 
-export { MotionSorter, type MotionLayout, type MotionSortModel };
+export { MotionSorter, layoutSegment, inWindows, type MotionLayout, type MotionSortModel };
