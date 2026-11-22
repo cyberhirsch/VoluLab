@@ -105,7 +105,8 @@ const vertexShader = /* glsl */ `
         int corner = vertexIndex % 6;
 
         ivec2 splatUV = calcSplatUV(splatId, texParams.x);
-        uint splatState = uint(texelFetch(splatState, splatUV, 0).r * 255.0);
+        // the low three bits: a holdout (8) is shown as what it is
+        uint splatState = uint(texelFetch(splatState, splatUV, 0).r * 255.0 + 0.5) & 7u;
 
         // cull locked and deleted splats
         if ((splatState & 6u) != 0u) {
