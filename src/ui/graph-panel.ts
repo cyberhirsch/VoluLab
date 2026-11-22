@@ -1,6 +1,6 @@
 import { Container } from '@playcanvas/pcui';
 
-import { AnimTrackEditOp, DatasetOp, PoseOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, PortSpec, PrimitivePoseOp, SelectOp, SelectStep, ShapeTransformOp, SourceKind, isDatasetInput, principalOp } from '../edit-ops';
+import { AnimTrackEditOp, DatasetOp, PoseOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, PortSpec, PrimitivePoseOp, SelectOp, SelectStep, ShapeTransformOp, SourceKind, TransformNodeOp, isDatasetInput, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { LOOK_LABELS, LOOK_NODES } from '../look/nodes';
 import { SceneLight } from '../scene-light';
@@ -226,6 +226,17 @@ const opSplat = (op: EditOp): Splat | null => {
         return null;
     }
     return ((op as any).splat as Splat) ?? null;
+};
+
+/**
+ * The pose node whose cameras a node hands on: the pose node itself, or a
+ * transform node on its cameras. Its wire carries those cameras as the
+ * nodes in its lane leave them.
+ */
+const camerasOf = (key: object): PoseOp | null => {
+    if (key instanceof PoseOp) return key;
+    const subject = key instanceof TransformNodeOp ? key.subject : null;
+    return subject instanceof PoseOp ? subject : null;
 };
 
 // What a wire dragged out of a node carries. A select node's wire carries its
@@ -757,6 +768,25 @@ class GraphPanel extends Container {
                 return;
             }
 
+            // A transform node on a pose node's cameras goes in the pose
+            // node's lane, which is its output's.
+            const placed = op instanceof TransformNodeOp && op.subject instanceof PoseOp ? op.subject : null;
+            const placedLane = placed instanceof PoseOp ? placed.output : placed;
+            if (placedLane && lanes.has(placedLane)) {
+                add(placedLane, {
+                    index: i,
+                    kind: opLabel(op),
+                    name: placed instanceof PoseOp ? 'cameras' : ((placed as { name?: string }).name ?? ''),
+                    applied: i < cursor,
+                    // a click on it selects the light, primitive or camera
+                    splat: placed instanceof PoseOp ? null : placed as unknown as Splat,
+                    bypassed: !!op.bypassed,
+                    outLabel: placed instanceof PoseOp ? 'cameras' : undefined,
+                    key: op
+                });
+                return;
+            }
+
             const splat = opSplat(op);
             // Some nodes belong to no object and to no chain: a train node
             // before its first run, whose only wire is the one from the
@@ -858,7 +888,9 @@ class GraphPanel extends Container {
         nodes.forEach((node) => {
             node.ports?.forEach((port) => {
                 if (!port.source) return;
-                const lane = lanes.get(port.source);
+                // a pose node's cameras come from the end of its lane, as
+                // the transform nodes there leave them
+                const lane = lanes.get(port.source) ?? (port.source instanceof PoseOp ? lanes.get(port.source.output) : undefined);
                 const from = lane?.length ? lane[lane.length - 1] : nodes.find(n => n.key === port.source);
                 if (from) edges.push({ from, to: node, port: port.name });
             });
@@ -896,7 +928,8 @@ class GraphPanel extends Container {
             const offers: Offer[] = [];
             // a capture's wires: photos (an import or image node), cameras (a pose node)
             if (isDatasetInput(node.key)) offers.push({ kind: 'images', source: node.key });
-            if (node.key instanceof PoseOp) offers.push({ kind: 'cameras', source: node.key });
+            const cameras = camerasOf(node.key);
+            if (cameras) offers.push({ kind: 'cameras', source: cameras });
             if (node.select) offers.push({ kind: 'selection', source: node.key });
             if (node.splat instanceof Splat) offers.push({ kind: 'object', source: node.splat });
             if (node.splat instanceof ScenePrimitive) offers.push({ kind: 'primitive', source: node.splat });
@@ -1223,11 +1256,12 @@ class GraphPanel extends Container {
                     return;
                 }
 
-                if (isDatasetInput(node.key) || node.key instanceof PoseOp) {
+                const cameras = camerasOf(node.key);
+                if (isDatasetInput(node.key) || cameras) {
                     // released over nothing: offer what a dataset can feed,
                     // created at the drop point and wired up. Photos go on
                     // to a resize, a crop, a pose or a train node; cameras
-                    // only to a train node
+                    // to a transform node or a train node
                     const dataset = node.key;
                     const place = (op: object) => this.positions.set(op, { x: at.x, y: at.y - NODE_H / 2 });
                     const images = isDatasetInput(dataset) ? dataset : null;
@@ -1242,6 +1276,10 @@ class GraphPanel extends Container {
                             label: 'pose',
                             action: () => place(this.events.invoke('pose.addNode', images))
                         }] : []),
+                        ...(cameras ? [{
+                            label: 'transform',
+                            action: () => this.events.fire('graph.addTransformNode', cameras)
+                        }] : []),
                         {
                             label: 'train',
                             action: () => {
@@ -1249,7 +1287,7 @@ class GraphPanel extends Container {
                                 const port = images ? 'images' : 'cameras';
                                 // the input it goes into lands under the pointer
                                 this.positions.set(op, { x: at.x, y: at.y - portY({ ports: op.ports } as NodeModel, port) });
-                                this.events.fire('graph.connect', op, port, node.key);
+                                this.events.fire('graph.connect', op, port, images ?? cameras);
                             }
                         }
                     ]);

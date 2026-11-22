@@ -8,7 +8,7 @@ import { i18n } from './localization';
 import { buildMotionNode, PanelKit } from './motion-node-panel';
 import { buildSelectionNodeFace } from './select-nodes-face';
 import { fieldDefault } from './value-fields';
-import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, PoseOp, ResizeOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplitOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, PoseOp, ResizeOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplitOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, placedBy, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { isInspectOp } from '../inspect-ops';
 import { paramOf } from '../keyframes';
@@ -772,10 +772,9 @@ class NodePanel extends Container {
         // object shows is then this node's doing, and can be shown without
         // replaying. With a later transform in the way it waits for the replay.
         const { ops, cursor } = this.events.invoke('edit.history') as { ops: EditOp[], cursor: number };
-        const live = !!node && !ops.slice(index + 1, cursor).some((later) => {
-            const p = principalOp(later);
-            return (p instanceof EntityTransformOp || p instanceof TransformNodeOp) && p.splat === op.splat && !later.bypassed;
-        });
+        // A light, a primitive, a camera or a pose node's cameras the same.
+        const placed = node ? node.subject : op.splat;
+        const live = !!node && !ops.slice(index + 1, cursor).some(later => placedBy(later) === placed && !later.bypassed);
 
         // neutral: what a middle click puts back; step: what a wheel notch
         // or a few pixels of drag move it by
@@ -807,6 +806,8 @@ class NodePanel extends Container {
                         if (fields.some(f => !Number.isFinite(parseFloat(f.value)))) return;
                         apply(fields.map(f => parseFloat(f.value)));
                         node.preview();
+                        // what draws a pose node's cameras redraws
+                        this.events.fire('transform.preview', node);
                     });
                 }
                 row.appendChild(input);
@@ -849,7 +850,8 @@ class NodePanel extends Container {
 
         const note = document.createElement('div');
         note.className = 'nd-note';
-        note.textContent = i18n.t('node.transform.note');
+        // a pose node's cameras, or an object
+        note.textContent = i18n.t(node.subject instanceof PoseOp ? 'node.transform.cameras-note' : 'node.transform.note');
         this.body.appendChild(note);
     }
 

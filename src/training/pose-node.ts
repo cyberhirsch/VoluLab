@@ -8,6 +8,7 @@ import {
 
 import { BridgeImage } from './bridge-client';
 import { bridgePoseIntoOp, cancelPoseJob } from './bridge-ingest';
+import { isIdentityPlacement, placeCamera } from './camera-placement';
 import { isRawCapture, isTrainable, openDataset } from './dataset-source';
 import { readDatasetPoses } from './pose-read';
 import { extractVideoFrames } from './video-ingest';
@@ -72,6 +73,8 @@ class PoseFrustums extends Element {
         };
         this.events.on('pose.changed', markDirty);
         this.events.on('edit.changed', markDirty);
+        // a transform node's field being dragged, before the replay
+        this.events.on('transform.preview', markDirty);
     }
 
     destroy() {
@@ -86,12 +89,15 @@ class PoseFrustums extends Element {
         this.entity.enabled = this.count > 0 && this.scene.camera.renderOverlays;
     }
 
-    /** the cameras of the pose nodes that are applied and shown */
+    /**
+     * The cameras of the pose nodes that are applied and shown, where the
+     * transform nodes on them put them
+     */
     private shown(): PoseCamera[] {
         const { ops, cursor } = (this.events.invoke('edit.history') ?? { ops: [], cursor: 0 }) as { ops: EditOp[], cursor: number };
         return ops.slice(0, cursor)
-        .filter(op => op instanceof PoseOp && op.showCameras && !op.bypassed)
-        .flatMap(op => (op as PoseOp).cameras);
+        .filter((op): op is PoseOp => op instanceof PoseOp && op.showCameras && !op.bypassed)
+        .flatMap(({ cameras, placement }) => (isIdentityPlacement(placement) ? cameras : cameras.map(c => placeCamera(c, placement))));
     }
 
     private rebuild() {

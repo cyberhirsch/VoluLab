@@ -518,6 +518,64 @@ const composeTransform = (delta: Mat4, base: Transform): Transform => {
 };
 
 /**
+ * What a transform node can stand on: anything with a position and a
+ * turn. An object, a light, a primitive, a camera object, or the cameras a
+ * pose node found - which carry their placement themselves (`placement`),
+ * the frame its cameras and points are taken into on their way to the
+ * viewport and the trainer.
+ */
+type PlacedCameras = { placement: Transform, output: object };
+type TransformSubject = Splat | SceneLight | ScenePrimitive | SceneCamera | PlacedCameras;
+
+/** where a subject stands now, in whatever shape it keeps that in */
+type SubjectPose = Transform | { position: Vec3, target: Vec3 } | PrimitivePose;
+
+const poseOfSubject = (subject: TransformSubject): SubjectPose => {
+    if (subject instanceof Splat) {
+        const { entity } = subject;
+        return new Transform(entity.getLocalPosition(), entity.getLocalRotation(), entity.getLocalScale());
+    }
+    if (subject instanceof SceneLight || subject instanceof SceneCamera) {
+        return { position: subject.position.clone(), target: subject.target.clone() };
+    }
+    if (subject instanceof ScenePrimitive) return subject.getPose();
+    return subject.placement.clone();
+};
+
+const setSubjectPose = (subject: TransformSubject, pose: SubjectPose) => {
+    if (subject instanceof Splat) {
+        const t = pose as Transform;
+        subject.move(t.position, t.rotation, t.scale);
+    } else if (subject instanceof SceneLight || subject instanceof SceneCamera) {
+        const { position, target } = pose as { position: Vec3, target: Vec3 };
+        subject.setPose({ position, target });
+    } else if (subject instanceof ScenePrimitive) {
+        subject.setPose(pose as PrimitivePose);
+    } else {
+        subject.placement.copy(pose as Transform);
+    }
+};
+
+/**
+ * A pose moved by a matrix: an object's placement composed with it, a
+ * light's or a camera's position and aim point carried along, a
+ * primitive's position, turn and size like an object's.
+ */
+const movedPose = (subject: TransformSubject, matrix: Mat4, pose: SubjectPose): SubjectPose => {
+    if (subject instanceof SceneLight || subject instanceof SceneCamera) {
+        const { position, target } = pose as { position: Vec3, target: Vec3 };
+        return { position: matrix.transformPoint(position, new Vec3()), target: matrix.transformPoint(target, new Vec3()) };
+    }
+    if (subject instanceof ScenePrimitive) {
+        const p = pose as PrimitivePose;
+        const t = composeTransform(matrix, new Transform(p.position, p.rotation, p.size));
+        // a mirror has no size of its own to go in
+        return { position: t.position, rotation: t.rotation, size: new Vec3(Math.abs(t.scale.x), Math.abs(t.scale.y), Math.abs(t.scale.z)) };
+    }
+    return composeTransform(matrix, pose as Transform);
+};
+
+/**
  * A transform node: the object moved, turned and scaled by what the node
  * holds, on top of wherever it stood.
  *
@@ -528,22 +586,30 @@ const composeTransform = (delta: Mat4, base: Transform): Transform => {
  * the engine's up axis is a rotation of the object like any other, and a
  * node that set the placement outright would take it away.
  *
+ * It stands on anything with a position and a turn (TransformSubject): on
+ * a light or a camera object it carries the position and the aim point
+ * along, on a pose node's cameras the whole set and its points. `splat`
+ * is the subject when that is an object, so what asks after an object's
+ * nodes finds only those.
+ *
  * The transform is about the scene's origin, in the scene's axes.
  */
 class TransformNodeOp {
     name = 'transformNode';
-    splat: Splat;
+    subject: TransformSubject;
+    splat: Splat | null;
     /** what the node adds; named as EntityTransformOp names its target, so the node pane edits both the same way */
     newt: Transform;
     /** the rotation as it was typed, in degrees: read back from the quaternion, 200 would come back as -160 */
     euler: Vec3;
     bypassed?: boolean;
 
-    // the placement this landed on, while it is applied
-    private oldt: Transform | null = null;
+    // the pose this landed on, while it is applied
+    private oldt: SubjectPose | null = null;
 
-    constructor(splat: Splat, position = new Vec3(), euler = new Vec3(), scale = new Vec3(1, 1, 1)) {
-        this.splat = splat;
+    constructor(subject: TransformSubject, position = new Vec3(), euler = new Vec3(), scale = new Vec3(1, 1, 1)) {
+        this.subject = subject;
+        this.splat = subject instanceof Splat ? subject : null;
         this.euler = euler.clone();
         this.newt = new Transform(position, new Quat().setFromEulerAngles(euler.x, euler.y, euler.z), scale);
     }
@@ -602,29 +668,27 @@ class TransformNodeOp {
     }
 
     do() {
-        const { entity } = this.splat;
-        this.oldt = new Transform(entity.getLocalPosition(), entity.getLocalRotation(), entity.getLocalScale());
-        const t = this.over(this.oldt);
-        this.splat.move(t.position, t.rotation, t.scale);
+        this.oldt = poseOfSubject(this.subject);
+        setSubjectPose(this.subject, movedPose(this.subject, this.matrix, this.oldt));
     }
 
     /**
      * Show the node as it now stands without replaying it: for a field being
-     * dragged. Only right while nothing after this node places the object.
+     * dragged. Only right while nothing after this node places the subject.
      */
     preview() {
         if (!this.oldt) return;
-        const t = this.over(this.oldt);
-        this.splat.move(t.position, t.rotation, t.scale);
+        setSubjectPose(this.subject, movedPose(this.subject, this.matrix, this.oldt));
     }
 
     undo() {
         if (!this.oldt) return;
-        this.splat.move(this.oldt.position, this.oldt.rotation, this.oldt.scale);
+        setSubjectPose(this.subject, this.oldt);
         this.oldt = null;
     }
 
     destroy() {
+        this.subject = null;
         this.splat = null;
         this.oldt = null;
     }
@@ -2627,7 +2691,15 @@ class PoseOp {
     sparse: { path: string, data: Uint8Array }[] | null = null;
     /** the images it posed, as they went into the dataset */
     images: { name: string, data: Blob }[] | null = null;
+    /** as they were found or read, before any transform node on them */
     cameras: PoseCamera[] = [];
+    /**
+     * Where the transform nodes on its cameras output put the set: the
+     * cameras and their points, as drawn and as trained
+     * (src/training/camera-placement.ts). Not the node's own state - the
+     * nodes after it set it as they apply - so it is never stored.
+     */
+    placement = new Transform();
     /** images in the dataset, posed or not */
     total = 0;
     showCameras = true;
@@ -3203,6 +3275,22 @@ const principalOp = (op: EditOp): EditOp => {
         op.ops[0] ?? op;
 };
 
+/**
+ * What an edit places, if it places anything: the object a transform
+ * moves, the light, primitive or camera object a gizmo drag or a transform
+ * node moves, a pose node's cameras. Whatever stands later in the history
+ * and places the same thing decides where it ends up.
+ */
+const placedBy = (op: EditOp): object | null => {
+    const p = principalOp(op);
+    if (p instanceof TransformNodeOp) return p.subject;
+    if (p instanceof EntityTransformOp) return p.splat;
+    if (p instanceof LightPoseOp) return p.light;
+    if (p instanceof PrimitivePoseOp) return p.primitive;
+    if (p instanceof CameraPoseOp) return p.camera;
+    return null;
+};
+
 export {
     EditOp,
     type PortSpec,
@@ -3221,6 +3309,8 @@ export {
     ResetOp,
     EntityTransformOp,
     TransformNodeOp,
+    type TransformSubject,
+    placedBy,
     DeleteNodeOp,
     type DeleteWhat,
     TimeOp,

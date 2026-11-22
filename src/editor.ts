@@ -6,7 +6,7 @@ import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { registerCombineEvents } from './combine';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, TimeNodeSettings, timeNodeFrom, TrimOp, RetimeOp, LoopOp, FreezeOp, OffsetOp, CameraOp, CleanupOp, CropOp, DatasetCounts, DatasetOp, PoseOp, PoseMatcher, PoseOptions, poseOptionsFrom, ResizeOp, ResizeSettings, DatasetInput, ImageCropSettings, isDatasetInput, isImageNode, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, SplitOp, SplitBuilt, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
+import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, TransformSubject, TimeNodeSettings, timeNodeFrom, TrimOp, RetimeOp, LoopOp, FreezeOp, OffsetOp, CameraOp, CleanupOp, CropOp, DatasetCounts, DatasetOp, PoseOp, PoseMatcher, PoseOptions, poseOptionsFrom, ResizeOp, ResizeSettings, DatasetInput, ImageCropSettings, isDatasetInput, isImageNode, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, SplitOp, SplitBuilt, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -609,14 +609,21 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         });
     });
 
-    // A transform node starts as no transform at all: something to type into.
-    events.on('graph.addTransformNode', (target?: Splat) => {
-        addTarget(target).forEach(splat => appendAndOpen(new TransformNodeOp(splat)));
+    // A transform node starts as no transform at all: something to type
+    // into. On an object, or on anything else with a position and a turn -
+    // a light, a primitive, a camera object, a pose node's cameras - named
+    // by the lane it was dragged out of.
+    events.on('graph.addTransformNode', (target?: TransformSubject) => {
+        if (target && !(target instanceof Splat)) {
+            appendAndOpen(new TransformNodeOp(target));
+            return;
+        }
+        addTarget(target as Splat).forEach(splat => appendAndOpen(new TransformNodeOp(splat)));
     });
 
-    // a transform node for an object, holding this: a project's come back
-    // through here
-    events.function('transform.addNode', (splat: Splat, stored?: { position?: number[], rotation?: number[], scale?: number[], bypassed?: boolean }) => {
+    // a transform node for an object (or a light, a primitive, a camera,
+    // a pose node's cameras), holding this: a project's come back through here
+    events.function('transform.addNode', (splat: TransformSubject, stored?: { position?: number[], rotation?: number[], scale?: number[], bypassed?: boolean }) => {
         if (!splat) return null;
         const vec = (v: number[] | undefined, fallback: number) => {
             return Array.isArray(v) && v.length === 3 && v.every(Number.isFinite) ? new Vec3(v[0], v[1], v[2]) : new Vec3(fallback, fallback, fallback);
@@ -625,7 +632,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         const euler = vec(stored?.rotation, 0);
         const scale = vec(stored?.scale, 1);
         // an align or ground plane node is a transform node with more to it
-        const op: TransformNodeOp = ((stored as any)?.kind && events.invoke('motion.transformLike', splat, stored, position, euler, scale)) ||
+        const op: TransformNodeOp = ((stored as any)?.kind && splat instanceof Splat && events.invoke('motion.transformLike', splat, stored, position, euler, scale)) ||
             new TransformNodeOp(splat, position, euler, scale);
         op.bypassed = !!stored?.bypassed;
         unpackKeys(op, (stored as any)?.keys);

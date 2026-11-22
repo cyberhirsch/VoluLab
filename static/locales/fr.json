@@ -393,6 +393,7 @@
     "camera.focus-on-selection": "Mettre au point sur la sélection",
     "node.transform.reset": "réinitialiser",
     "node.transform.note": "Déplace, tourne et met à l'échelle l'objet autour de l'origine de la scène, par-dessus les nœuds précédents.",
+    "node.transform.cameras-note": "Déplace, tourne et met à l'échelle les caméras du nœud de pose et leurs points autour de l'origine de la scène ; le nœud d'entraînement s'entraîne avec elles là où elles arrivent. Une caméra prend une seule échelle, la moyenne des trois, et aucun miroir.",
     "node.delete.what": "supprimer",
     "node.delete.selected": "sélectionnées",
     "node.delete.unselected": "non sélectionnées",

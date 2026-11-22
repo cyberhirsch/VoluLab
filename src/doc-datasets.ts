@@ -195,14 +195,16 @@ const entryBlob = async (file: Blob, zipFs: ZipReadFileSystem, name: string, typ
 /**
  * Put the import, pose and train nodes back in the history at their
  * places (through `later`), and wire them up once all are in. Returns
- * the wiring step, which runs after every node has been added.
+ * the wiring step, which runs after every node has been added, and the
+ * pose nodes in the order the project lists them, for what stands on
+ * their cameras.
  */
 const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSystem, loaded: Splat[], scene: Scene, later: Later, events: Events) => {
     const storedDatasets: any[] = Array.isArray(document.datasets) ? document.datasets : [];
     const storedImageNodes: any[] = Array.isArray(document.imageNodes) ? document.imageNodes : [];
     const storedPoses: any[] = Array.isArray(document.poses) ? document.poses : [];
     const storedTrains: any[] = Array.isArray(document.trains) ? document.trains : [];
-    if (!storedDatasets.length && !storedImageNodes.length && !storedPoses.length && !storedTrains.length) return () => {};
+    if (!storedDatasets.length && !storedImageNodes.length && !storedPoses.length && !storedTrains.length) return { wire: () => {}, poses: [] as PoseOp[] };
 
     const datasets: (DatasetOp | null)[] = [];
     for (let i = 0; i < storedDatasets.length; i++) {
@@ -357,7 +359,7 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
     }
 
     // wired once every node is in, whatever order they went in
-    return () => {
+    const wire = () => {
         // a stored reference to an import or image node
         const inputOf = (ref: any): DatasetInput | null => (typeof ref?.image === 'number' ? imageNodes[ref.image] ?? null :
             (typeof ref?.dataset === 'number' ? datasets[ref.dataset] ?? null : null));
@@ -442,6 +444,7 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
         });
         events.fire('pose.changed', null);
     };
+    return { wire, poses };
 };
 
 export { storeDatasets, restoreDatasets, type ProjectFile };

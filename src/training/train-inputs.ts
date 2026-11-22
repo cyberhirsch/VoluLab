@@ -1,5 +1,6 @@
 import { flattenNames } from './bridge-ingest';
 import { TrainSource } from './brush-engine';
+import { isIdentityPlacement, placeModelFiles, placeTrainSource } from './camera-placement';
 import { packDataset } from './dataset';
 import { Frame, frameOf, imageSize } from './image-nodes';
 import { TrainOp } from '../edit-ops';
@@ -189,14 +190,30 @@ const fitCamera = (c: Camera, width: number, height: number, ax: number, bx: num
  * The train node's dataset as the trainer gets it. Most of the time that
  * is one input's own; with images and cameras from different copies, the
  * pair is put together here. `note` hears what was matched.
+ *
+ * Cameras that transform nodes have moved (PoseOp.placement) go to the
+ * trainer moved, with their points: the files that say where they are
+ * are written again (camera-placement.ts), so the splat trained stands
+ * where the cameras were put.
  */
 const resolveTrainSource = async (op: TrainOp, note: (text: string) => void = () => {}): Promise<TrainSource | null> => {
     const ready = op.dataset;
     if (!ready) return null;
-    if (ready !== 'fit') return ready as TrainSource;
 
     const cameras = op.camerasOp;
-    const sparse = cameras.sparse;
+    // the cameras' placement counts where the dataset trained is theirs:
+    // not where the images input brings a posed dataset of its own
+    const placement = cameras && (ready === 'fit' || ready === cameras.source || !op.imagesOp || op.imagesOp === cameras.datasetOp) ?
+        cameras.placement : undefined;
+    const placed = !isIdentityPlacement(placement);
+
+    if (ready !== 'fit') {
+        if (!placed) return ready as TrainSource;
+        note(`cameras transformed: ${cameras.cameras.length || 'all'} cameras and their points`);
+        return await placeTrainSource(ready as TrainSource, placement);
+    }
+
+    const sparse = placed ? placeModelFiles(cameras.sparse, placement) : cameras.sparse;
     const posedImages = ((cameras.datasetOp?.source as any)?.images ?? []) as { name: string, data: Blob }[];
     const trainImages = flattenNames(((op.imagesOp.source as any)?.images ?? []) as { name: string, data: Blob }[])
     .map((image, k) => ({ ...image, frame: frameOf(((op.imagesOp.source as any).images)[k]) }));

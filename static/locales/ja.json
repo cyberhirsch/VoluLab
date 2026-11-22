@@ -393,6 +393,7 @@
     "camera.focus-on-selection": "選択にフォーカス",
     "node.transform.reset": "リセット",
     "node.transform.note": "上流のノードの結果に重ねて、シーンの原点を基準にオブジェクトを移動・回転・拡大縮小します。",
+    "node.transform.cameras-note": "ポーズノードのカメラとその点をシーン原点を中心に移動・回転・拡大縮小します。トレーニングノードは移動後のカメラで学習します。カメラのスケールは3軸の平均の1つだけで、反転はできません。",
     "node.delete.what": "削除",
     "node.delete.selected": "選択部分",
     "node.delete.unselected": "非選択部分",

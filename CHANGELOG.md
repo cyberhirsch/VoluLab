@@ -9,6 +9,62 @@ months finds out why before they change it.
 
 ---
 
+## Transform nodes on a pose node's cameras
+
+A transform node now stands on anything with a position and a turn, not
+only on an object (`TransformSubject` in edit-ops.ts). The first such
+thing is a pose node's cameras: drag out of a pose node's cameras output,
+pick transform, and the node moves, turns and scales the whole camera
+set and the points they came with. The train node wired to that output
+trains on the cameras where they ended up, so the splat comes out in that
+frame: level a capture, re-centre it or fix its up axis before training.
+It works the same on cameras posed in the browser, through the bridge, or
+read from a COLMAP model or a transforms.json already in the dataset.
+
+**Where the transform lives.** The pose node keeps the cameras as found
+(`PoseOp.cameras`) and a `placement` beside them, which its transform
+nodes compose into while applied and take back out when undone, bypassed
+or replayed - the same do/undo as an object's transform node, with the
+placement standing in for the entity. Nothing about the found cameras is
+rewritten, so a project keeps the pose node's model files as they were
+and its transform nodes go back on top of them. The placement is never
+stored; the nodes are.
+
+**One rule, two readers.** `src/training/camera-placement.ts` turns a
+placement into what a camera can take - a rotation, a translation and
+one scale, the geometric mean of the three; a camera cannot be sheared
+or mirrored - and both the frustums (`placeCamera`) and the trainer's
+dataset (`placeTrainSource`, `placeModelFiles`) go through it, so what
+is drawn is what is trained. The trainer's side is applied in
+`resolveTrainSource` (train-inputs.ts), the one place a train node's
+dataset is put together: images.bin/.txt get new poses (R' = R Rp^T,
+t' = s t - R' T), points3D.bin/.txt new positions, a transforms.json new
+camera-to-world matrices; every other file goes through untouched and
+the set is packed as a zip. A folder's files are handed on as the
+browser's blobs; a zip's are read into memory. Where images and cameras
+come from different copies ('fit'), the pose node's model is placed
+before it is fitted. The scene's frame is COLMAP's turned 180 degrees
+about z (pose-read.ts), so the placement's rotation axis and
+translation have x and y negated on the way.
+
+**In the graph.** A transform node on the cameras sits in the pose
+node's lane, after it, and its output carries 'cameras' like the pose
+node's: it fits a train node's cameras input, and the train node's wire
+is drawn from the end of the lane, as an object's wire is. The train
+node still holds the pose node itself (`camerasOp`), which is why an old
+project, and the wire, need nothing new.
+
+**Saving.** `transforms` entries name what they stand on: `splat` as
+before, or `pose` (doc-transforms.ts). A project from before has only
+`splat` and reads as it did.
+
+`training.source` (train-run.ts) returns the dataset a run would hand the
+trainer, without starting one - what the tests above read back.
+
+Not covered: the `ply_file_path` point cloud a transforms.json may name
+is passed on unmoved, and a train node's seed object is not moved with
+the cameras.
+
 ## Capture-side nodes: resize, 2d crop, import and pose do more
 
 **Resize.** One number with a hidden preset list was all the resize node

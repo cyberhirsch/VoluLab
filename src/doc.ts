@@ -8,6 +8,7 @@ import { storeLookNodes } from './doc-looks';
 import { packMotion, storedMotion, unpackMotion } from './doc-motion';
 import { restoreStateNode, storeStateNodes } from './doc-nodes';
 import { restoreColourNodes, restoreTimeNodes, storeColourNodes, storeTimeNodes } from './doc-time';
+import { posesOf, restoreSubjectTransforms, storeSubjectTransforms } from './doc-transforms';
 import { DebugViewOp, EditOp, LightOp, PrimitiveOp, RelightOp, TransformNodeOp } from './edit-ops';
 import { ElementType } from './element';
 import { Events } from './events';
@@ -476,7 +477,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             restoreTimeNodes(document, loaded, later, events);
             restoreColourNodes(document, loaded, later, events);
             // import, pose and train nodes, wired once all are in (doc-datasets.ts)
-            const wireDatasets = await restoreDatasets(document, file, zipFs, loaded, scene, later, events);
+            const { wire: wireDatasets, poses } = await restoreDatasets(document, file, zipFs, loaded, scene, later, events);
+            // transform nodes on pose nodes' cameras (doc-transforms.ts)
+            restoreSubjectTransforms(document, { light: [], primitive: [], camera: [], pose: poses }, later, events);
 
             // in, in order (the sort is stable, so nodes without a place
             // keep the order they were listed in), and where they were put
@@ -659,6 +662,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 return base ? { base, nodes } : null;
             });
 
+            // the transform nodes on pose nodes' cameras
+            const subjectTransforms = storeSubjectTransforms(allOps, cursor, { light: [], primitive: [], camera: [], pose: posesOf(allOps, cursor) }, placeOf);
+
             const document = {
                 // .vlp starts its own numbering; an .ssproj is version 0 of a
                 // different format and is detected by what it lacks
@@ -700,8 +706,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     };
                 }),
 
-                // each object's transform nodes, in the order of its chain
-                transforms: placements.flatMap((placed, i) => (placed?.nodes ?? []).map(node => ({
+                // each object's transform nodes, in the order of its chain,
+                // then those on pose nodes' cameras
+                transforms: [...placements.flatMap((placed, i) => (placed?.nodes ?? []).map(node => ({
                     splat: i,
                     position: pack3(node.newt.position),
                     rotation: pack3(node.euler),
@@ -714,7 +721,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     ...((node as any).docSettings ?? {}),
                     ...((node as any).reference instanceof Splat ? { reference: splats.indexOf((node as any).reference) } : {}),
                     ...placeOf(node)
-                }))),
+                }))), ...subjectTransforms.transforms],
 
                 // each object's select, hide and delete nodes
                 nodes: stateNodes.flatMap(stored => (stored?.nodes ?? []).map((node) => {

@@ -393,6 +393,7 @@
     "camera.focus-on-selection": "Focus on Selection",
     "node.transform.reset": "reset",
     "node.transform.note": "Moves, turns and scales the object about the scene origin, on top of the nodes above it.",
+    "node.transform.cameras-note": "Moves, turns and scales the pose node's cameras and their points about the scene origin; the train node trains on them where they end up. A camera takes one scale, the mean of the three, and no mirror.",
     "node.delete.what": "delete",
     "node.delete.selected": "selected",
     "node.delete.unselected": "unselected",

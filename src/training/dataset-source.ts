@@ -44,6 +44,8 @@ const blobOf = async (source: TrainSource): Promise<Blob | null> => {
 type DatasetReader = {
     list: string[];
     read: (path: string) => Promise<Uint8Array>;
+    /** a folder's file as the browser's own blob, without reading it */
+    blob?: (path: string) => Promise<Blob>;
     close: () => void;
 };
 
@@ -54,6 +56,7 @@ const openDataset = async (source: TrainSource): Promise<DatasetReader | null> =
         return {
             list: entries.map(e => e.path),
             read: async path => new Uint8Array(await (await byPath.get(path).getFile()).arrayBuffer()),
+            blob: path => byPath.get(path).getFile(),
             close: () => {}
         };
     }

@@ -393,6 +393,7 @@
     "camera.focus-on-selection": "선택에 초점",
     "node.transform.reset": "초기화",
     "node.transform.note": "위쪽 노드의 결과 위에, 씬 원점을 기준으로 오브젝트를 이동, 회전, 스케일합니다.",
+    "node.transform.cameras-note": "포즈 노드의 카메라와 그 점들을 씬 원점을 기준으로 이동, 회전, 크기 조절합니다. 학습 노드는 이동된 위치의 카메라로 학습합니다. 카메라는 세 축의 평균인 하나의 크기만 받으며 반전은 되지 않습니다.",
     "node.delete.what": "삭제",
     "node.delete.selected": "선택됨",
     "node.delete.unselected": "선택 안 됨",

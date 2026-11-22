@@ -239,6 +239,10 @@ const registerTraining = (events: Events, scene: Scene) => {
         }
     });
 
+    // the dataset a run of this node would hand the trainer, without
+    // starting one: what its images and cameras inputs come to
+    events.function('training.source', (op: TrainOp) => (op?.dataset ? resolveTrainSource(op) : Promise.resolve(null)));
+
     events.on('training.start', async (op: TrainOp) => {
         if (!op?.dataset) return;
         // a run already coming up owns the engine until it has its Training;
