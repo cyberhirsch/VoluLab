@@ -17,6 +17,7 @@
 
 import { Entity, Quat, Vec3 } from 'playcanvas';
 
+import { type DepthDraw, holdoutCopyDraw, releaseCopyDraw } from './holdout';
 import { MotionSorter } from './motion-sort';
 import { Splat } from './splat';
 import { State } from './splat-state';
@@ -85,10 +86,14 @@ class Copy {
     private sorter: MotionSorter | null = null;
     private time = NaN;
     private definesKey = '';
+    /** its holdout's depth draw, while the object holds out (holdout.ts) */
+    private holdout: DepthDraw | null = null;
+    private source: Splat;
     hidden = false;
 
     constructor(source: Splat, placement: Placement) {
         this.placement = placement;
+        this.source = source;
         const { scene } = source;
         this.entity = new Entity('splatCopy');
         this.entity.addComponent('gsplat', { asset: source.asset, unified: false });
@@ -153,6 +158,10 @@ class Copy {
         const p = source.entity.getLocalPosition();
         entity.setLocalPosition(p.x + offset.x, p.y + offset.y, p.z + offset.z);
         entity.enabled = source.entity.enabled && !this.hidden;
+
+        // it draws the object's state, holdout bit and all, so it holds out
+        // where the object does
+        this.holdout = holdoutCopyDraw(source, this.holdout, entity);
     }
 
     /** A 4D object's copy at a frame of the timeline, this copy's frames later. */
@@ -176,6 +185,8 @@ class Copy {
     }
 
     destroy() {
+        releaseCopyDraw(this.source, this.holdout);
+        this.holdout = null;
         this.sorter?.destroy();
         this.sorter = null;
         this.entity.destroy();
