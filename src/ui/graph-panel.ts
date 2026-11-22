@@ -2,6 +2,7 @@ import { Container } from '@playcanvas/pcui';
 
 import { AnimTrackEditOp, DatasetOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, PortSpec, PrimitivePoseOp, SelectOp, SelectStep, ShapeTransformOp, SourceKind, principalOp } from '../edit-ops';
 import { Events } from '../events';
+import { LOOK_LABELS, LOOK_NODES } from '../look/nodes';
 import { SceneLight } from '../scene-light';
 import { ScenePrimitive } from '../scene-primitive';
 import { describeQuery, isParametric } from '../select-query';
@@ -110,7 +111,9 @@ const OP_LABELS: Record<string, string> = {
     renderPasses: 'render passes',
     viewer: 'viewer',
     cache: 'cache',
-    stats: 'stats'
+    stats: 'stats',
+    // the cleanup and look nodes
+    ...LOOK_LABELS
 };
 
 // A bundled edit is named by the member that does the work, not by the fact
@@ -1180,6 +1183,11 @@ class GraphPanel extends Container {
                         label: 'split',
                         action: () => this.events.fire('graph.addSplitNode', splat)
                     },
+                    // the cleanup and look nodes
+                    ...LOOK_NODES.map(n => ({
+                        label: n.label,
+                        action: () => this.events.fire('graph.addLookNode', n.kind, splat)
+                    })),
                     {
                         label: 'cleanup',
                         action: () => this.events.fire('graph.addCleanupNode', splat)
@@ -1503,6 +1511,13 @@ class GraphPanel extends Container {
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addSplitNode')
             },
+            // the cleanup and look nodes
+            ...LOOK_NODES.map(n => ({
+                label: `add ${n.label} node`,
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addLookNode', n.kind)
+            })),
             {
                 label: 'add cleanup node',
                 disabled: !splat,

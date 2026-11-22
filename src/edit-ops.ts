@@ -1884,13 +1884,18 @@ class SplitOp {
     }
 
     /** what the graph writes under the node's title */
-    get sourceLabel() {
+    get sourceLabel(): string {
         return this.mode;
     }
 
     /** whether the new object is in the scene: with nothing selected there is none */
     get applied() {
         return !!this.output?.scene;
+    }
+
+    /** the source's rows that become the new object: what is selected (a subclass picks others) */
+    protected pickRows(source: Splat): Uint32Array {
+        return selectedRows(source);
     }
 
     async do() {
@@ -1900,7 +1905,7 @@ class SplitOp {
         const { fresh } = this;
         this.fresh = false;
 
-        const rows = selectedRows(source);
+        const rows = this.pickRows(source);
         this.selectedIn = rows.length;
         // nothing selected: nothing to split off, and nothing leaves the source
         if (!rows.length) return;

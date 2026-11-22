@@ -7,6 +7,7 @@ import { fieldDefault } from './value-fields';
 import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplitOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { isInspectOp } from '../inspect-ops';
+import { type FieldNode, type FieldSpec, isFieldNode } from '../look/fields';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
 import type { LoopMode, OffsetOutside } from '../time-map';
@@ -172,6 +173,13 @@ class NodePanel extends Container {
         // A transform arrives wrapped with the pivot placement that went with
         // it, so the node's settings are the ones inside the bundle.
         const op = principalOp(outer);
+
+        // the cleanup and look nodes list their own settings
+        if (isFieldNode(op)) {
+            this.empty.hidden = true;
+            this.buildFields(op, index);
+            return;
+        }
 
         // Both colour nodes show the same panel; what differs is whether it
         // edits the object's grade or the node's own.
@@ -938,6 +946,80 @@ class NodePanel extends Container {
         };
         note(n === 0 ? 'node.split.none' : 'node.split.note');
         if (op.inputs?.[0]?.motion) note('node.split.note-4d');
+    }
+
+    /**
+     * A node that lists its own settings (look/fields.ts): each one
+     * drawn with the same rows the other nodes use, and each change replays
+     * the node. Labels, option texts and notes are i18n keys.
+     */
+    private buildFields(op: FieldNode, index: number) {
+        const scene = (window as any).scene;
+        const t = (key: string) => (key.startsWith('node.') ? i18n.t(key) : key);
+        op.fields(scene).forEach((field: FieldSpec) => {
+            switch (field.kind) {
+                case 'slider':
+                    this.replaySlider(t(field.label), field.value, field.min, field.max, field.step, index, field.apply, field.format ? v => t(field.format(v)) : undefined);
+                    break;
+                case 'number':
+                    this.replayNumber(t(field.label), field.value, field.step, field.neutral, index, field.apply);
+                    break;
+                case 'choice':
+                    this.replayChoice(t(field.label), field.options.map(([v, text]) => [v, t(text)] as [string, string]), field.value, index, field.apply);
+                    break;
+                case 'colour': {
+                    const row = this.row(t(field.label));
+                    const input = document.createElement('input');
+                    input.type = 'color';
+                    input.className = 'nd-colour';
+                    const hex = (v: number) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0');
+                    input.value = `#${field.value.map(hex).join('')}`;
+                    input.addEventListener('change', () => {
+                        const v = input.value;
+                        const rgb = [1, 3, 5].map(i => parseInt(v.slice(i, i + 2), 16) / 255) as [number, number, number];
+                        this.events.invoke('edit.refresh', index, () => field.apply(rgb));
+                    });
+                    row.appendChild(input);
+                    this.body.appendChild(row);
+                    break;
+                }
+                case 'object': {
+                    const row = this.row(t(field.label));
+                    const select = document.createElement('select');
+                    select.className = 'nd-select';
+                    const splats = ((this.events.invoke('scene.allSplats') ?? []) as Splat[]).filter(s => s !== field.exclude);
+                    const none = document.createElement('option');
+                    none.value = '-1';
+                    none.textContent = i18n.t('node.look.none');
+                    select.appendChild(none);
+                    splats.forEach((s, i) => {
+                        const option = document.createElement('option');
+                        option.value = String(i);
+                        option.textContent = s.name;
+                        select.appendChild(option);
+                    });
+                    select.value = String(splats.indexOf(field.value));
+                    select.addEventListener('keydown', e => e.stopPropagation());
+                    select.addEventListener('change', () => {
+                        const picked = splats[parseInt(select.value, 10)] ?? null;
+                        this.events.invoke('edit.refresh', index, () => field.apply(picked));
+                    });
+                    row.appendChild(select);
+                    this.body.appendChild(row);
+                    break;
+                }
+                case 'stat':
+                    this.stat(t(field.label), field.raw ? field.value : t(field.value));
+                    break;
+                case 'note': {
+                    const el = document.createElement('div');
+                    el.className = 'nd-note';
+                    el.textContent = t(field.text);
+                    this.body.appendChild(el);
+                    break;
+                }
+            }
+        });
     }
 
     private row(label: string): HTMLElement {

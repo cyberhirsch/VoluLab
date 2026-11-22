@@ -85,6 +85,12 @@ type RelightSettings = {
     delightFloor: number;
     /** whether the capture de-light divides out still has the deleted gaussians in it */
     delightSeesDeleted: boolean;
+    /**
+     * Shadow catcher, 0..1: the object keeps its captured look and only takes
+     * the shadows the lights cast on it - what the other objects in the scene
+     * put between it and a light - at this strength. 0 relights it as usual.
+     */
+    shadowCatcher?: number;
 };
 
 const defaultRelightSettings = (): RelightSettings => ({
@@ -94,7 +100,8 @@ const defaultRelightSettings = (): RelightSettings => ({
     occlusionStrength: 1,
     delight: 0.5,
     delightFloor: 0.2,
-    delightSeesDeleted: true
+    delightSeesDeleted: true,
+    shadowCatcher: 0
 });
 
 // A grid's pyramid: eight levels up to 256 cells, and one more for each
@@ -119,7 +126,8 @@ const normalizeRelightSettings = (s: Partial<RelightSettings>): RelightSettings 
         occlusionStrength: Math.min(1, Math.max(0, num(s.occlusionStrength, d.occlusionStrength))),
         delight: Math.min(1, Math.max(0, num(s.delight, d.delight))),
         delightFloor: Math.min(1, Math.max(0.02, num(s.delightFloor, d.delightFloor))),
-        delightSeesDeleted: s.delightSeesDeleted !== false
+        delightSeesDeleted: s.delightSeesDeleted !== false,
+        shadowCatcher: Math.min(1, Math.max(0, num(s.shadowCatcher, 0)))
     };
 };
 
@@ -1147,6 +1155,12 @@ class Relighter {
 
     private kernels: Kernels = null;
     private grid: DensityGrid = null;
+    // A shadow catcher takes the shadows of the other objects only, so its
+    // shadows are traced through a grid of what casts them: every object but
+    // the catchers. Kept while any object is one.
+    private casterGrid: DensityGrid = null;
+    // the catchers the caster grid was built without
+    private seenCatchers = '';
     private entries = new Map<Splat, SplatLighting>();
     private lightBuffer: StorageBuffer = null;
     private lightData = new Float32Array(LIGHT_BUFFER_FLOATS);
@@ -1248,6 +1262,9 @@ class Relighter {
         this.entries.clear();
         this.grid?.destroy();
         this.grid = null;
+        this.casterGrid?.destroy();
+        this.casterGrid = null;
+        this.seenCatchers = '';
         this.lightBuffer?.destroy();
         this.lightBuffer = null;
         this.active = false;
@@ -1335,7 +1352,8 @@ class Relighter {
             const settings = splat.relight ? normalizeRelightSettings(splat.relight) : null;
             const seenSettings = settings ? [
                 1, settings.capturedLight, settings.resolution, settings.occlusionRange,
-                settings.occlusionStrength, settings.delight, settings.delightFloor, settings.delightSeesDeleted ? 1 : 0
+                settings.occlusionStrength, settings.delight, settings.delightFloor, settings.delightSeesDeleted ? 1 : 0,
+                settings.shadowCatcher
             ] : [0];
             const changed = (i: number) => entry.seenSettings[i] !== seenSettings[i];
             if (changed(0)) {
@@ -1345,7 +1363,7 @@ class Relighter {
             } else if (settings) {
                 if (changed(2)) this.gridDirty = true;
                 if (changed(3)) this.occlusionDirty = true;
-                if (changed(1) || changed(4)) this.lightingDirty = true;
+                if (changed(1) || changed(4) || changed(8)) this.lightingDirty = true;
                 if (changed(5) || changed(6)) {
                     entry.delightDirty = true;
                     this.lightingDirty = true;
@@ -1468,6 +1486,19 @@ class Relighter {
             this.grid.release();
         }
 
+        // which objects are shadow catchers: another set of them is another
+        // caster grid
+        const catchers = relit.filter(entry => (entry.settings.shadowCatcher ?? 0) > 0);
+        const catcherKey = catchers.map(entry => entry.splat.uid).join(',');
+        if (catcherKey !== this.seenCatchers) {
+            this.seenCatchers = catcherKey;
+            this.gridDirty = true;
+        }
+        if (!catchers.length && this.casterGrid) {
+            this.casterGrid.destroy();
+            this.casterGrid = null;
+        }
+
         // GPU-played 4D models are moved to the time they show just before
         // anything reads their gaussians
         const moveToTime = () => {
@@ -1499,6 +1530,10 @@ class Relighter {
                 moveToTime();
                 if (needGrid && this.gridDirty) {
                     this.buildGrid(entries, resolution);
+                    if (catchers.length) {
+                        this.casterGrid ??= new DensityGrid(device, this.kernels);
+                        this.buildGrid(entries.filter(entry => !catchers.includes(entry)), resolution, this.casterGrid, entries);
+                    }
                     this.gridDirty = false;
                     this.occlusionDirty = true;
                 }
@@ -1573,14 +1608,15 @@ class Relighter {
         return used;
     }
 
-    private buildGrid(entries: SplatLighting[], resolution: number) {
+    private buildGrid(entries: SplatLighting[], resolution: number, grid = this.grid, spanned = entries) {
         const start = performance.now();
-        const { device, grid } = this;
+        const { device } = this;
 
         // every drawn gaussian, where it is now: hidden and deleted ones cast
-        // no shadow
+        // no shadow. The box is that of `spanned`, the whole scene, also for
+        // a grid of only some of it (the casters')
         const skip = STATE_LOCKED | STATE_DELETED;
-        const box = robustBox(entries, skip, false) ?? { min: [-1, -1, -1], max: [1, 1, 1] };
+        const box = robustBox(spanned, skip, false) ?? { min: [-1, -1, -1], max: [1, 1, 1] };
         grid.layout(box, resolution);
         grid.clear();
 
@@ -1753,10 +1789,13 @@ class Relighter {
 
     private light(entries: SplatLighting[], lightCount: number, ambient: boolean) {
         const start = performance.now();
-        const { device, grid, kernels } = this;
+        const { device, kernels } = this;
 
         for (const entry of entries) {
             const { splat, lighting, settings } = entry;
+            // a shadow catcher's shadows come from the casters' grid
+            const catcher = (settings?.shadowCatcher ?? 0) > 0 && this.casterGrid;
+            const grid = catcher ? this.casterGrid : this.grid;
             lighting.setParameter('gaussians', entry.gaussians);
             // an object with no relight node reads no grid, and there may be none
             lighting.setParameter('density', grid.density ?? kernels.emptyGrid);
@@ -1774,7 +1813,8 @@ class Relighter {
             lighting.setParameter('gridDims', grid.gridDims);
             lighting.setParameter('delightPlus', entry.delightPlus ?? kernels.noOcclusion);
             lighting.setParameter('delightMinus', entry.delightMinus ?? kernels.noOcclusion);
-            lighting.setParameter('counts', [entry.count, entry.width, lightCount, 0]);
+            // w: the shadow catcher's strength, in thousandths
+            lighting.setParameter('counts', [entry.count, entry.width, lightCount, Math.round((settings?.shadowCatcher ?? 0) * 1000)]);
             // without a relight node: all of the captured light, and the
             // lights added to it unshadowed
             lighting.setParameter('params', settings ? [settings.capturedLight, WRAP, RAY_OFFSET_CELLS, 0] : [1, WRAP, RAY_OFFSET_CELLS, 1]);

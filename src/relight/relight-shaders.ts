@@ -1177,7 +1177,7 @@ struct Uniforms {
     matrixModel: mat4x4f,
     gridOrigin: vec4f,      // xyz: grid min corner, w: finest cell size
     gridDims: vec4u,        // xyz: finest dims, w: level count
-    counts: vec4u,          // x: gaussians, y: texture width, z: lights that add
+    counts: vec4u,          // x: gaussians, y: texture width, z: lights that add, w: shadow catcher strength in thousandths
     params: vec4f,          // x: captured light, y: wrap, z: ray offset in cells, w: 1 for no shadows
     ambient: vec4f          // x: 1 when there is ambient light, y: occlusion strength, z: 1 when de-light is on, w: 1 when occlusion is there
 };
@@ -1225,6 +1225,31 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u, 
     }
 
     let surface = surfaceOf(i, splatWorld(uv));
+
+    // Shadow catcher: the captured look stays, and each side only darkens
+    // by the share of the lights' light the grid shuts out of it - shadowed
+    // over unshadowed. Ambient light and de-light do not come into it.
+    let catcher = f32(uniforms.counts.w) / 1000.0;
+    if (catcher > 0.0) {
+        var shutPlus = vec3f(0.0);
+        var shutMinus = vec3f(0.0);
+        var openPlus = vec3f(0.0);
+        var openMinus = vec3f(0.0);
+        for (var li = 0u; li < uniforms.counts.z; li++) {
+            let shut = lightFrom(li, surface, 0.0, true);
+            let open = lightFrom(li, surface, 0.0, false);
+            shutPlus += shut.plus;
+            shutMinus += shut.minus;
+            openPlus += open.plus;
+            openMinus += open.minus;
+        }
+        let tiny = vec3f(1e-6);
+        let seenPlus = select(vec3f(1.0), min(shutPlus / max(openPlus, tiny), vec3f(1.0)), openPlus > tiny);
+        let seenMinus = select(vec3f(1.0), min(shutMinus / max(openMinus, tiny), vec3f(1.0)), openMinus > tiny);
+        textureStore(lightPlus, uv, vec4f(mix(vec3f(1.0), seenPlus, catcher), 1.0));
+        textureStore(lightMinus, uv, vec4f(mix(vec3f(1.0), seenMinus, catcher), 1.0));
+        return;
+    }
 
     var plus = base;
     var minus = base;

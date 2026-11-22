@@ -95,6 +95,191 @@ faces in `ui/inspect-panel.ts`, their project entries (`inspectNodes`) in
 
 ---
 
+## Relight: shadow catcher
+
+A relight node's "shadow catcher" (0..1) keeps the object's captured look
+and lets it only take shadows: each side of each gaussian is darkened by
+the share of the lights' light that is shut out of it, shadowed over
+unshadowed, at that strength. Ambient light and de-light do not come into
+it. The strength reaches the lighting kernel in the counts' spare w.
+
+The shadows have to be the other objects': traced through the scene's
+grid, a capture shadows itself a second time - on the alley sample under
+a sun that took the picture from a mean of 66 to 13. So while any object
+is a catcher the relighter builds a second density grid of every object
+but the catchers, over the same box, and a catcher's lighting reads that
+one. On the alley sample split into its still and moving parts, with the
+still part a catcher: 32 to 34 dB from the captured look where the relit
+picture is 19.6 dB from it. WebGPU only, as relighting is.
+
+The PRD's ground plane catcher is not built: a plane would have to be
+drawn, and the splat renderer draws gaussians.
+
+## Fog / depth tint
+
+Sits an inserted object into a scene by fading it towards a fog colour:
+by distance from the camera (view depth), or by height (full below one
+world height, gone above another). It is drawn in the splat shader, GLSL
+and WGSL, on the lit colour before the camera's exposure - light in the
+scene between the camera and the gaussian - so it follows the camera, the
+viewport and the video export, with no bake. Three uniforms per object
+(`fog.ts`): mode, range and amount; the colour; and the second row of the
+world matrix, which gives a model-space centre its world height.
+
+The object holds the settings while the node is applied (`Splat.fog`),
+the way it holds a relight node's; with several the last applied wins.
+Whole objects only. A file written from the object does not carry it, and
+a project stores the node. The depth range starts at the camera and ends
+at twice the object's distance from it when the node is made - a
+capture's bound is stretched by floaters, the view is not.
+
+## Exposure over time
+
+The automatic half of "exposure / white balance over time"; the manual
+half is the colour node's own exposure and temperature, keyed over time by
+the keyframe work. Each frame's mean colour is measured, opacity and
+lifetime weighted, over a sample of at most 300,000 of the gaussians drawn
+there; the gain per frame takes its luminance (or, with white balance,
+each channel) to the mean over all frames, or with a window to the mean of
+the frames around it, which keeps slow changes. A gaussian is drawn over
+a stretch of frames, so it gets the mean log gain over those (prefix
+sums), quantised to 1/64 stop - a palette slot per distinct gain.
+
+A gaussian in the global set stands in every frame with the same colour,
+so drift lives in the time-local ones and that is where the correction
+lands. The alley sample has no drift to speak of (+-0.002 EV). With one
+made - the moving part's gaussians centred in the second half a stop up -
+it corrects 0.94 EV across the sequence, and a second node after it finds
+0.27 EV left.
+
+## Colour match
+
+Merged captures should read as one scene: this grades an object's colours
+- the selection's, or all of them - so their mean per channel, and with
+"mean and contrast" their spread, are the reference's. The reference is
+another object, or what is selected on it, wired into the node's
+`reference` port or picked in the node pane; with none it does nothing.
+The grade is a per-channel gain and offset on the palette, blended by
+`strength`.
+
+Both sides are measured opacity weighted on the colour each gaussian has
+as the palette leaves it (`gradedColour`): what colour nodes above
+already did counts, the objects' own grades - which apply after the
+palette, in the shader as in the export - do not. On the alley sample,
+the moving part matched to the still part goes from a mean of
+(0.391, 0.389, 0.396) to (0.479, 0.441, 0.418), the still part's to four
+places; unwired it goes back.
+
+## Opacity
+
+Scales opacity, of what the select nodes above selected or of the whole
+object, for fades. A plain number, for the keyframe work to make keyable.
+
+It is the first node on the grade palette (`look/grade-rows.ts`): every
+gaussian in scope goes to a new slot holding the slot it was on composed
+with this node's grade - here an alpha scale - one slot per distinct old
+slot, the way a scoped colour node does it, so it stacks with colour
+nodes and with the nodes after it. Undo puts the slot indices back and
+frees the slots, which were the newest. A project keeps what it did and
+not the node, as for a scoped colour node: baked into a PLY's opacity,
+stored beside a 4D model as its grades. Stored as a node as well, it would
+apply twice on open.
+
+## Freeze background
+
+Replaces the still part with one frame of it. Set to a frame (the frame of
+the model shown when the node is made), the still gaussians drawn at that
+frame at half their peak or more get zero velocity and no falloff - they
+stand at their peak for the whole sequence - and the rest are moved to a
+temporal centre outside the sequence with a steep falloff, so they are
+never drawn. Set to everything, every still gaussian is held. Both are
+motion edits only: positions stay where each gaussian is at its temporal
+centre (a still gaussian moves less than a tenth of its size by default),
+nothing is deleted, and the sort worker now finds the held rows still and
+sorts them once per view. The PRD's median over frames is not built: in
+this model a gaussian has one opacity bump, and holding it at its peak is
+what is left of a median.
+
+## Fill hole
+
+Where a frame lost coverage, the frames around it fill it: every still
+gaussian (global, drifting less than `still` of its thinnest axis while
+drawn) lives `reach` frames longer on each side - its temporal sigma grows
+by reach / frames. That is the neighbouring frames' gaussians copied in,
+without a copy. Moving gaussians are left alone; living longer they would
+leave a trail. A gaussian outside the global set is drawn only within its
+segment of the hierarchy, so it cannot be stretched past it and is not
+touched either. On the alley sample 1,308,265 gaussians qualify; the
+picture moves by 79 to 93 dB, the sample has few holes.
+
+## Flicker removal
+
+Deletes what pops in and out: the gaussians of a 4D model drawn at half
+their peak opacity or more for fewer than `frames` frames - counted within
+the sequence and within the segment the hierarchy draws them in. A
+`StateOp` like cleanup, so it only adds to what is deleted, and a project
+stores it with the other state nodes (`doc-nodes.ts`) with the set it
+deleted. On the alley sample, under 2 frames is 284,885 gaussians (15 %)
+and the picture moves by 55 to 59 dB; under 6 frames 424,414 (23 %).
+Nothing on a 3D object.
+
+## Temporal denoise
+
+Smooths what flickers in a 4D model and keeps what moves. A gaussian whose
+drift over the time it is drawn stays under `keep` times its thinnest axis
+is taken as jitter around a rest pose: its velocity is damped by
+`strength`, and its lifetime is widened by a gaussian of `smooth` frames
+(the variances add: falloff' = 1 / (1 / falloff + 2 (smooth / frames)^2)),
+so it fades in and out over longer. Faster motion is not touched. The
+model's colour is the same at every time per gaussian, so there is no
+colour flicker of a single gaussian to smooth.
+
+It is the first node that edits motion (`look/motion-edit.ts`): the
+velocities, temporal centres and falloffs are copied, edited and handed
+to the object with `Splat.setMotion`, which makes new motion textures and
+a new sort worker; undo hands back the motion it replaced. The splat data
+is not touched, so a project - which stores a 4D model as the file it came
+from - stores the node and applies it again on open. On a 3D object it
+does nothing. On the alley sample it changes 1,318,311 gaussians in about
+1 s; the picture moves by 78 to 79 dB (75 dB at full strength) - the
+sample is clean.
+
+## Still / moving split, and the cleanup and look nodes' frame
+
+The first of the PRD's "cleanup and quality" and "look and grading" nodes.
+A still / moving split is a split node (`SplitOp`) whose rows are picked
+by motion instead of by a selection: `SplitOp.pickRows` is the one hook
+it needed, and the editor's split builder is handed out as
+`graph.buildSplit`, so the part that leaves is built exactly as a split
+node's is - its rows with their motion and hierarchy, a sort worker of its
+own, the time nodes its source had.
+
+The rule is the one the compact GSV export moves gaussians to its static
+page by (`tgh/gsv.ts`, `standsStill`): in the global set, drifting less
+than 0.001 of its thinnest axis over the sequence, and never fading.
+`look/measure.ts` works it out from what the object has - velocity,
+temporal centre and falloff from `Splat.motion`, the log scales from the
+data, the hierarchy from `motion.layout()` - so it holds for a part split
+off a 4D model as well, which has no `TghModel` of its own. The threshold
+scales the drift; with "fading is moving" off a gaussian that fades but
+does not move counts as still. Most of what moves in the alley sample is
+in the hierarchy's segments, so a looser drift changes little
+(558,059 -> 557,296 moving at drift 1).
+
+What the later nodes share comes with it. Each kind is a file in
+`src/look/` and a `LookSpec` in `look/nodes.ts` (menu label, how it is
+made, how a project brings it back). A node lists its settings as fields
+(`look/fields.ts`) and the node pane draws them with the same replaying
+sliders, numbers and choices the other nodes use, so no node adds a face
+of its own. A project keeps the kinds marked `stored` in a `looks` list
+(`doc-looks.ts`); the others are kept as what they did.
+
+Measured on the alley sample (1,866,310 gaussians, 100 frames, headless
+Chrome on WebGPU): 558,059 move; the two parts drawn together match the
+whole at 38.6 and 40.0 dB at frames 10 and 60 (the two are sorted apart,
+as with any split); the split takes 4.7 s. Bypass and undo rejoin them.
+A 3D object is all still and makes no new object.
+
 ## Time nodes and a split node
 
 The graph can now edit time. Five nodes for a 4D model - trim, retime,
