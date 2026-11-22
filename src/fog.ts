@@ -34,15 +34,16 @@ const normalizeFog = (s: Partial<FogSettings>): FogSettings => {
 
 /**
  * The uniforms for an object's fog: [mode (0 off, 1 depth, 2 height),
- * start, end, amount], the colour, and the plane that gives a model-space
- * centre its world height (the second row of the world matrix).
+ * start, end, amount] and the colour. The shader takes a gaussian's height
+ * from the matrix that places it - the object's, through a scoped transform
+ * node's, or an instance copy's own - so nothing here depends on where the
+ * object stands.
  */
-const fogUniforms = (fog: FogSettings | null, world: ArrayLike<number>) => {
-    if (!fog) return { params: [0, 0, 1, 0], colour: [0, 0, 0], plane: [0, 1, 0, 0] };
+const fogUniforms = (fog: FogSettings | null) => {
+    if (!fog) return { params: [0, 0, 1, 0], colour: [0, 0, 0] };
     return {
         params: [fog.mode === 'height' ? 2 : 1, fog.start, Math.max(fog.start + 1e-4, fog.end), fog.amount],
-        colour: fog.colour.slice(),
-        plane: [world[1], world[5], world[9], world[13]]
+        colour: fog.colour.slice()
     };
 };
 

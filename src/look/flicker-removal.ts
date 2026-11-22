@@ -11,10 +11,17 @@ import { State } from '../splat-state';
  * the sequence and their place in the hierarchy - the 4D counterpart of
  * floaters, which pop in and out. Like cleanup it only ever adds to what is
  * deleted, and a project stores it as a node (doc-nodes.ts).
+ *
+ * A sequence of one frame (or one not on the timeline yet) has nothing that
+ * flickers: every gaussian is drawn for at most one frame, so the node does
+ * nothing there rather than delete the model. The threshold is clamped to
+ * the sequence's length, so a gaussian drawn the whole sequence stays.
  */
 class FlickerRemovalOp extends StateOp implements FieldNode {
     name = 'flickerRemoval';
     frames: number;
+    /** the sequence was too short to tell flicker, when it last resolved */
+    tooShort = false;
 
     constructor(splat: Splat, frames = 2) {
         // BitOp.SET: deleting only ever adds to what is deleted
@@ -24,15 +31,18 @@ class FlickerRemovalOp extends StateOp implements FieldNode {
             const n = s.splatData.numSplats;
             const { motion } = s;
             if (!motion) return IndexRanges.fromPredicate(0, () => false);
+            const total = framesOf(s);
+            this.tooShort = total < 2;
+            if (this.tooShort) return IndexRanges.fromPredicate(0, () => false);
+            const limit = Math.min(this.frames, total);
             const { rows } = scopeRows(s);
             const { lo, hi } = rowWindows(motion, n);
-            const total = framesOf(s);
             const doomed = new Uint8Array(n);
             const { velocityTime: vt, falloff } = motion;
             for (let k = 0; k < rows.length; ++k) {
                 const r = rows[k];
                 const [a, b] = lifeOf(vt[r * 4 + 3], falloff[r], lo[r], hi[r], 0.5);
-                if ((b - a) * total < this.frames) doomed[r] = 1;
+                if ((b - a) * total < limit) doomed[r] = 1;
             }
             return IndexRanges.fromPredicate(n, i => doomed[i] === 1);
         };
@@ -64,7 +74,7 @@ class FlickerRemovalOp extends StateOp implements FieldNode {
                     this.setFrames(v);
                 } },
             { kind: 'stat', label: 'node.look.removed', value: count(this.affected), raw: this.affected >= 0 },
-            { kind: 'note', text: 'node.flicker.note' }
+            { kind: 'note', text: this.tooShort ? 'node.flicker.too-short' : 'node.flicker.note' }
         ];
     }
 }

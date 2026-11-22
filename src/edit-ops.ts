@@ -1804,6 +1804,8 @@ class SplitOp {
     // what the output's data was made from: the rows, and the data they were rows of
     private rows: Uint32Array;
     private builtFrom: Asset;
+    // and the motion they had: a node above that edits motion changes it, the data staying
+    private builtMotion: SplatMotion | null;
     // made with the node and not applied since: its data is what `build` just gave
     private fresh = true;
     // the source's rows taken out of it, while it is applied and set to move
@@ -1822,6 +1824,7 @@ class SplitOp {
         this.output = output;
         this.rows = rows;
         this.builtFrom = source.asset;
+        this.builtMotion = source.motion ?? null;
         this.build = build;
         this.mode = mode;
     }
@@ -1857,7 +1860,7 @@ class SplitOp {
         // same data are the same object. A 3D object's are baked with what
         // the nodes above did to them, which may have changed with the rows
         // the same - so that is made again each time.
-        const same = source.asset === this.builtFrom && sameRows(rows, this.rows);
+        const same = source.asset === this.builtFrom && (source.motion ?? null) === this.builtMotion && sameRows(rows, this.rows);
         const stale = !same || (!source.motion && !fresh);
         const built = stale ? await this.build(source, rows) : null;
 
@@ -1872,6 +1875,7 @@ class SplitOp {
             output.timeHidden = false;
             this.rows = rows;
             this.builtFrom = source.asset;
+            this.builtMotion = source.motion ?? null;
         }
 
         if (source.motion) {
@@ -1916,6 +1920,7 @@ class SplitOp {
         this.output = null;
         this.rows = null;
         this.builtFrom = null;
+        this.builtMotion = null;
     }
 }
 
