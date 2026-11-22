@@ -14,10 +14,10 @@
  */
 
 import { CombineOp, LayerOp, MergeOp, SwitchOp, defaultLayerSettings, type CombineContext, type LayerSettings, type MergeSettings, type SwitchSettings } from './combine-ops';
+import { placeholderSplat } from './doc-combine';
 import { produces } from './edit-history';
 import type { EditOp } from './edit-ops';
 import { ElementType } from './element';
-import { placeholderSplat } from './doc-combine';
 import { Events } from './events';
 import { registerInstanceEvents } from './instance';
 import { mergedRotation, type MergeBuilt } from './merge-build';
