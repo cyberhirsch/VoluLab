@@ -42,6 +42,8 @@ type DepthDraw = {
 
 type Holdouts = {
     ops: Set<HoldoutOp>;
+    /** what a merged object holds out of its inputs' (carryHoldout), or null */
+    carried: Uint8Array | null;
     mask: Uint8Array | null;
     /** the state the mask was put on: a sequence frame brings a new one */
     on: object | null;
@@ -142,7 +144,7 @@ const syncAll = () => {
 /** what the holdouts of an object hold out together, as a mask, or null */
 const combinedMask = (splat: Splat, h: Holdouts) => {
     const n = splat.splatData.numSplats;
-    let mask: Uint8Array | null = null;
+    let mask: Uint8Array | null = h.carried && h.carried.length === n ? new Uint8Array(h.carried) : null;
     h.ops.forEach((op) => {
         const ranges = op.resolved;
         if (!ranges) return;
@@ -158,7 +160,7 @@ const update = (splat: Splat) => {
     const h = bySplat.get(splat);
     if (!h) return;
     h.mask = combinedMask(splat, h);
-    if (!h.ops.size) {
+    if (!h.ops.size && !h.carried) {
         if (splat.state) {
             splat.state.overlay = null;
             splat.state.markAllDirty();
@@ -172,9 +174,7 @@ const update = (splat: Splat) => {
     sync(splat, h);
 };
 
-const attach = (op: HoldoutOp) => {
-    const { splat } = op;
-    if (!splat) return;
+const listen = (splat: Splat) => {
     if (!listening && splat.scene) {
         // every frame, before the layers are drawn
         splat.scene.events.on('prerender', syncAll);
@@ -186,9 +186,32 @@ const attach = (op: HoldoutOp) => {
         });
         listening = true;
     }
+};
+
+const holdoutsOf = (splat: Splat) => {
     let h = bySplat.get(splat);
-    if (!h) bySplat.set(splat, h = { ops: new Set(), mask: null, on: null, draw: null });
-    h.ops.add(op);
+    if (!h) bySplat.set(splat, h = { ops: new Set(), carried: null, mask: null, on: null, draw: null });
+    return h;
+};
+
+const attach = (op: HoldoutOp) => {
+    const { splat } = op;
+    if (!splat) return;
+    listen(splat);
+    holdoutsOf(splat).ops.add(op);
+    update(splat);
+};
+
+/**
+ * What a merge or switch node's object holds out of its inputs': a holdout
+ * bit per row, or null for none. It holds them out besides what holdout
+ * nodes on it do.
+ */
+const carryHoldout = (splat: Splat, mask: Uint8Array | null) => {
+    if (!mask && !bySplat.get(splat)?.carried) return;
+    if (mask && !holdoutSupported(splat)) return;
+    listen(splat);
+    holdoutsOf(splat).carried = mask;
     update(splat);
 };
 
@@ -252,4 +275,4 @@ class HoldoutOp extends StateOp {
     }
 }
 
-export { HoldoutOp, holdoutSupported, HOLDOUT_BIT };
+export { HoldoutOp, carryHoldout, holdoutSupported, HOLDOUT_BIT };

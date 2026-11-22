@@ -42,6 +42,7 @@
 import { GSplatData, Quat, Vec3 } from 'playcanvas';
 
 import { dcDecode, dcEncode, gradeMatrix, invSigmoid, sigmoid } from './color-grade';
+import type { FogSettings } from './fog';
 import { toGrade } from './grade-palette';
 import { layoutSegment, type MotionLayout } from './motion-sort';
 import type { Splat, SplatMotion } from './splat';
@@ -80,8 +81,15 @@ type MergeBuilt = {
     rows: number[];
     /** per input, how many times it came in (one per distinct run of time) */
     copies: number[];
-    /** per input, whether it had more runs than it may come in for: some of its time shows nothing */
+    /** per input, whether it had more runs than it may come in for: some of its time shows the nearest kept one */
     limited: boolean[];
+    /**
+     * What the inputs' nodes put on them that is not in their gaussians,
+     * for the merged object to carry: a fog (the first input's that has
+     * one), a motion blur shutter in the merged object's time (the
+     * longest), and the gaussians held out, as a holdout mask per row.
+     */
+    carried: { fog: FogSettings | null, shutter: number, holdout: Uint8Array | null };
 };
 
 /**
@@ -411,18 +419,20 @@ const bakePart = (splat: Splat, bands: number): Part => {
         bakeColumns(splat, rows, bands, columns, transforms);
     }
 
-    // a 4D model's velocities turn and scale with it, as its centres do
+    // a 4D model's velocities turn and scale with it, as its centres do,
+    // and with its motion scale nodes, which the merged object does not have
     let velocity: Float32Array | null = null;
     if (splat.motion) {
         const vt = splat.motion.velocityTime;
+        const speed = splat.motionScale;
         velocity = new Float32Array(count * 3);
         for (let k = 0; k < count; ++k) {
             const r = rows[k];
             vel.set(vt[r * 4], vt[r * 4 + 1], vt[r * 4 + 2]);
             transforms.getMat(r).transformVector(vel, vel);
-            velocity[k * 3] = vel.x;
-            velocity[k * 3 + 1] = vel.y;
-            velocity[k * 3 + 2] = vel.z;
+            velocity[k * 3] = vel.x * speed;
+            velocity[k * 3 + 1] = vel.y * speed;
+            velocity[k * 3 + 2] = vel.z * speed;
         }
     }
 
@@ -454,10 +464,21 @@ const textureHash = (texture: any) => {
     return h;
 };
 
+// an id per array: a node that edits motion (motion-edit.ts) gives the
+// model new arrays, so they tell an edited model from the one before
+const arrayIds = new WeakMap<object, number>();
+let nextArrayId = 1;
+const arrayId = (a: object | null | undefined) => {
+    if (!a) return 0;
+    let id = arrayIds.get(a);
+    if (!id) arrayIds.set(a, id = nextArrayId++);
+    return id;
+};
+
 /**
  * What an input's baked part depends on: its data and which of it is
  * deleted, where it stands, its transform and colour nodes, its debug
- * view and its bands.
+ * view, its bands, and its motion and motion scale.
  */
 const partSignature = (splat: Splat) => {
     const m = splat.entity.getWorldTransform().data;
@@ -474,10 +495,17 @@ const partSignature = (splat: Splat) => {
             splat.brightness, splat.blackPoint, splat.whitePoint, splat.transparency],
         splat.debugShown ? [splat.debugShown.channel, splat.debugShown.mode, Array.from(splat.debugShown.params ?? [])] : null,
         splat.shBandLimit,
-        // a 4D model's velocities: the same data, but motion set later
-        splat.motion ? splat.motion.velocityTime.length : 0
+        // a 4D model's motion: the same data, but motion set later or edited
+        splat.motion ? [arrayId(splat.motion.velocityTime), arrayId(splat.motion.falloff), splat.motionScale] : 0
     ]);
 };
+
+/** What the merged object carries of an input besides its gaussians (MergeBuilt.carried). */
+const carrySignature = (splat: Splat) => JSON.stringify([
+    splat.fog,
+    splat.motionShutter,
+    splat.state.overlay ? hashBytes(splat.state.overlay) : 0
+]);
 
 /** What decides an input's time: its time nodes, and how long its own sequence is. */
 const timeSignature = (splat: Splat) => JSON.stringify([
@@ -491,7 +519,7 @@ const timeSignature = (splat: Splat) => JSON.stringify([
  * only when this changes.
  */
 const mergeSignature = (inputs: Splat[], options: MergeBuildOptions, extra: unknown) => JSON.stringify([
-    inputs.map(s => partSignature(s) + timeSignature(s)),
+    inputs.map(s => partSignature(s) + timeSignature(s) + carrySignature(s)),
     options.sh,
     options.rate,
     // the timeline's length only matters to a switch, which spans it
@@ -644,6 +672,7 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
 
     const rowsPerInput = inputs.map(() => 0);
     const copies = inputs.map(() => 0);
+    let holdout: Uint8Array | null = null;
 
     let base = 0;
     taken.forEach(({ input, piece, rows }) => {
@@ -660,6 +689,12 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
             const to = columns.get(name);
             for (let k = 0; k < rows.length; ++k) to[base + k] = from[rows[k]];
         });
+        // held out there, held out here
+        const overlay = splat.state.overlay;
+        if (overlay) {
+            holdout ??= new Uint8Array(Math.max(1, total));
+            for (let k = 0; k < rows.length; ++k) holdout[base + k] = overlay[part.rows[rows[k]]];
+        }
         if (mult !== 1) {
             const o = columns.get('opacity');
             for (let k = 0; k < rows.length; ++k) {
@@ -857,7 +892,18 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
         };
     }
 
-    return { data, motion, frames: moving ? frames : 0, bands, rows: rowsPerInput, copies, limited };
+    // the fog and the shutter. A shutter is open for a span of the input's
+    // time; v * scale per unit of merged time, so open shutter / scale
+    let fog: FogSettings | null = null;
+    let shutter = 0;
+    inputs.forEach((s, i) => {
+        if (!included[i]) return;
+        fog ??= s.fog ? { ...s.fog, colour: [...s.fog.colour] as [number, number, number] } : null;
+        const run = piecesFor[i].find(p => p.scale !== 0);
+        if (s.motion && run && s.motionShutter > 0) shutter = Math.max(shutter, s.motionShutter / Math.abs(run.scale));
+    });
+
+    return { data, motion, frames: moving ? frames : 0, bands, rows: rowsPerInput, copies, limited, carried: { fog, shutter, holdout } };
 };
 
 /** The rotation the merged object is placed with: that of a loaded PLY, since its data is in a file's space. */

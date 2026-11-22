@@ -123,6 +123,14 @@ class Splat extends Element {
      * The node sets and clears it; the shader gets it each frame.
      */
     fog: FogSettings | null = null;
+
+    /**
+     * What a merge or switch node's object carries over from its inputs
+     * (merge-build.ts): their fog and motion blur, used where no node on
+     * the object itself says otherwise.
+     */
+    carriedFog: FogSettings | null = null;
+    carriedShutter = 0;
     _exposure = 0;
     _brightness = 0;
     _blackPoint = 0;
@@ -555,7 +563,7 @@ class Splat extends Element {
         for (let i = this.motionLooks.length - 1; i >= 0; --i) {
             if (this.motionLooks[i].shutter > 0) return this.motionLooks[i].shutter;
         }
-        return 0;
+        return this.carriedShutter;
     }
 
     /** The motion looks changed: the shader and the sort follow. */
@@ -1056,7 +1064,7 @@ class Splat extends Element {
         material.setParameter('splatGrade', this.gradeTexture);
 
         // a fog node's fog, or none
-        const fog = fogUniforms(this.fog, this.entity.getWorldTransform().data);
+        const fog = fogUniforms(this.fog ?? this.carriedFog, this.entity.getWorldTransform().data);
         material.setParameter('fogParams', fog.params);
         material.setParameter('fogColor', fog.colour);
         material.setParameter('fogPlane', fog.plane);
