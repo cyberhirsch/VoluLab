@@ -5,6 +5,7 @@ import { combineOutputs, placeholderSplat, restoreCombine, storeCombine } from '
 import { restoreInspectNode, storeInspectNodes } from './doc-inspect';
 import { storeLookNodes } from './doc-looks';
 import { restoreStateNode, storeStateNodes } from './doc-nodes';
+import { restoreColourNodes, restoreTimeNodes, storeColourNodes, storeTimeNodes } from './doc-time';
 import { DebugViewOp, EditOp, LightOp, PrimitiveOp, RelightOp, TransformNodeOp } from './edit-ops';
 import { ElementType } from './element';
 import { Events } from './events';
@@ -457,6 +458,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             }
             // merge, switch and layer nodes (doc-combine.ts)
             restoreCombine(document, loaded, later, events);
+            // time nodes and keyed colour nodes (doc-time.ts)
+            restoreTimeNodes(document, loaded, later, events);
+            restoreColourNodes(document, loaded, later, events);
 
             // in, in order (the sort is stable, so nodes without a place
             // keep the order they were listed in), and where they were put
@@ -514,6 +518,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
     const saveDocument = async (options: { stream?: FileSystemWritableFileStream, filename?: string }) => {
         events.fire('startSpinner');
+        // grades of keyed colour nodes taken off the objects while they are written
+        let putBack: () => void = null;
 
         try {
             // a viewer showing an earlier point gives the chain back first:
@@ -551,6 +557,12 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             // null for an object they do not account for, which is stored
             // the old way: without them, and without what they deleted.
             const stateNodes = splats.map((s, i) => storeStateNodes(allOps, cursor, s, i, primitives));
+
+            // keyed colour nodes, kept as nodes with their keys (doc-time.ts).
+            // Before anything reads the objects' grades: what such a node
+            // put on them is off them until the project is written
+            const colourNodes = storeColourNodes(allOps, cursor, splats, stateNodes.map(Boolean), placeOf);
+            putBack = colourNodes.putBack;
 
             // merge, switch and layer nodes; a merged object's data is not written
             const combined = storeCombine(allOps, cursor, splats, placeOf);
@@ -761,6 +773,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 inspectNodes: storeInspectNodes(allOps, cursor, splats, placeOf),
                 // the cleanup and look nodes that are kept as nodes (doc-looks.ts)
                 looks: storeLookNodes(allOps, cursor, splats, placeOf),
+                // time nodes, and colour nodes with keys (doc-time.ts)
+                timeNodes: storeTimeNodes(allOps, cursor, splats, placeOf),
+                colourNodes: colourNodes.stored,
 
                 // the session around the scene, so a project reopens in the
                 // workspace it was authored in
@@ -864,6 +879,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 message: `'${error.message ?? error}'`
             });
         } finally {
+            putBack?.();
             events.fire('stopSpinner');
         }
     };
