@@ -43,10 +43,12 @@ import { SELECTION_NODE_LABELS, selectionNodeAddItems, selectionNodeItems } from
  * a picture of a linear history: there is no rewiring, because the order of
  * the chain is the order the edits happened in.
  *
- * What a node takes besides its chain comes in through named inputs on its
- * top edge - the dataset a train node trains on, say. Those are wired by
+ * Everything flows left to right: a node's inputs are on its left edge and
+ * its output on its right. What a node takes besides its chain comes in
+ * through named inputs stacked down its left edge under the title, each
+ * labelled - the dataset a train node trains on, say. Those are wired by
  * hand: drag out of a node's output and let go over the node, and the wire
- * goes into the first input that takes what it carries.
+ * goes into the input nearest the pointer that takes what it carries.
  */
 
 const NODE_W = 148;
@@ -55,8 +57,13 @@ const COL_GAP = 44;
 const LANE_GAP = 34;
 const PAD = 28;
 
-// how far above a node its inputs' labels reach, which a dropped wire still
-// counts as landing on the node
+// one named input's row, stacked under the title band
+const PORT_ROW = 14;
+// the space under the last row, so its label clears the border
+const PORT_FOOT = 4;
+
+// how far left of a node a dropped wire still counts as landing on it: the
+// inputs are on that edge, and a wire is aimed at them, not past them
 const PORT_REACH = 14;
 
 const MIN_SCALE = 0.3;
@@ -259,12 +266,19 @@ interface EdgeModel {
     port?: string;
 }
 
-// where a named input sits along the node's top edge: spread evenly, so one
-// input is centred and two split the edge in thirds
-const portX = (node: NodeModel, name: string) => {
+// A node is its title band, plus a row per named input under it. The chain's
+// input and the output sit level with the title; the named inputs each have a
+// row of their own, so a node grows down with what it takes.
+const nodeH = (node: NodeModel) => {
+    const rows = node.ports?.length ?? 0;
+    return rows ? NODE_H + rows * PORT_ROW + PORT_FOOT : NODE_H;
+};
+
+// where a named input sits down the node's left edge, from its top
+const portY = (node: NodeModel, name: string) => {
     const ports = node.ports ?? [];
     const k = Math.max(0, ports.findIndex(p => p.name === name));
-    return NODE_W * (k + 1) / (ports.length + 1);
+    return NODE_H + k * PORT_ROW + PORT_ROW / 2;
 };
 
 // an op declares its named inputs itself; the graph only draws them
@@ -520,7 +534,7 @@ class GraphPanel extends Container {
         const y0 = Math.min(a.y, b.y);
         const y1 = Math.max(a.y, b.y);
 
-        const hit = this.nodes.filter(n => n.x < x1 && n.x + NODE_W > x0 && n.y < y1 && n.y + NODE_H > y0);
+        const hit = this.nodes.filter(n => n.x < x1 && n.x + NODE_W > x0 && n.y < y1 && n.y + nodeH(n) > y0);
         this.setSelection(additive ? [...this.selection, ...hit.map(n => n.key)] : hit.map(n => n.key));
     }
 
@@ -541,7 +555,7 @@ class GraphPanel extends Container {
         const x0 = Math.min(...shown.map(n => n.x));
         const y0 = Math.min(...shown.map(n => n.y));
         const x1 = Math.max(...shown.map(n => n.x + NODE_W));
-        const y1 = Math.max(...shown.map(n => n.y + NODE_H));
+        const y1 = Math.max(...shown.map(n => n.y + nodeH(n)));
 
         const rect = this.dom.getBoundingClientRect();
         const fit = Math.min(
@@ -792,21 +806,19 @@ class GraphPanel extends Container {
         const nodes: NodeModel[] = [];
         const edges: EdgeModel[] = [];
 
-        [...lanes.values()].forEach((lane, row) => {
+        // each lane is as tall as its tallest node, so a node with named
+        // inputs pushes the lanes under it down rather than into them
+        let laneTop = 0;
+        [...lanes.values()].forEach((lane) => {
+            const top = laneTop;
+            laneTop += Math.max(...lane.map(nodeH)) + LANE_GAP;
             lane.forEach((node, col) => {
-                node.y = row * (NODE_H + LANE_GAP);
+                node.y = top;
                 // a node fed from elsewhere is not a source, whatever its column
                 node.isSource = col === 0 && !crossLinks.some(l => l.node === node);
                 // edges follow the chain, which is the history order, not
                 // wherever the node has since been dragged
                 if (col > 0) edges.push({ from: lane[col - 1], to: node });
-
-                // a node that has been moved keeps where it was put
-                const placed = this.positions.get(node.key);
-                if (placed) {
-                    node.x = placed.x;
-                    node.y = placed.y;
-                }
                 nodes.push(node);
             });
         });
@@ -834,6 +846,33 @@ class GraphPanel extends Container {
                 const from = lane?.length ? lane[lane.length - 1] : nodes.find(n => n.key === port.source);
                 if (from) edges.push({ from, to: node, port: port.name });
             });
+        });
+
+        // Columns: a node stands right of everything that feeds it, so every
+        // wire runs forward. A chain keeps its order; a node fed from another
+        // lane - a merge, a train node fed by an import, a select fed by a
+        // primitive - moves along to clear its sources, and the rest of its
+        // chain with it. Bounded, in case a wire ever closes a loop.
+        const column = new Map<NodeModel, number>();
+        lanes.forEach(lane => lane.forEach((node, col) => column.set(node, col)));
+        for (let pass = 0; pass < nodes.length; pass++) {
+            let moved = false;
+            edges.forEach(({ from, to }) => {
+                if (column.get(to) <= column.get(from)) {
+                    column.set(to, column.get(from) + 1);
+                    moved = true;
+                }
+            });
+            if (!moved) break;
+        }
+        nodes.forEach((node) => {
+            node.x = column.get(node) * (NODE_W + COL_GAP);
+            // a node that has been moved keeps where it was put
+            const placed = this.positions.get(node.key);
+            if (placed) {
+                node.x = placed.x;
+                node.y = placed.y;
+            }
         });
 
         // what each node's wire carries, for the inputs it can be dropped on
@@ -903,7 +942,10 @@ class GraphPanel extends Container {
         el.style.left = `${node.x}px`;
         el.style.top = `${node.y}px`;
         el.style.width = `${NODE_W}px`;
-        el.style.height = `${NODE_H}px`;
+        const h = nodeH(node);
+        el.style.height = `${h}px`;
+        // the title stays centred in its band, above the input rows
+        if (h > NODE_H) el.style.paddingBottom = `${h - NODE_H}px`;
 
         const kind = document.createElement('div');
         kind.className = 'gn-node-kind';
@@ -918,29 +960,38 @@ class GraphPanel extends Container {
             el.appendChild(name);
         }
 
-        // an input port only where an edge actually arrives
+        // the chain's input, level with the title - only where an edge arrives
         if (!node.isSource) {
             const inPort = document.createElement('div');
             inPort.className = 'gn-port gn-port-in';
+            inPort.style.top = `${NODE_H / 2 - 3}px`;
             el.appendChild(inPort);
         }
 
-        // Named inputs along the top, each with its name over it. They are
-        // drawn whether wired or not: an unwired one is somewhere to aim.
+        // Named inputs down the left edge under the title, a row each with
+        // its name beside it. They are drawn whether wired or not: an
+        // unwired one is somewhere to aim.
+        if (node.ports) {
+            const rule = document.createElement('div');
+            rule.className = 'gn-port-rule';
+            rule.style.top = `${NODE_H - 1}px`;
+            el.appendChild(rule);
+        }
         node.ports?.forEach((port) => {
-            const x = portX(node, port.name);
+            const y = portY(node, port.name);
             const stud = document.createElement('div');
-            stud.className = 'gn-port gn-port-top';
+            stud.className = 'gn-port gn-port-in gn-port-named';
             if (port.source) stud.classList.add('gn-port-wired');
-            stud.style.left = `${x - 3}px`;
+            stud.style.top = `${y - 3}px`;
             stud.dataset.accepts = port.accepts.join(' ');
             stud.title = port.source ? port.label : `${port.label}: drag a wire here`;
             el.appendChild(stud);
 
             const label = document.createElement('div');
             label.className = 'gn-port-label';
+            if (port.source) label.classList.add('gn-port-wired');
             label.textContent = port.label;
-            label.style.left = `${x + 5}px`;
+            label.style.top = `${y}px`;
             el.appendChild(label);
         });
 
@@ -948,6 +999,7 @@ class GraphPanel extends Container {
         if (!node.terminal) {
             const outPort = document.createElement('div');
             outPort.className = 'gn-port gn-port-out';
+            outPort.style.top = `${NODE_H / 2 - 3}px`;
             outPort.title = 'drag out to attach a node';
             this.bindPortDrag(outPort, node);
             el.appendChild(outPort);
@@ -1037,11 +1089,11 @@ class GraphPanel extends Container {
         ];
     }
 
-    /** The node a dropped wire landed on, counting its inputs' labels above it. */
+    /** The node a dropped wire landed on, counting a margin off its input edge. */
     private nodeAt(at: { x: number, y: number }, except: NodeModel) {
         return this.nodes.find(n => n !== except &&
-            at.x >= n.x && at.x <= n.x + NODE_W &&
-            at.y >= n.y - (n.ports ? PORT_REACH : 0) && at.y <= n.y + NODE_H);
+            at.x >= n.x - PORT_REACH && at.x <= n.x + NODE_W &&
+            at.y >= n.y && at.y <= n.y + nodeH(n));
     }
 
     /**
@@ -1053,7 +1105,7 @@ class GraphPanel extends Container {
         const fits = (target.ports ?? [])
         .map(port => ({ port, offer: offers.find(o => port.accepts.includes(o.kind)) }))
         .filter(fit => fit.offer);
-        const distance = (port: PortSpec) => Math.abs(target.x + portX(target, port.name) - at.x);
+        const distance = (port: PortSpec) => Math.abs(target.y + portY(target, port.name) - at.y);
         fits.sort((a, b) => distance(a.port) - distance(b.port));
         return fits[0] ?? null;
     }
@@ -1081,7 +1133,7 @@ class GraphPanel extends Container {
 
             // the inputs this wire could go into light up while it is held
             const kinds = (node.offers ?? []).map(o => o.kind);
-            const ready = [...this.stage.querySelectorAll<HTMLElement>('.gn-port-top')].filter((stud) => {
+            const ready = [...this.stage.querySelectorAll<HTMLElement>('.gn-port-named')].filter((stud) => {
                 if (stud.parentElement === port.parentElement) return false;
                 return (stud.dataset.accepts ?? '').split(' ').some(k => kinds.includes(k as SourceKind));
             });
@@ -1152,7 +1204,8 @@ class GraphPanel extends Container {
                             label: 'train',
                             action: () => {
                                 const op = this.events.invoke('training.addNode');
-                                this.positions.set(op, { x: at.x, y: at.y - NODE_H / 2 });
+                                // its dataset input, the first row, lands under the pointer
+                                this.positions.set(op, { x: at.x, y: at.y - NODE_H - PORT_ROW / 2 });
                                 this.events.fire('graph.connect', op, 'dataset', node.key);
                             }
                         }
@@ -1395,25 +1448,24 @@ class GraphPanel extends Container {
         this.edges.replaceChildren();
 
         const width = Math.max(...this.nodes.map(n => n.x + NODE_W), 0) + PAD;
-        const height = Math.max(...this.nodes.map(n => n.y + NODE_H), 0) + PAD;
+        const height = Math.max(...this.nodes.map(n => n.y + nodeH(n)), 0) + PAD;
         this.edges.setAttribute('width', `${width}`);
         this.edges.setAttribute('height', `${height}`);
         this.edges.setAttribute('viewBox', `0 0 ${width} ${height}`);
 
         edges.forEach(({ from, to, port }) => {
+            // out of the right edge, into the left: the chain's input level
+            // with the title, a named input at its own row
             const x1 = from.x + NODE_W;
             const y1 = from.y + NODE_H / 2;
-            // a named input is on the top edge, so its wire comes down into it
-            const x2 = port ? to.x + portX(to, port) : to.x;
-            const y2 = port ? to.y : to.y + NODE_H / 2;
+            const x2 = to.x;
+            const y2 = to.y + (port ? portY(to, port) : NODE_H / 2);
             // the bend keeps a backwards edge from cutting straight through the
             // node it comes out of, once things have been dragged around
             const bend = Math.max(24, Math.abs(x2 - x1) * 0.5);
-            const drop = Math.max(24, Math.abs(y2 - y1) * 0.5);
-            const end = port ? `${x2} ${y2 - drop}` : `${x2 - bend} ${y2}`;
 
             const path = document.createElementNS(SVG_NS, 'path');
-            path.setAttribute('d', `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${end}, ${x2} ${y2}`);
+            path.setAttribute('d', `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`);
             const classes = ['gn-edge'];
             if (!to.applied) classes.push('gn-pending');
             if (to.bypassed || from.bypassed) classes.push('gn-edge-bypassed');
