@@ -1,8 +1,8 @@
 import { Container } from '@playcanvas/pcui';
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
-import { buildInspectNode, registerViewerBadge } from './inspect-panel';
 import { buildCombineFace } from './combine-panel';
+import { buildInspectNode, registerViewerBadge } from './inspect-panel';
 import { addKeyControls } from './keyframe-ui';
 import { i18n } from './localization';
 import { buildMotionNode, PanelKit } from './motion-node-panel';
@@ -10,8 +10,8 @@ import { fieldDefault } from './value-fields';
 import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplitOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { isInspectOp } from '../inspect-ops';
-import { type FieldNode, type FieldSpec, isFieldNode } from '../look/fields';
 import { paramOf } from '../keyframes';
+import { type FieldNode, type FieldSpec, isFieldNode } from '../look/fields';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
 import type { LoopMode, OffsetOutside } from '../time-map';

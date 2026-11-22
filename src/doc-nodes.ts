@@ -19,8 +19,8 @@ import {
     UnhideAllOp
 } from './edit-ops';
 import { IndexRanges } from './index-ranges';
-import { FlickerRemovalOp } from './look/flicker-removal';
 import { packKeys, unpackKeys } from './keyframes';
+import { FlickerRemovalOp } from './look/flicker-removal';
 import { ScenePrimitive } from './scene-primitive';
 import { SelectQuery } from './select-query';
 import { Splat } from './splat';

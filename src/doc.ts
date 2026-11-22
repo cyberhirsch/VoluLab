@@ -1,9 +1,9 @@
 import { ZipFileSystem, ZipReadFileSystem } from '@playcanvas/splat-transform';
 import { Vec3 } from 'playcanvas';
 
+import { combineOutputs, placeholderSplat, restoreCombine, storeCombine } from './doc-combine';
 import { restoreInspectNode, storeInspectNodes } from './doc-inspect';
 import { storeLookNodes } from './doc-looks';
-import { combineOutputs, placeholderSplat, restoreCombine, storeCombine } from './doc-combine';
 import { restoreStateNode, storeStateNodes } from './doc-nodes';
 import { DebugViewOp, EditOp, LightOp, PrimitiveOp, RelightOp, TransformNodeOp } from './edit-ops';
 import { ElementType } from './element';
