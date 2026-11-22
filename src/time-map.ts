@@ -130,8 +130,10 @@ class RetimeMap implements TimeMap {
         return this.speed > 0 && Number.isFinite(this.speed) ? this.speed : 1;
     }
 
+    // as many frames as it takes to reach the last one: 100 at 2x is 0, 2,
+    // ... 98 and then 99, 51 frames, and the last frame is shown
     span(frames: number) {
-        return Math.max(1, Math.round(frames / this.factor));
+        return Math.max(1, Math.ceil((frames - 1) / this.factor - 1e-9) + 1);
     }
 
     at(f: number, frames: number) {
