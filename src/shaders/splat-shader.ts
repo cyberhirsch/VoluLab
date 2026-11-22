@@ -239,6 +239,14 @@ void main(void) {
     uint holdoutState = uint(texelFetch(splatState, splat.uv, 0).r * 255.0 + 0.5) & 8u;
 
     #if PICK_PASS
+        // a holdout is not content: it is not picked, and the passes drawn
+        // with picking (depth, velocity, matte) leave it out as they would
+        // a deleted gaussian. Those passes keep no depth, so what a holdout
+        // hides in colour still shows in them
+        if (holdoutState != 0u) {
+            gl_Position = discardVec;
+            return;
+        }
         if (pickOp == 0u) {
             // add: skip deleted, locked and selected splats
             if (vertexState != 0u) {
@@ -842,6 +850,14 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
     let holdoutState: u32 = u32(textureLoad(splatState, splat.uv, 0).r * 255.0 + 0.5) & 8u;
 
     #ifdef PICK_PASS
+        // a holdout is not content: it is not picked, and the passes drawn
+        // with picking (depth, velocity, matte) leave it out as they would
+        // a deleted gaussian. Those passes keep no depth, so what a holdout
+        // hides in colour still shows in them
+        if (holdoutState != 0u) {
+            output.position = discardVec;
+            return output;
+        }
         if (uniform.pickOp == 0u) {
             // add: skip deleted, locked and selected splats
             if (vertexState != 0u) {
