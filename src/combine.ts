@@ -16,6 +16,7 @@
 import { CombineOp, LayerOp, MergeOp, SwitchOp, defaultLayerSettings, type CombineContext, type LayerSettings, type MergeSettings, type SwitchSettings } from './combine-ops';
 import type { EditOp } from './edit-ops';
 import { ElementType } from './element';
+import { placeholderSplat } from './doc-combine';
 import { Events } from './events';
 import { registerInstanceEvents } from './instance';
 import { mergedRotation, type MergeBuilt } from './merge-build';
@@ -270,7 +271,10 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
 
     // A merge or switch node from a project, with the object it makes there
     // already (empty: it is made again once the history has settled).
-    events.function('combine.restoreNode', (kind: 'merge' | 'switch', inputs: Splat[], output: Splat, settings?: Partial<MergeSettings & SwitchSettings>, bypassed = false) => {
+    events.function('combine.restoreNode', (kind: 'merge' | 'switch', inputs: Splat[], output: Splat | null, settings?: Partial<MergeSettings & SwitchSettings>, bypassed = false, name = '') => {
+        // one switched off was stored without its object: an empty one,
+        // which it fills when it is switched on
+        if (!output && bypassed) output = placeholderSplat(scene, name || kind);
         if (!output || !inputs.length) return null;
         const op: CombineOp = kind === 'switch' ?
             new SwitchOp(scene, inputs, output, context, settings) :
@@ -281,7 +285,7 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
             s.visible = true;
         });
         // a node switched off has no object in the scene
-        if (bypassed) scene.remove(output);
+        if (bypassed && output.scene) scene.remove(output);
         events.fire('edit.add', op);
         return op;
     });

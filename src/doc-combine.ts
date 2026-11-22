@@ -41,9 +41,13 @@ const storeCombine = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: P
             // a node whose object or inputs are not in the project cannot be made again
             if (inputs.some(i => i < 0)) return;
             if (output >= 0) outputs.add(output);
+            // a node switched off has no object in the scene, so none in
+            // the list: it goes back with an empty one of this name
+            else if (!op.bypassed) return;
             combine.push({
                 kind: op instanceof SwitchOp ? 'switch' : 'merge',
                 output,
+                ...(output < 0 ? { name: op.output?.name ?? '' } : {}),
                 inputs,
                 settings: JSON.parse(JSON.stringify((op as MergeOp | SwitchOp).settings)),
                 bypassed: !!op.bypassed,
@@ -84,9 +88,10 @@ type Later = (stored: any, add: () => EditOp | null) => void;
 const restoreCombine = (document: any, loaded: Splat[], later: Later, events: Events) => {
     (Array.isArray(document?.combine) ? document.combine : []).forEach((stored: any) => {
         const inputs = (stored.inputs ?? []).map((i: number) => loaded[i]);
-        const output = loaded[stored.output];
-        if (!output || !inputs.length || inputs.some((s: Splat) => !s)) return;
-        later(stored, () => events.invoke('combine.restoreNode', stored.kind, inputs, output, stored.settings, !!stored.bypassed));
+        // (none for a node switched off: it is made then, empty)
+        const output = stored.output === -1 && stored.bypassed ? null : loaded[stored.output];
+        if (output === undefined || !inputs.length || inputs.some((s: Splat) => !s)) return;
+        later(stored, () => events.invoke('combine.restoreNode', stored.kind, inputs, output, stored.settings, !!stored.bypassed, stored.name));
     });
     (Array.isArray(document?.layers) ? document.layers : []).forEach((stored: any) => {
         const splat = loaded[stored.splat];
