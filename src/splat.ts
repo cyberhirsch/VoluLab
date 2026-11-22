@@ -1056,10 +1056,9 @@ class Splat extends Element {
         material.setParameter('splatGrade', this.gradeTexture);
 
         // a fog node's fog, or none
-        const fog = fogUniforms(this.fog, this.entity.getWorldTransform().data);
+        const fog = fogUniforms(this.fog);
         material.setParameter('fogParams', fog.params);
         material.setParameter('fogColor', fog.colour);
-        material.setParameter('fogPlane', fog.plane);
 
         // the camera node's exposure and depth of field. The blur needs to
         // know how a scene unit maps to pixels, which is a property of the
