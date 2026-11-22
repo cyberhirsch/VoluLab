@@ -33,6 +33,7 @@ import { State } from './splat-state';
 import { emptyData, selectedRows, subsetData, subsetMotion } from './split';
 import { countSource } from './training/dataset-source';
 import { registerImageNodes } from './training/image-nodes';
+import { registerImportSubset } from './training/import-subset';
 import { registerPoseNodes } from './training/pose-node';
 import { registerTraining } from './training/train-run';
 import { VoxelGrid, Voxels, voxelise } from './voxels';
@@ -1863,6 +1864,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     registerTraining(events, scene);
     registerPoseNodes(events, scene);
     registerImageNodes(events);
+    registerImportSubset(events);
     registerCameraEffects(events, scene);
     registerCameraViewEvents(events, scene);
     registerLightViewEvents(events, scene);

@@ -2249,6 +2249,41 @@ const countWords = (kind: string, n: number) => {
 };
 
 /**
+ * Which of an import node's photos go on: every `every`th of those from
+ * `from` to `to` (1-based, both included; `to` 0 is the last), less the
+ * blurriest `dropBlurry` percent of them. A video's frames are taken at
+ * `fps` a second.
+ */
+type ImportSubset = {
+    every: number;
+    from: number;
+    to: number;
+    dropBlurry: number;
+    fps: number;
+};
+
+const DEFAULT_VIDEO_FPS = 2;
+
+const defaultImportSubset = (): ImportSubset => ({ every: 1, from: 1, to: 0, dropBlurry: 0, fps: DEFAULT_VIDEO_FPS });
+
+/** an import subset from anything; a project from before has none */
+const importSubsetFrom = (given: any, base: ImportSubset = defaultImportSubset()): ImportSubset => {
+    const g = given ?? {};
+    const int = (v: unknown, old: number, lo: number, hi: number) => {
+        const n = v === null || v === undefined || v === '' ? NaN : Math.round(Number(v));
+        return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : old;
+    };
+    const fps = g.fps === null || g.fps === undefined || g.fps === '' ? NaN : Number(g.fps);
+    return {
+        every: int(g.every, base.every, 1, 1000),
+        from: int(g.from, base.from, 1, 1e6),
+        to: int(g.to, base.to, 0, 1e6),
+        dropBlurry: int(g.dropBlurry, base.dropBlurry, 0, 90),
+        fps: Number.isFinite(fps) ? Math.min(30, Math.max(0.1, Math.round(fps * 10) / 10)) : base.fps
+    };
+};
+
+/**
  * An import node whose cargo is a capture dataset rather than a scene
  * object. The one import node concept covers both: importing a splat file
  * yields a loaded object, importing a dataset yields this - a node holding
@@ -2263,8 +2298,18 @@ class DatasetOp {
     inputs: Splat[] = [];
     /** the lane marker the train node consumes as its input */
     output: DatasetHandle;
-    /** bytes / directory handle / url for the trainer */
+    /**
+     * what it hands on: bytes / directory handle / url for the trainer,
+     * or the photos (the subset of them kept) or a video for a pose node;
+     * null while the subset is being worked out
+     */
     source: unknown | null;
+    /** what was imported, all of it; `source` is the subset of it */
+    original: unknown | null;
+    /** which of the photos it hands on, and at what rate a video's frames */
+    subset: ImportSubset = defaultImportSubset();
+    /** the places in `original` of the photos kept; undefined when all are */
+    kept?: number[];
     sourceName: string;
     /** photos ingested, poses still being estimated outside the app */
     awaitingPoses?: boolean;
@@ -2276,6 +2321,7 @@ class DatasetOp {
 
     constructor(source: unknown | null, sourceName: string) {
         this.source = source;
+        this.original = source;
         this.sourceName = sourceName;
         this.output = { name: sourceName, dataset: true };
     }
@@ -2299,8 +2345,11 @@ class DatasetOp {
         return 'images';
     }
 
+    /** Take what was imported, all of it; the subset is applied after (import-subset.ts). */
     setSource(source: unknown, name: string) {
         this.source = source;
+        this.original = source;
+        this.kept = undefined;
         this.sourceName = name;
         this.output.name = name;
         this.awaitingPoses = false;
@@ -2319,6 +2368,7 @@ class DatasetOp {
 
     destroy() {
         this.source = null;
+        this.original = null;
     }
 }
 
@@ -3136,6 +3186,10 @@ export {
     VoxeliseOp,
     AddVoxelsOp,
     DatasetOp,
+    type ImportSubset,
+    DEFAULT_VIDEO_FPS,
+    defaultImportSubset,
+    importSubsetFrom,
     PoseOp,
     type PoseCamera,
     type PoseMatcher,

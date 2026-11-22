@@ -226,6 +226,43 @@
         }
     }
 
+    // the import node's thumbnails: made as they scroll into view
+    .ip-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 3px;
+        max-height: 172px;
+        overflow-y: auto;
+        margin-top: 6px;
+        background-color: $ink-0;
+        border: 1px solid $ink-3;
+        padding: 3px;
+    }
+
+    .ip-cell {
+        height: 48px;
+        border: 1px solid transparent;
+
+        canvas {
+            display: block;
+            height: 100%;
+            width: auto;
+            background-color: $ink-2;
+        }
+
+        &.ip-dropped {
+            opacity: 0.25;
+        }
+
+        &.ip-highlight {
+            border-color: $ink-7;
+        }
+
+        &.ip-failed canvas {
+            background-color: $ink-3;
+        }
+    }
+
     .if-slider-value {
         min-width: 22px;
         text-align: right;

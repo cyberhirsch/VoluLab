@@ -438,4 +438,4 @@ const registerImageNodes = (events: Events) => {
     });
 };
 
-export { frameOf, headerSize, imageSize, needsResize, referenceSize, registerImageNodes, workKey, type Frame, type FramedImage };
+export { cachedSize, frameOf, headerSize, imageSize, needsResize, referenceSize, registerImageNodes, workKey, type Frame, type FramedImage };

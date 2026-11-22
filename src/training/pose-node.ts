@@ -187,12 +187,13 @@ const registerPoseNodes = (events: Events, scene: Scene) => {
                 // frames are extracted when the job gets its turn, so several
                 // videos do not sit in memory at once
                 const file = source.file;
+                const fps = (source as { fps?: number }).fps;
                 bridgePoseIntoOp(op, async () => {
                     const frames: BridgeImage[] = [];
                     await extractVideoFrames(file, (frameName, blob) => {
                         frames.push({ name: frameName, data: blob });
                         return Promise.resolve();
-                    });
+                    }, fps);
                     return frames;
                 }, op.matcher, events).catch(() => {});
             }

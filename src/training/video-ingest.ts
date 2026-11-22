@@ -137,9 +137,10 @@ const ingestImages = async (files: File[], events: Events): Promise<boolean> => 
 /**
  * Step through `file` and hand every extracted frame to `onFrame` as a
  * jpeg blob - the caller decides whether frames land on disk (the script
- * kit) or go straight to the bridge.
+ * kit) or go straight to the bridge. `fps` frames a second are taken,
+ * the import node's subset says how many.
  */
-const extractVideoFrames = async (file: File, onFrame: (name: string, blob: Blob) => Promise<void>) => {
+const extractVideoFrames = async (file: File, onFrame: (name: string, blob: Blob) => Promise<void>, fps = DEFAULT_FPS) => {
     const video = document.createElement('video');
     video.muted = true;
     video.playsInline = true;
@@ -170,8 +171,8 @@ const extractVideoFrames = async (file: File, onFrame: (name: string, blob: Blob
     try {
         await waitFor('loadedmetadata');
 
-        const step = 1 / DEFAULT_FPS;
-        const count = Math.min(Math.floor(video.duration * DEFAULT_FPS), MAX_FRAMES);
+        const step = 1 / fps;
+        const count = Math.min(Math.floor(video.duration * fps), MAX_FRAMES);
         if (!(count > 0) || !video.videoWidth || !video.videoHeight) {
             throw new Error(i18n.t('training.video-unreadable'));
         }

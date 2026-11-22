@@ -45,6 +45,29 @@ when the drag ends, so a drag crops the photos once. A drag keeps each
 margin within 45 %. Old projects have percent and no aspect, which
 `imageCropFrom` reads as that.
 
+**Import.** The node now keeps what was imported (`original`) and hands on
+a subset (`source`): every Nth photo, a range (from, to; 0 is the last),
+and less the blurriest share. Blurriness is the variance of the Laplacian
+of the photo in grey at 320 px high (src/training/import-subset.ts): cheap,
+and a blurred photo has little second derivative - blurry photos are a
+classic cause of SfM failing. While scores are missing the node hands on
+nothing, so no resize or pose starts on photos about to go; 99 photos of
+12 MP score in about 8 s. A video gets a frame rate instead
+(`extractVideoFrames` takes it; the pose node reads it off the source).
+
+Under the pickers: how many photos, their size(s) from the headers, the
+megabytes, and a grid of thumbnails, made only as they scroll into view
+and decoded straight to small sizes - no full-size decode is held. Photos
+left out are dimmed. The same small decode gives the thumbnail and the
+score, so a scrolled-through grid makes the blur cut quick.
+
+A project stores all photos, the subset settings and the places kept
+(`kept`): the image and pose nodes after it refer to photos by their place
+in what it hands on, so the kept list is put back as it was rather than
+scored again. A project from before has no subset: all photos, as before.
+With the resize memo, changing the subset under a resize node only resizes
+photos not seen before (every 2nd of 60 after a full run: 0.1 s).
+
 ## Images and cameras wires, a 2d crop, and the train node's two inputs
 
 The one `dataset` wire kind is now two: `images` (an import node's photos,

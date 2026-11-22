@@ -1,6 +1,6 @@
 import type { ZipReadFileSystem } from '@playcanvas/splat-transform';
 
-import { CropOp, DatasetOp, EditOp, PoseOp, ResizeOp, TrainOp, imageCropFrom, isImageNode, resizeSettingsFrom, type DatasetInput, type PoseCamera } from './edit-ops';
+import { CropOp, DatasetOp, EditOp, PoseOp, ResizeOp, TrainOp, DEFAULT_VIDEO_FPS, defaultImportSubset, imageCropFrom, importSubsetFrom, isImageNode, resizeSettingsFrom, type DatasetInput, type PoseCamera } from './edit-ops';
 import type { Events } from './events';
 import type { Scene } from './scene';
 import type { Splat } from './splat';
@@ -55,7 +55,8 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
     const flags = (op: EditOp) => (op.bypassed ? { bypassed: true } : {});
 
     const storedDatasets = datasets.map((op, i) => {
-        const source = op.source as any;
+        // all that was imported; the subset is kept as its settings and places
+        const source = (op.original ?? op.source) as any;
         let stored: object | null = null;
         if (source?.kind === 'bytes') {
             const file = `dataset_${i}.bin`;
@@ -83,6 +84,8 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
             ...(op.counts ? { counts: op.counts } : {}),
             ...(op.awaitingPoses ? { awaitingPoses: true } : {}),
             ...(stored ? { source: stored } : {}),
+            ...(JSON.stringify(op.subset) !== JSON.stringify(defaultImportSubset()) ? { subset: op.subset } : {}),
+            ...(op.kept ? { kept: op.kept } : {}),
             ...flags(op),
             ...placeOf(op)
         };
@@ -221,6 +224,16 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
             console.warn(`project: import node ${i} lost its files: ${error?.message ?? error}`);
         }
         const op = new DatasetOp(source, stored?.name ?? 'dataset');
+        op.subset = importSubsetFrom(stored?.subset);
+        const all = (source as any)?.kind === 'images' ? (source as any).images : null;
+        if (all && Array.isArray(stored?.kept) && stored.kept.every((k: unknown) => Number.isInteger(k) && (k as number) >= 0 && (k as number) < all.length)) {
+            // the photos it handed on, as they were: the nodes after it
+            // refer to them by place
+            op.kept = stored.kept;
+            op.source = { kind: 'images', images: op.kept.map(k => all[k]) };
+        } else if ((source as any)?.kind === 'video' && op.subset.fps !== DEFAULT_VIDEO_FPS) {
+            op.source = { ...(source as any), fps: op.subset.fps };
+        }
         op.counts = stored?.counts;
         op.awaitingPoses = !!stored?.awaitingPoses;
         op.bypassed = !!stored?.bypassed;
