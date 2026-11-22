@@ -1,7 +1,8 @@
 import { Container } from '@playcanvas/pcui';
 
+import { CropPreview } from './crop-preview';
 import { i18n } from './localization';
-import { CropOp, ImageCropSettings, ResizeBy, ResizeOp, ResizeSettings, resizeScale } from '../edit-ops';
+import { CROP_ASPECTS, CropAspect, CropOp, ImageCropSettings, ResizeBy, ResizeOp, ResizeSettings, resizeScale } from '../edit-ops';
 import { Events } from '../events';
 
 // long edges offered on the resolution field; any other can be typed
@@ -20,7 +21,8 @@ const short = (v: number, digits: number) => String(Number(v.toFixed(digits)));
  * Typing into one sets the size and the other two follow, worked out from
  * the first photo's size (the largest one's when they differ); only the
  * field typed into is kept, so the intent holds for other photos. A crop
- * node in 2d mode shows the margins.
+ * node in 2d mode shows an aspect, the margins in percent or pixels, and
+ * the first photo with the crop drawn over it, to drag.
  */
 class ImageFace extends Container {
     private events: Events;
@@ -40,6 +42,9 @@ class ImageFace extends Container {
     private statusLine: HTMLElement;
     private summaryLine: HTMLElement;
     private section: HTMLElement;
+    private aspect: HTMLSelectElement;
+    private unit: HTMLSelectElement;
+    private preview: CropPreview;
 
     constructor(events: Events, kind: Kind, args = {}) {
         super({ ...args, id: `${kind}-image-face` });
@@ -211,11 +216,47 @@ class ImageFace extends Container {
         mode.title = i18n.t('crop.mode-hint');
         this.field(i18n.t('crop.mode'), mode);
 
+        const set = (settings: Partial<ImageCropSettings>) => this.events.fire('crop.setImageCrop', this.op, settings);
+
+        this.aspect = this.select(CROP_ASPECTS.map(a => [a, a === 'free' ? i18n.t('crop.aspect-free') : a]), (v) => {
+            set({ aspect: v as CropAspect });
+        });
+        this.field(i18n.t('crop.aspect'), this.aspect);
+
+        // a change of unit keeps the crop: the margins are converted
+        // through the first photo's size
+        this.unit = this.select([['%', '%'], ['px', 'px']], (v) => {
+            if (!(this.op instanceof CropOp)) return;
+            const unit = v as '%' | 'px';
+            const c = this.op.imageCrop;
+            if (unit === c.unit) return;
+            set(this.preview.size ? { unit, ...this.preview.valuesOf(this.preview.sidesOf(c), unit) } : { unit, left: 0, top: 0, right: 0, bottom: 0 });
+        });
+        this.field(i18n.t('crop.unit'), this.unit);
+
         (['left', 'top', 'right', 'bottom'] as const).forEach((side) => {
             this.field(i18n.t(`crop.${side}`), this.numberInput(side, 0, 45, 0.5, (v) => {
-                this.events.fire('crop.setImageCrop', this.op, { [side]: v } as Partial<ImageCropSettings>);
+                set({ [side]: v });
             }));
         });
+
+        this.preview = new CropPreview(sides => set(sides));
+        this.section.appendChild(this.preview.dom);
+    }
+
+    /** the 2d crop's fields and its preview */
+    private refreshCrop(op: CropOp) {
+        const c = op.imageCrop;
+        this.aspect.value = c.aspect;
+        this.unit.value = c.unit;
+        (['left', 'top', 'right', 'bottom'] as const).forEach((side) => {
+            const input = this.inputs.get(side);
+            input.max = c.unit === '%' ? '45' : '16384';
+            input.step = c.unit === '%' ? '0.5' : '1';
+        });
+        const source = op.datasetOp?.source as { kind?: string, images?: { data: Blob }[] } | null;
+        const first = source?.kind === 'images' ? source.images?.[0]?.data ?? null : null;
+        this.preview.show(first, c);
     }
 
     /** the three linked fields: the one typed into as typed, the others worked out */
@@ -256,11 +297,13 @@ class ImageFace extends Container {
         if (!op) return;
         const key = this.kind === 'resize' ? 'resize' : 'crop';
         this.sourceLabel.textContent = op.datasetOp ? op.datasetOp.sourceLabel : i18n.t('resize.needs-import');
-        const values: Record<string, number> = op instanceof ResizeOp ? {} : { ...op.imageCrop };
+        const c = op instanceof CropOp ? op.imageCrop : null;
+        const values: Record<string, number> = c ? { left: c.left, top: c.top, right: c.right, bottom: c.bottom } : {};
         this.inputs.forEach((input, name) => {
             if (document.activeElement !== input && values[name] !== undefined) input.value = String(values[name]);
         });
         if (op instanceof ResizeOp) this.refreshLinked(op);
+        else this.refreshCrop(op);
         const quality = op instanceof ResizeOp ? op.settings.quality : op.imageCrop.quality;
         if (document.activeElement !== this.quality) this.quality.value = String(quality);
         this.qualityValue.textContent = `${Math.round(quality * 100)}`;

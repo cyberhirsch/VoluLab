@@ -1,6 +1,6 @@
 import { BridgeImage } from './bridge-client';
 import { isRawCapture } from './dataset-source';
-import { CropOp, DatasetOp, EditOp, ImageCropSettings, PoseMatcher, ResizeFormat, ResizeOp, ResizeSettings, isDatasetInput, isImageNode, resizeSettingsFrom, resizeTarget } from '../edit-ops';
+import { CropOp, DatasetOp, EditOp, ImageCropSettings, PoseMatcher, ResizeFormat, ResizeOp, ResizeSettings, cropRect, imageCropFrom, isDatasetInput, isImageNode, resizeSettingsFrom, resizeTarget } from '../edit-ops';
 import { Events } from '../events';
 import { i18n } from '../ui/localization';
 
@@ -148,21 +148,25 @@ const shrink = async (image: BridgeImage, settings: ResizeSettings): Promise<Don
     }
 };
 
-const cropsNothing = (c: ImageCropSettings) => !c.left && !c.top && !c.right && !c.bottom;
+const cropsNothing = (c: ImageCropSettings) => !c.left && !c.top && !c.right && !c.bottom && c.aspect === 'free';
 
-/** One photo with the same share of each side cut off, as a JPEG. */
+/** One photo with its margins cut off and cut to the aspect, as a JPEG. */
 const crop = async (image: BridgeImage, settings: ImageCropSettings): Promise<Done> => {
     if (cropsNothing(settings)) {
         const size = await imageSize(image.data);
         return { image, from: size, to: size, changed: false };
     }
+    // decoded with EXIF orientation applied: the margins are the photo's
+    // as it is seen
     const bitmap = await createImageBitmap(image.data);
     const w = bitmap.width;
     const h = bitmap.height;
-    const sx = Math.round(w * settings.left / 100);
-    const sy = Math.round(h * settings.top / 100);
-    const sw = Math.max(1, w - sx - Math.round(w * settings.right / 100));
-    const sh = Math.max(1, h - sy - Math.round(h * settings.bottom / 100));
+    const [sx, sy, sw, sh] = cropRect(settings, w, h);
+    if (sx === 0 && sy === 0 && sw === w && sh === h) {
+        // already that aspect, no margins: as it is
+        bitmap.close();
+        return { image, from: [w, h], to: [w, h], changed: false };
+    }
     let cut: ImageBitmap;
     try {
         cut = await createImageBitmap(bitmap, sx, sy, sw, sh);
@@ -404,19 +408,10 @@ const registerImageNodes = (events: Events) => {
 
     events.on('crop.setImageCrop', (op: CropOp, settings: Partial<ImageCropSettings>) => {
         if (!(op instanceof CropOp) || op.mode !== '2d') return;
-        const was = op.imageCrop;
-        const side = (v: unknown, old: number) => {
-            const n = Number(v ?? old);
-            return Number.isFinite(n) ? Math.min(45, Math.max(0, n)) : old;
-        };
-        const quality = Number(settings.quality ?? was.quality);
-        op.imageCrop = {
-            left: side(settings.left, was.left),
-            top: side(settings.top, was.top),
-            right: side(settings.right, was.right),
-            bottom: side(settings.bottom, was.bottom),
-            quality: Number.isFinite(quality) ? Math.min(1, Math.max(0.1, quality)) : was.quality
-        };
+        const was = JSON.stringify(op.imageCrop);
+        op.imageCrop = imageCropFrom({ ...op.imageCrop, ...settings }, op.imageCrop);
+        // the same crop again: what it made stands
+        if (JSON.stringify(op.imageCrop) === was) return;
         events.fire('edit.changed');
         run(op).catch(() => {});
     });

@@ -1354,17 +1354,89 @@ class AddSplatOp {
     }
 }
 
-/** A 2D crop: how much comes off each side, in percent of the image. */
+type CropAspect = 'free' | '1:1' | '4:3' | '3:2' | '16:9' | '9:16';
+
+/**
+ * A 2D crop: how much comes off each side, in percent of the image or in
+ * pixels, and an aspect the rest is cut down to, centred in what the
+ * margins leave.
+ */
 type ImageCropSettings = {
     left: number;
     top: number;
     right: number;
     bottom: number;
+    /** what the four sides are in */
+    unit: '%' | 'px';
+    /** width : height of what is kept; free keeps what the margins leave */
+    aspect: CropAspect;
     /** JPEG quality of the images it crops, 0..1 */
     quality: number;
 };
 
-const defaultImageCropSettings = (): ImageCropSettings => ({ left: 0, top: 0, right: 0, bottom: 0, quality: 0.92 });
+const CROP_ASPECTS: CropAspect[] = ['free', '1:1', '4:3', '3:2', '16:9', '9:16'];
+
+const defaultImageCropSettings = (): ImageCropSettings => ({ left: 0, top: 0, right: 0, bottom: 0, unit: '%', aspect: 'free', quality: 0.92 });
+
+/**
+ * Crop settings from anything: a project's (one from before the units and
+ * the aspect has percent and no aspect), a face's partial change.
+ */
+const imageCropFrom = (given: any, base: ImageCropSettings = defaultImageCropSettings()): ImageCropSettings => {
+    const g = given ?? {};
+    const unit = g.unit === 'px' || g.unit === '%' ? g.unit : base.unit;
+    const side = (v: unknown, old: number) => {
+        const n = v === null || v === undefined || v === '' ? NaN : Number(v);
+        if (!Number.isFinite(n)) return old;
+        return unit === '%' ? Math.min(45, Math.max(0, n)) : Math.round(Math.min(16384, Math.max(0, n)));
+    };
+    const quality = Number(g.quality);
+    return {
+        left: side(g.left, base.left),
+        top: side(g.top, base.top),
+        right: side(g.right, base.right),
+        bottom: side(g.bottom, base.bottom),
+        unit,
+        aspect: CROP_ASPECTS.includes(g.aspect) ? g.aspect : base.aspect,
+        quality: g.quality !== undefined && Number.isFinite(quality) ? Math.min(1, Math.max(0.1, quality)) : base.quality
+    };
+};
+
+/**
+ * The part of a w × h image a crop keeps, as [x, y, width, height] in
+ * whole pixels: the margins first, then the aspect, centred. At least 16
+ * pixels each way are kept, so a crop never empties an image.
+ */
+const cropRect = (c: ImageCropSettings, w: number, h: number): [number, number, number, number] => {
+    const MIN = Math.min(16, w, h);
+    const px = (v: number, of: number) => (c.unit === '%' ? of * v / 100 : v);
+    let x = Math.round(px(c.left, w));
+    let y = Math.round(px(c.top, h));
+    let cw = w - x - Math.round(px(c.right, w));
+    let ch = h - y - Math.round(px(c.bottom, h));
+    if (cw < MIN) {
+        x = Math.max(0, Math.min(x, w - MIN));
+        cw = MIN;
+    }
+    if (ch < MIN) {
+        y = Math.max(0, Math.min(y, h - MIN));
+        ch = MIN;
+    }
+    if (c.aspect !== 'free') {
+        const [aw, ah] = c.aspect.split(':').map(Number);
+        const a = aw / ah;
+        if (cw / ch > a) {
+            const nw = Math.max(1, Math.round(ch * a));
+            x += Math.floor((cw - nw) / 2);
+            cw = nw;
+        } else {
+            const nh = Math.max(1, Math.round(cw / a));
+            y += Math.floor((ch - nh) / 2);
+            ch = nh;
+        }
+    }
+    return [x, y, cw, ch];
+};
 
 /** What an image node did: how many images, and the sizes before and after. */
 type ImageSummary = {
@@ -3076,7 +3148,11 @@ export {
     resizeScale,
     resizeTarget,
     type ImageCropSettings,
+    type CropAspect,
+    CROP_ASPECTS,
     defaultImageCropSettings,
+    imageCropFrom,
+    cropRect,
     type ImageSummary,
     type ImageNode,
     type DatasetInput,

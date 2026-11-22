@@ -31,6 +31,20 @@ changing upstream, does not resize again. A project from before keeps
 `maxEdge`: `resizeSettingsFrom` reads it as a long edge, never enlarged,
 JPEG - exactly what the node did.
 
+**Crop, 2d mode.** An aspect (free, 1:1, 4:3, 3:2, 16:9, 9:16) and the
+margins in percent or pixels. `cropRect` is the one rule: the margins
+first, then the aspect cut out of what they leave, centred, with at least
+16 px kept. The aspect is width : height as the photo is seen, so 4:3 on a
+portrait photo is a landscape cut; 9:16 is there for portrait. Switching
+the unit converts the margins through the first photo's size, so the crop
+stays. Below the fields, the first photo (decoded at 180 px high only; its
+full size from the header, swapped when EXIF turns it) with the crop drawn
+over it: the dashed rectangle is the margins, the solid one what is kept.
+Drag inside to move it, an edge or corner to resize it; the node changes
+when the drag ends, so a drag crops the photos once. A drag keeps each
+margin within 45 %. Old projects have percent and no aspect, which
+`imageCropFrom` reads as that.
+
 ## Images and cameras wires, a 2d crop, and the train node's two inputs
 
 The one `dataset` wire kind is now two: `images` (an import node's photos,

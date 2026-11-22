@@ -1,6 +1,6 @@
 import type { ZipReadFileSystem } from '@playcanvas/splat-transform';
 
-import { CropOp, DatasetOp, EditOp, PoseOp, ResizeOp, TrainOp, defaultImageCropSettings, isImageNode, resizeSettingsFrom, type DatasetInput, type PoseCamera } from './edit-ops';
+import { CropOp, DatasetOp, EditOp, PoseOp, ResizeOp, TrainOp, imageCropFrom, isImageNode, resizeSettingsFrom, type DatasetInput, type PoseCamera } from './edit-ops';
 import type { Events } from './events';
 import type { Scene } from './scene';
 import type { Splat } from './splat';
@@ -240,17 +240,10 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
     for (let r = 0; r < storedImageNodes.length; r++) {
         const stored = storedImageNodes[r];
         const given = stored?.settings ?? {};
-        const num = (v: unknown, fallback: number) => (Number.isFinite(Number(v)) && v !== null && v !== undefined ? Number(v) : fallback);
         let op: ResizeOp | CropOp;
         if (stored?.kind === 'crop') {
-            const d = defaultImageCropSettings();
-            op = CropOp.image({
-                left: num(given.left, d.left),
-                top: num(given.top, d.top),
-                right: num(given.right, d.right),
-                bottom: num(given.bottom, d.bottom),
-                quality: num(given.quality, d.quality)
-            });
+            // a project from before units and aspects: percent, free
+            op = CropOp.image(imageCropFrom(given));
         } else {
             // a project from before the linked fields has maxEdge
             op = new ResizeOp(resizeSettingsFrom(given));

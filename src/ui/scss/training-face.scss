@@ -214,6 +214,18 @@
         }
     }
 
+    // the 2d crop's preview: the first photo, the crop over it
+    .if-preview {
+        margin-top: 6px;
+
+        canvas {
+            display: block;
+            max-width: 100%;
+            border: 1px solid $ink-3;
+            touch-action: none;
+        }
+    }
+
     .if-slider-value {
         min-width: 22px;
         text-align: right;
