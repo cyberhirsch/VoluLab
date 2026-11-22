@@ -639,6 +639,7 @@
     "node.denoise.note": "Gaussians, die sich, während sie gezeichnet werden, weniger als so oft ihre dünnste Achse bewegen, gelten als Jitter: Ihre Geschwindigkeit wird gedämpft und ihr Ein- und Ausblenden über mehr Frames verteilt. Schnellere Bewegung bleibt, wie sie ist.",
     "node.flicker.frames": "kürzer als (Frames)",
     "node.flicker.note": "Löscht Gaussians, die weniger als so viele Frames mit mindestens halber Opacity gezeichnet werden, die 4D-Form von Floaters. Fügt dem Gelöschten nur hinzu.",
+    "node.flicker.too-short": "Die Sequenz hat weniger als zwei Frames: Nichts kann flackern, daher tut der Node hier nichts.",
     "node.fill.reach": "Reichweite (Frames)",
     "node.fill.note": "Stille Gaussians bleiben auf jeder Seite so viele Frames länger sichtbar, sodass Frames, die Abdeckung verloren haben, aus den Frames um sie herum gefüllt werden. Bewegte Gaussians bleiben unberührt, damit nichts eine Spur hinterlässt.",
     "node.freezeBg.mode": "halten",

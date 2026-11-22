@@ -639,6 +639,7 @@
     "node.denoise.note": "Les gaussiennes qui, tant qu'elles sont dessinées, bougent de moins de ce nombre de fois leur axe le plus fin sont prises pour du tremblement : leur vitesse est amortie et leur apparition et disparition étalées sur plus de frames. Le mouvement plus rapide reste tel quel.",
     "node.flicker.frames": "plus court que (frames)",
     "node.flicker.note": "Supprime les gaussiennes dessinées à au moins la moitié de leur opacité pendant moins de frames que cela, la forme 4D des floaters. N'ajoute jamais qu'à ce qui est supprimé.",
+    "node.flicker.too-short": "La séquence a moins de deux images : rien ne peut scintiller, le nœud ne fait donc rien ici.",
     "node.fill.reach": "portée (frames)",
     "node.fill.note": "Les gaussiennes immobiles restent dessinées ce nombre de frames de plus de chaque côté, de sorte que les frames qui ont perdu de la couverture sont comblées par les frames voisines. Les gaussiennes en mouvement ne sont pas touchées, pour ne laisser aucune traînée.",
     "node.freezeBg.mode": "figer",
