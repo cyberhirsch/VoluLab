@@ -1,6 +1,6 @@
 import type { ZipReadFileSystem } from '@playcanvas/splat-transform';
 
-import { CropOp, DatasetOp, EditOp, PoseOp, ResizeOp, TrainOp, defaultImageCropSettings, defaultResizeSettings, isImageNode, type DatasetInput, type PoseCamera } from './edit-ops';
+import { CropOp, DatasetOp, EditOp, PoseOp, ResizeOp, TrainOp, DEFAULT_VIDEO_FPS, defaultImportSubset, imageCropFrom, importSubsetFrom, isImageNode, poseOptionsFrom, resizeSettingsFrom, type DatasetInput, type PoseCamera } from './edit-ops';
 import type { Events } from './events';
 import type { Scene } from './scene';
 import type { Splat } from './splat';
@@ -55,7 +55,8 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
     const flags = (op: EditOp) => (op.bypassed ? { bypassed: true } : {});
 
     const storedDatasets = datasets.map((op, i) => {
-        const source = op.source as any;
+        // all that was imported; the subset is kept as its settings and places
+        const source = (op.original ?? op.source) as any;
         let stored: object | null = null;
         if (source?.kind === 'bytes') {
             const file = `dataset_${i}.bin`;
@@ -83,6 +84,8 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
             ...(op.counts ? { counts: op.counts } : {}),
             ...(op.awaitingPoses ? { awaitingPoses: true } : {}),
             ...(stored ? { source: stored } : {}),
+            ...(JSON.stringify(op.subset) !== JSON.stringify(defaultImportSubset()) ? { subset: op.subset } : {}),
+            ...(op.kept ? { kept: op.kept } : {}),
             ...flags(op),
             ...placeOf(op)
         };
@@ -126,6 +129,9 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
         return {
             ...input,
             matcher: op.matcher,
+            options: op.options,
+            ...(op.madeWith ? { madeWith: op.madeWith } : {}),
+            ...(op.report ? { report: op.report } : {}),
             showCameras: op.showCameras,
             total: op.total,
             cameras: op.cameras,
@@ -221,6 +227,16 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
             console.warn(`project: import node ${i} lost its files: ${error?.message ?? error}`);
         }
         const op = new DatasetOp(source, stored?.name ?? 'dataset');
+        op.subset = importSubsetFrom(stored?.subset);
+        const all = (source as any)?.kind === 'images' ? (source as any).images : null;
+        if (all && Array.isArray(stored?.kept) && stored.kept.every((k: unknown) => Number.isInteger(k) && (k as number) >= 0 && (k as number) < all.length)) {
+            // the photos it handed on, as they were: the nodes after it
+            // refer to them by place
+            op.kept = stored.kept;
+            op.source = { kind: 'images', images: op.kept.map(k => all[k]) };
+        } else if ((source as any)?.kind === 'video' && op.subset.fps !== DEFAULT_VIDEO_FPS) {
+            op.source = { ...(source as any), fps: op.subset.fps };
+        }
         op.counts = stored?.counts;
         op.awaitingPoses = !!stored?.awaitingPoses;
         op.bypassed = !!stored?.bypassed;
@@ -240,20 +256,13 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
     for (let r = 0; r < storedImageNodes.length; r++) {
         const stored = storedImageNodes[r];
         const given = stored?.settings ?? {};
-        const num = (v: unknown, fallback: number) => (Number.isFinite(Number(v)) && v !== null && v !== undefined ? Number(v) : fallback);
         let op: ResizeOp | CropOp;
         if (stored?.kind === 'crop') {
-            const d = defaultImageCropSettings();
-            op = CropOp.image({
-                left: num(given.left, d.left),
-                top: num(given.top, d.top),
-                right: num(given.right, d.right),
-                bottom: num(given.bottom, d.bottom),
-                quality: num(given.quality, d.quality)
-            });
+            // a project from before units and aspects: percent, free
+            op = CropOp.image(imageCropFrom(given));
         } else {
-            const d = defaultResizeSettings();
-            op = new ResizeOp({ maxEdge: num(given.maxEdge, d.maxEdge), quality: num(given.quality, d.quality) });
+            // a project from before the linked fields has maxEdge
+            op = new ResizeOp(resizeSettingsFrom(given));
         }
         op.summary = stored?.summary;
         (op as EditOp).bypassed = !!stored?.bypassed;
@@ -285,6 +294,18 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
         const stored = storedPoses[j];
         const op = new PoseOp(stored?.matcher === 'sequential' ? 'sequential' : 'exhaustive');
         op.showCameras = stored?.showCameras !== false;
+        // a project from before has no options: what the bridge ran then
+        op.options = poseOptionsFrom(stored?.options);
+        if (typeof stored?.madeWith === 'string') op.madeWith = stored.madeWith;
+        const report = stored?.report;
+        if (report && Number.isFinite(report.registered) && Number.isFinite(report.total)) {
+            op.report = {
+                registered: report.registered,
+                total: report.total,
+                ...(Number.isFinite(report.meanError) ? { meanError: report.meanError } : {}),
+                unregistered: Array.isArray(report.unregistered) ? report.unregistered.filter((n: unknown) => typeof n === 'string') : []
+            };
+        }
         op.cameras = Array.isArray(stored?.cameras) ? stored.cameras as PoseCamera[] : [];
         op.total = Number(stored?.total) || op.cameras.length;
         op.awaitingPoses = !!stored?.awaitingPoses;

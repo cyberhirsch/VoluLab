@@ -11,7 +11,9 @@
 #light-face,
 #relight-face,
 #debug-face,
-#primitive-face {
+#primitive-face,
+#resize-image-face,
+#crop-image-face {
     display: flex;
     flex-direction: column;
     background-color: $ink-1;
@@ -186,6 +188,131 @@
         width: 12px;
         height: 12px;
         border: 1px solid $ink-3;
+    }
+
+    // the resize node's linked fields: the one typed into stands out
+    .if-entered {
+        border-color: $ink-5 !important;
+        color: $ink-7 !important;
+    }
+
+    .if-note {
+        white-space: normal;
+        font-size: 10px;
+    }
+
+    .if-slider {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+
+        input[type='range'] {
+            width: 70px;
+            padding: 0;
+            border: none;
+            background: none;
+        }
+    }
+
+    // the 2d crop's preview: the first photo, the crop over it
+    .if-preview {
+        margin-top: 6px;
+
+        canvas {
+            display: block;
+            max-width: 100%;
+            border: 1px solid $ink-3;
+            touch-action: none;
+        }
+    }
+
+    // the import node's thumbnails: made as they scroll into view
+    .ip-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 3px;
+        max-height: 172px;
+        overflow-y: auto;
+        margin-top: 6px;
+        background-color: $ink-0;
+        border: 1px solid $ink-3;
+        padding: 3px;
+    }
+
+    .ip-cell {
+        height: 48px;
+        border: 1px solid transparent;
+
+        canvas {
+            display: block;
+            height: 100%;
+            width: auto;
+            background-color: $ink-2;
+        }
+
+        &.ip-dropped {
+            opacity: 0.25;
+        }
+
+        &.ip-highlight {
+            border-color: $ink-7;
+        }
+
+        &.ip-failed canvas {
+            background-color: $ink-3;
+        }
+    }
+
+    // the pose node: its wrapping status, the images it could not place
+    .pf-status,
+    .pf-note {
+        white-space: normal;
+    }
+
+    .pf-note {
+        font-size: 10px;
+        color: $ink-5;
+    }
+
+    .pf-missing {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 6px;
+        max-height: 120px;
+        overflow-y: auto;
+
+        .tf-source {
+            width: 100%;
+        }
+    }
+
+    .pf-name {
+        background: none;
+        border: none;
+        padding: 0;
+        color: $ink-6;
+        font-family: $font-mono;
+        font-size: 10px;
+        text-decoration: underline;
+        cursor: pointer;
+
+        &.pf-picked,
+        &:hover {
+            color: $ink-7;
+        }
+    }
+
+    .pf-thumb {
+        display: block;
+        height: 96px;
+        margin-top: 4px;
+        border: 1px solid $ink-3;
+    }
+
+    .if-slider-value {
+        min-width: 22px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
     }
 
 }

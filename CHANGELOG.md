@@ -9,6 +9,97 @@ months finds out why before they change it.
 
 ---
 
+## Capture-side nodes: resize, 2d crop, import and pose do more
+
+**Resize.** One number with a hidden preset list was all the resize node
+had. It now shows three linked fields - scale in percent, long edge in
+pixels (with a list of common edges), megapixels. Typing into one sets the
+size and the other two follow, worked out from the first photo's size, or
+the largest one's when the sizes differ (`ResizeOp.reference`, read from
+the headers). Only the field typed into is stored (`by` and `value`), so
+the intent survives new photos: 1600 px stays 1600 px, 25 % stays a
+quarter. Beside them: never enlarge (on), resampling quality (the
+`resizeQuality` of createImageBitmap), and the output format - JPEG, PNG
+or WebP, with the quality slider only for the lossy two. A resized image
+takes its format's extension; one that comes out at its own size goes
+through untouched in its own format, as before. Brush reads WebP (the
+`image` crate's decoder is in its wasm), and pose-read counts .webp.
+
+Each photo's result is remembered per photo and settings key (two keys per
+photo), so going back to the previous settings, or a subset of the photos
+changing upstream, does not resize again. A project from before keeps
+`maxEdge`: `resizeSettingsFrom` reads it as a long edge, never enlarged,
+JPEG - exactly what the node did.
+
+**Crop, 2d mode.** An aspect (free, 1:1, 4:3, 3:2, 16:9, 9:16) and the
+margins in percent or pixels. `cropRect` is the one rule: the margins
+first, then the aspect cut out of what they leave, centred, with at least
+16 px kept. The aspect is width : height as the photo is seen, so 4:3 on a
+portrait photo is a landscape cut; 9:16 is there for portrait. Switching
+the unit converts the margins through the first photo's size, so the crop
+stays. Below the fields, the first photo (decoded at 180 px high only; its
+full size from the header, swapped when EXIF turns it) with the crop drawn
+over it: the dashed rectangle is the margins, the solid one what is kept.
+Drag inside to move it, an edge or corner to resize it; the node changes
+when the drag ends, so a drag crops the photos once. A drag keeps each
+margin within 45 %. Old projects have percent and no aspect, which
+`imageCropFrom` reads as that.
+
+**Import.** The node now keeps what was imported (`original`) and hands on
+a subset (`source`): every Nth photo, a range (from, to; 0 is the last),
+and less the blurriest share. Blurriness is the variance of the Laplacian
+of the photo in grey at 320 px high (src/training/import-subset.ts): cheap,
+and a blurred photo has little second derivative - blurry photos are a
+classic cause of SfM failing. While scores are missing the node hands on
+nothing, so no resize or pose starts on photos about to go; 99 photos of
+12 MP score in about 8 s. A video gets a frame rate instead
+(`extractVideoFrames` takes it; the pose node reads it off the source).
+
+Under the pickers: how many photos, their size(s) from the headers, the
+megabytes, and a grid of thumbnails, made only as they scroll into view
+and decoded straight to small sizes - no full-size decode is held. Photos
+left out are dimmed. The same small decode gives the thumbnail and the
+score, so a scrolled-through grid makes the blur cut quick.
+
+A project stores all photos, the subset settings and the places kept
+(`kept`): the image and pose nodes after it refer to photos by their place
+in what it hands on, so the kept list is put back as it was rather than
+scored again. A project from before has no subset: all photos, as before.
+With the resize memo, changing the subset under a resize node only resizes
+photos not seen before (every 2nd of 60 after a full run: 0.1 s).
+
+**Pose.** The node passes COLMAP's options on (`PoseOp.options`): camera
+model (simple radial, pinhole, OpenCV), one camera for all, max features
+per image, and the overlap for sequential matching. The bridge takes all
+four (new query parameters on `/run`, checked against a list before they
+reach the command line; an old bridge reads the matcher only). colmap-wasm
+has one shared SIMPLE_PINHOLE camera and no option for any of it, so the
+browser run is now done step by step - extract, cap, match, map - to cap
+the features between extraction and matching (the largest-scale ones are
+kept, as COLMAP's max_num_features drops the finest octaves first), and
+the overlap is its sequential window. The wasm build kept every feature
+(13 928 and 10 590 on two 1200×1600 photos); the default cap is COLMAP's
+8192, so the browser now matches what the bridge did. A pose node made for
+photos of several sizes gets one camera per image; of one size, one shared
+camera. Changing an option leaves the cameras in place and says they were
+found with other settings (`madeWith` against `settingsKey`).
+
+After a run the face shows images placed n / N, the mean reprojection
+error of the sparse points (from the reconstruction in the browser, from
+points3D.bin or .txt for the bridge), and the images not placed; clicking
+one shows its thumbnail and marks it on the import node's grid. A project
+keeps the options and the report; one from before gets what the bridge
+always ran (OPENCV, one camera, 8192, 10).
+
+The status said "COLMAP: mapping cameras 0/1": the package reports the
+mapper as one step, so the numbers meant nothing. Stages now read in
+words with what their numbers count ("pose estimation: finding features,
+image 12 of 99", "matching features, image pair 300 of 4851"); mapping
+shows the phase the mapper's log names (rotation averaging, track
+establishment, global positioning, bundle adjustment, retriangulation),
+the time it has run, and images placed when the log says so, and the
+newest log line sits under the status.
+
 ## Images and cameras wires, a 2d crop, and the train node's two inputs
 
 The one `dataset` wire kind is now two: `images` (an import node's photos,

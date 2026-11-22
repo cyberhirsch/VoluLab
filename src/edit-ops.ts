@@ -1354,17 +1354,89 @@ class AddSplatOp {
     }
 }
 
-/** A 2D crop: how much comes off each side, in percent of the image. */
+type CropAspect = 'free' | '1:1' | '4:3' | '3:2' | '16:9' | '9:16';
+
+/**
+ * A 2D crop: how much comes off each side, in percent of the image or in
+ * pixels, and an aspect the rest is cut down to, centred in what the
+ * margins leave.
+ */
 type ImageCropSettings = {
     left: number;
     top: number;
     right: number;
     bottom: number;
+    /** what the four sides are in */
+    unit: '%' | 'px';
+    /** width : height of what is kept; free keeps what the margins leave */
+    aspect: CropAspect;
     /** JPEG quality of the images it crops, 0..1 */
     quality: number;
 };
 
-const defaultImageCropSettings = (): ImageCropSettings => ({ left: 0, top: 0, right: 0, bottom: 0, quality: 0.92 });
+const CROP_ASPECTS: CropAspect[] = ['free', '1:1', '4:3', '3:2', '16:9', '9:16'];
+
+const defaultImageCropSettings = (): ImageCropSettings => ({ left: 0, top: 0, right: 0, bottom: 0, unit: '%', aspect: 'free', quality: 0.92 });
+
+/**
+ * Crop settings from anything: a project's (one from before the units and
+ * the aspect has percent and no aspect), a face's partial change.
+ */
+const imageCropFrom = (given: any, base: ImageCropSettings = defaultImageCropSettings()): ImageCropSettings => {
+    const g = given ?? {};
+    const unit = g.unit === 'px' || g.unit === '%' ? g.unit : base.unit;
+    const side = (v: unknown, old: number) => {
+        const n = v === null || v === undefined || v === '' ? NaN : Number(v);
+        if (!Number.isFinite(n)) return old;
+        return unit === '%' ? Math.min(45, Math.max(0, n)) : Math.round(Math.min(16384, Math.max(0, n)));
+    };
+    const quality = Number(g.quality);
+    return {
+        left: side(g.left, base.left),
+        top: side(g.top, base.top),
+        right: side(g.right, base.right),
+        bottom: side(g.bottom, base.bottom),
+        unit,
+        aspect: CROP_ASPECTS.includes(g.aspect) ? g.aspect : base.aspect,
+        quality: g.quality !== undefined && Number.isFinite(quality) ? Math.min(1, Math.max(0.1, quality)) : base.quality
+    };
+};
+
+/**
+ * The part of a w × h image a crop keeps, as [x, y, width, height] in
+ * whole pixels: the margins first, then the aspect, centred. At least 16
+ * pixels each way are kept, so a crop never empties an image.
+ */
+const cropRect = (c: ImageCropSettings, w: number, h: number): [number, number, number, number] => {
+    const MIN = Math.min(16, w, h);
+    const px = (v: number, of: number) => (c.unit === '%' ? of * v / 100 : v);
+    let x = Math.round(px(c.left, w));
+    let y = Math.round(px(c.top, h));
+    let cw = w - x - Math.round(px(c.right, w));
+    let ch = h - y - Math.round(px(c.bottom, h));
+    if (cw < MIN) {
+        x = Math.max(0, Math.min(x, w - MIN));
+        cw = MIN;
+    }
+    if (ch < MIN) {
+        y = Math.max(0, Math.min(y, h - MIN));
+        ch = MIN;
+    }
+    if (c.aspect !== 'free') {
+        const [aw, ah] = c.aspect.split(':').map(Number);
+        const a = aw / ah;
+        if (cw / ch > a) {
+            const nw = Math.max(1, Math.round(ch * a));
+            x += Math.floor((cw - nw) / 2);
+            cw = nw;
+        } else {
+            const nh = Math.max(1, Math.round(cw / a));
+            y += Math.floor((ch - nh) / 2);
+            ch = nh;
+        }
+    }
+    return [x, y, cw, ch];
+};
 
 /** What an image node did: how many images, and the sizes before and after. */
 type ImageSummary = {
@@ -2177,6 +2249,41 @@ const countWords = (kind: string, n: number) => {
 };
 
 /**
+ * Which of an import node's photos go on: every `every`th of those from
+ * `from` to `to` (1-based, both included; `to` 0 is the last), less the
+ * blurriest `dropBlurry` percent of them. A video's frames are taken at
+ * `fps` a second.
+ */
+type ImportSubset = {
+    every: number;
+    from: number;
+    to: number;
+    dropBlurry: number;
+    fps: number;
+};
+
+const DEFAULT_VIDEO_FPS = 2;
+
+const defaultImportSubset = (): ImportSubset => ({ every: 1, from: 1, to: 0, dropBlurry: 0, fps: DEFAULT_VIDEO_FPS });
+
+/** an import subset from anything; a project from before has none */
+const importSubsetFrom = (given: any, base: ImportSubset = defaultImportSubset()): ImportSubset => {
+    const g = given ?? {};
+    const int = (v: unknown, old: number, lo: number, hi: number) => {
+        const n = v === null || v === undefined || v === '' ? NaN : Math.round(Number(v));
+        return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : old;
+    };
+    const fps = g.fps === null || g.fps === undefined || g.fps === '' ? NaN : Number(g.fps);
+    return {
+        every: int(g.every, base.every, 1, 1000),
+        from: int(g.from, base.from, 1, 1e6),
+        to: int(g.to, base.to, 0, 1e6),
+        dropBlurry: int(g.dropBlurry, base.dropBlurry, 0, 90),
+        fps: Number.isFinite(fps) ? Math.min(30, Math.max(0.1, Math.round(fps * 10) / 10)) : base.fps
+    };
+};
+
+/**
  * An import node whose cargo is a capture dataset rather than a scene
  * object. The one import node concept covers both: importing a splat file
  * yields a loaded object, importing a dataset yields this - a node holding
@@ -2191,8 +2298,18 @@ class DatasetOp {
     inputs: Splat[] = [];
     /** the lane marker the train node consumes as its input */
     output: DatasetHandle;
-    /** bytes / directory handle / url for the trainer */
+    /**
+     * what it hands on: bytes / directory handle / url for the trainer,
+     * or the photos (the subset of them kept) or a video for a pose node;
+     * null while the subset is being worked out
+     */
     source: unknown | null;
+    /** what was imported, all of it; `source` is the subset of it */
+    original: unknown | null;
+    /** which of the photos it hands on, and at what rate a video's frames */
+    subset: ImportSubset = defaultImportSubset();
+    /** the places in `original` of the photos kept; undefined when all are */
+    kept?: number[];
     sourceName: string;
     /** photos ingested, poses still being estimated outside the app */
     awaitingPoses?: boolean;
@@ -2204,6 +2321,7 @@ class DatasetOp {
 
     constructor(source: unknown | null, sourceName: string) {
         this.source = source;
+        this.original = source;
         this.sourceName = sourceName;
         this.output = { name: sourceName, dataset: true };
     }
@@ -2227,8 +2345,11 @@ class DatasetOp {
         return 'images';
     }
 
+    /** Take what was imported, all of it; the subset is applied after (import-subset.ts). */
     setSource(source: unknown, name: string) {
         this.source = source;
+        this.original = source;
+        this.kept = undefined;
         this.sourceName = name;
         this.output.name = name;
         this.awaitingPoses = false;
@@ -2247,6 +2368,7 @@ class DatasetOp {
 
     destroy() {
         this.source = null;
+        this.original = null;
     }
 }
 
@@ -2269,20 +2391,133 @@ type PoseCamera = {
 
 type PoseMatcher = 'sequential' | 'exhaustive';
 
+type PoseCameraModel = 'SIMPLE_RADIAL' | 'PINHOLE' | 'OPENCV';
+
+/**
+ * COLMAP's options a pose node passes on. The bridge takes all of them;
+ * the in-browser build (colmap-wasm) has one shared SIMPLE_PINHOLE camera
+ * whatever these say, and takes the feature cap and the overlap.
+ */
+type PoseOptions = {
+    cameraModel: PoseCameraModel;
+    /** one camera for all images: photos from one camera at one zoom */
+    sharedCamera: boolean;
+    /** SIFT features kept per image, the largest-scale ones */
+    maxFeatures: number;
+    /** sequential matching: how many following images each is matched with */
+    overlap: number;
+};
+
+const POSE_CAMERA_MODELS: PoseCameraModel[] = ['SIMPLE_RADIAL', 'PINHOLE', 'OPENCV'];
+
+// what the bridge ran before these were options: OPENCV, one camera,
+// COLMAP's 8192 features, an overlap of 10 (the browser's window too)
+const defaultPoseOptions = (): PoseOptions => ({ cameraModel: 'OPENCV', sharedCamera: true, maxFeatures: 8192, overlap: 10 });
+
+const poseOptionsFrom = (given: any, base: PoseOptions = defaultPoseOptions()): PoseOptions => {
+    const g = given ?? {};
+    const int = (v: unknown, old: number, lo: number, hi: number) => {
+        const n = v === null || v === undefined || v === '' ? NaN : Math.round(Number(v));
+        return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : old;
+    };
+    return {
+        cameraModel: POSE_CAMERA_MODELS.includes(g.cameraModel) ? g.cameraModel : base.cameraModel,
+        sharedCamera: typeof g.sharedCamera === 'boolean' ? g.sharedCamera : base.sharedCamera,
+        maxFeatures: int(g.maxFeatures, base.maxFeatures, 256, 65536),
+        overlap: int(g.overlap, base.overlap, 1, 200)
+    };
+};
+
+/** What a pose run came to: how many images it placed, and how well. */
+type PoseReport = {
+    registered: number;
+    total: number;
+    /** mean reprojection error of the sparse points, in pixels */
+    meanError?: number;
+    /** the images it could not place, by name */
+    unregistered: string[];
+};
+
+/**
+ * Which of the resize node's three linked fields was typed in last: the
+ * scale in percent, the long edge in pixels, or the size in megapixels.
+ * Only that one is kept, so the intent holds when the photos change: a
+ * long edge of 1600 px stays 1600 px for larger photos, 50 % stays half.
+ */
+type ResizeBy = 'percent' | 'edge' | 'megapixels';
+
+type ResizeFormat = 'jpeg' | 'png' | 'webp';
+
 type ResizeSettings = {
-    /** the longest an image's long edge may be, in pixels */
-    maxEdge: number;
-    /** JPEG quality of the images it shrinks, 0..1 */
+    by: ResizeBy;
+    /** percent, pixels or megapixels, as `by` says */
+    value: number;
+    /** never make an image larger than it came in */
+    neverEnlarge: boolean;
+    /** createImageBitmap's resizeQuality */
+    resample: 'high' | 'medium' | 'low';
+    /** the format of the images it resizes */
+    format: ResizeFormat;
+    /** quality of the lossy formats (JPEG, WebP), 0..1 */
     quality: number;
 };
 
-const defaultResizeSettings = (): ResizeSettings => ({ maxEdge: 1600, quality: 0.92 });
+const defaultResizeSettings = (): ResizeSettings => ({ by: 'edge', value: 1600, neverEnlarge: true, resample: 'high', format: 'jpeg', quality: 0.92 });
+
+const RESIZE_LIMITS: Record<ResizeBy, [number, number]> = { percent: [1, 400], edge: [16, 16384], megapixels: [0.01, 400] };
+
+/**
+ * Resize settings from anything: a project's, a face's partial change.
+ * A project from before the three fields kept `maxEdge`: that is a long
+ * edge, never enlarged, as JPEG - what the node did then.
+ */
+const resizeSettingsFrom = (given: any, base: ResizeSettings = defaultResizeSettings()): ResizeSettings => {
+    const g = given ?? {};
+    const num = (v: unknown) => (v === null || v === undefined || v === '' ? NaN : Number(v));
+    let by: ResizeBy = (['percent', 'edge', 'megapixels'] as ResizeBy[]).includes(g.by) ? g.by : base.by;
+    let value = num(g.value);
+    if (g.by === undefined && g.value === undefined && Number.isFinite(num(g.maxEdge))) {
+        by = 'edge';
+        value = num(g.maxEdge);
+    }
+    if (!Number.isFinite(value)) value = by === base.by ? base.value : defaultResizeSettings().value;
+    const [lo, hi] = RESIZE_LIMITS[by];
+    value = Math.min(hi, Math.max(lo, value));
+    if (by === 'edge') value = Math.round(value);
+    const quality = num(g.quality);
+    return {
+        by,
+        value,
+        neverEnlarge: typeof g.neverEnlarge === 'boolean' ? g.neverEnlarge : base.neverEnlarge,
+        resample: ['high', 'medium', 'low'].includes(g.resample) ? g.resample : base.resample,
+        format: ['jpeg', 'png', 'webp'].includes(g.format) ? g.format : base.format,
+        quality: Number.isFinite(quality) ? Math.min(1, Math.max(0.1, quality)) : base.quality
+    };
+};
+
+/**
+ * The scale a resize node puts on an image of w × h, before rounding:
+ * the same rule for every image, so mixed sizes each get their own.
+ */
+const resizeScale = (s: ResizeSettings, w: number, h: number) => {
+    let scale = s.by === 'percent' ? s.value / 100 :
+        (s.by === 'edge' ? s.value / Math.max(w, h, 1) : Math.sqrt(s.value * 1e6 / Math.max(1, w * h)));
+    if (s.neverEnlarge) scale = Math.min(1, scale);
+    return scale;
+};
+
+/** the size an image of w × h comes out at */
+const resizeTarget = (s: ResizeSettings, w: number, h: number): [number, number] => {
+    const scale = resizeScale(s, w, h);
+    return [Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale))];
+};
 
 /**
  * A resize node: shrinks the photos an import node holds before they are
  * posed, so the pose node and the trainer see the same smaller images.
  *
- * Images whose long edge is within the cap go through untouched. A video
+ * Images that come out at the size they went in go through untouched,
+ * in their own format; only resized ones take the node's format. A video
  * and a dataset that already has poses go through untouched too: a posed
  * dataset's intrinsics are in pixels of the images it has. The shrunk
  * images are its own state (src/training/image-nodes.ts makes them),
@@ -2295,6 +2530,11 @@ class ResizeOp implements ImageNode {
     output: DatasetHandle;
     datasetOp?: DatasetInput;
     settings: ResizeSettings;
+    /**
+     * the size the face works its linked fields out from: the first
+     * photo's, or the largest one's when they differ; session state
+     */
+    reference?: [number, number];
     source: unknown | null = null;
     madeFrom: { source: unknown, key: string } | null = null;
     summary?: ImageSummary;
@@ -2374,6 +2614,13 @@ class PoseOp {
     /** the import node feeding it, or an image node between */
     datasetOp?: DatasetInput;
     matcher: PoseMatcher;
+    options: PoseOptions = defaultPoseOptions();
+    /** the matcher and options the cameras it has were found with */
+    madeWith?: string;
+    /** what the last run came to */
+    report?: PoseReport;
+    /** the newest line of the run's log */
+    log?: string;
     /** the posed dataset for the trainer; null until there is one */
     source: unknown | null = null;
     /** the files estimation produced (sparse/0/...); none when it read them */
@@ -2435,6 +2682,14 @@ class PoseOp {
         this.images = null;
         this.cameras = [];
         this.total = 0;
+        this.report = undefined;
+        this.madeWith = undefined;
+        this.log = undefined;
+    }
+
+    /** what the cameras depend on, to tell when they are out of date */
+    get settingsKey() {
+        return JSON.stringify({ matcher: this.matcher, ...this.options });
     }
 
     do() {}
@@ -2993,14 +3248,33 @@ export {
     VoxeliseOp,
     AddVoxelsOp,
     DatasetOp,
+    type ImportSubset,
+    DEFAULT_VIDEO_FPS,
+    defaultImportSubset,
+    importSubsetFrom,
     PoseOp,
     type PoseCamera,
     type PoseMatcher,
+    type PoseCameraModel,
+    type PoseOptions,
+    type PoseReport,
+    POSE_CAMERA_MODELS,
+    defaultPoseOptions,
+    poseOptionsFrom,
     ResizeOp,
     type ResizeSettings,
+    type ResizeBy,
+    type ResizeFormat,
     defaultResizeSettings,
+    resizeSettingsFrom,
+    resizeScale,
+    resizeTarget,
     type ImageCropSettings,
+    type CropAspect,
+    CROP_ASPECTS,
     defaultImageCropSettings,
+    imageCropFrom,
+    cropRect,
     type ImageSummary,
     type ImageNode,
     type DatasetInput,

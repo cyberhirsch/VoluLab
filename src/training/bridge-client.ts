@@ -7,6 +7,8 @@
  * answers Chrome's private-network preflight itself.
  */
 
+import type { PoseOptions } from '../edit-ops';
+
 const BRIDGE = 'http://127.0.0.1:39733';
 
 type BridgeImage = { name: string, data: Blob };
@@ -43,8 +45,8 @@ const call = async (url: string, init: Parameters<typeof fetch>[1] = {}) => {
 };
 
 /**
- * Send images through a full COLMAP run and return the sparse model
- * files. Throws with the bridge's error text when reconstruction fails.
+ * Send images through a full COLMAP run, with the pose node's options,
+ * and return the sparse model files. Throws with the bridge's error text when reconstruction fails.
  *
  * The bridge may store an image under a different name than it was sent
  * with (it keeps names ASCII and unique); each image's `name` is updated
@@ -52,7 +54,7 @@ const call = async (url: string, init: Parameters<typeof fetch>[1] = {}) => {
  * `signal` deletes the job, which stops COLMAP on the bridge; the job is
  * deleted on failure too, so nothing is left in the bridge's temp folder.
  */
-const estimatePoses = async (images: BridgeImage[], matcher: 'sequential' | 'exhaustive', onStage: StageFn, signal?: AbortSignal): Promise<{ path: string, data: Uint8Array }[]> => {
+const estimatePoses = async (images: BridgeImage[], matcher: 'sequential' | 'exhaustive', onStage: StageFn, signal?: AbortSignal, options?: PoseOptions): Promise<{ path: string, data: Uint8Array }[]> => {
     const created = await (await call(`${BRIDGE}/jobs`, { method: 'POST', signal })).json();
     const id = created.id as string;
 
@@ -68,7 +70,15 @@ const estimatePoses = async (images: BridgeImage[], matcher: 'sequential' | 'exh
             onStage('upload', `${++sent}/${images.length}`);
         }
 
-        await call(`${BRIDGE}/jobs/${id}/run?matcher=${matcher}`, { method: 'POST', signal });
+        // COLMAP's options; a bridge from before reads the matcher only
+        const query = new URLSearchParams({ matcher });
+        if (options) {
+            query.set('camera_model', options.cameraModel);
+            query.set('single_camera', options.sharedCamera ? '1' : '0');
+            query.set('max_features', String(options.maxFeatures));
+            query.set('overlap', String(options.overlap));
+        }
+        await call(`${BRIDGE}/jobs/${id}/run?${query}`, { method: 'POST', signal });
 
         for (;;) {
             await new Promise((resolve) => {

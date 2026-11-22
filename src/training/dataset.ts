@@ -18,7 +18,7 @@ type DatasetFile = {
     url?: string;
 };
 
-const IMAGE_RE = /\.(?:jpg|jpeg|png)$/;
+const IMAGE_RE = /\.(?:jpg|jpeg|png|webp)$/;
 
 /** Every file is a photo: a dataset still waiting for its poses. */
 const isImageSet = (filenames: string[]): boolean => {

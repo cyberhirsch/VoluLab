@@ -186,7 +186,41 @@ const camerasFromSparse = (files: { path: string, data: Uint8Array }[]): PoseCam
     return [];
 };
 
-const IMAGE_RE = /\.(?:jpg|jpeg|png)$/i;
+/**
+ * The mean reprojection error of a COLMAP model's points, in pixels, from
+ * points3D.bin or points3D.txt; undefined when it has neither.
+ */
+const meanReprojectionError = (files: { path: string, data: Uint8Array }[]): number | undefined => {
+    const find = (name: string) => files.find(f => f.path.toLowerCase().endsWith(name));
+    let sum = 0;
+    let n = 0;
+    const bin = find('points3d.bin');
+    if (bin) {
+        const view = new DataView(bin.data.buffer, bin.data.byteOffset, bin.data.byteLength);
+        const count = Number(view.getBigUint64(0, true));
+        let at = 8;
+        for (let i = 0; i < count && at + 51 <= view.byteLength; i++) {
+            // id (8), xyz (24), rgb (3), error (8), track length (8), track (8 each)
+            sum += view.getFloat64(at + 35, true);
+            n++;
+            const track = Number(view.getBigUint64(at + 43, true));
+            at += 51 + track * 8;
+        }
+    } else {
+        const txt = find('points3d.txt');
+        if (!txt) return undefined;
+        for (const line of dataLines(new TextDecoder().decode(txt.data))) {
+            const error = Number(line.trim().split(/\s+/)[7]);
+            if (Number.isFinite(error)) {
+                sum += error;
+                n++;
+            }
+        }
+    }
+    return n ? sum / n : undefined;
+};
+
+const IMAGE_RE = /\.(?:jpg|jpeg|png|webp)$/i;
 
 /**
  * The poses of a dataset that already has them, and how many images it
@@ -215,4 +249,4 @@ const readDatasetPoses = async (reader: DatasetReader): Promise<{ cameras: PoseC
     return { cameras: camerasFromSparse(files), total, found };
 };
 
-export { camerasFromSparse, readDatasetPoses };
+export { camerasFromSparse, meanReprojectionError, readDatasetPoses };

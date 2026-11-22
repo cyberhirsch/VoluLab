@@ -1,5 +1,6 @@
 import { Container } from '@playcanvas/pcui';
 
+import { ImportPhotos } from './import-photos';
 import { i18n } from './localization';
 import { resolveDropPayload } from '../drop-handler';
 import { DatasetOp, EditOp, PoseMatcher, PoseOp, describeCounts, isImageNode, type DatasetInput } from '../edit-ops';
@@ -24,6 +25,7 @@ class ImportFace extends Container {
     private sourceLabel: HTMLElement;
     private countsLine: HTMLElement;
     private noticeLine: HTMLElement;
+    private photos: ImportPhotos;
 
     constructor(events: Events, args = {}) {
         args = {
@@ -39,6 +41,7 @@ class ImportFace extends Container {
         // travel with the dom
         (this.dom as any).bindNode = (op: DatasetOp | null) => {
             this.op = op;
+            this.photos.bind(op);
             this.refresh();
         };
 
@@ -81,6 +84,10 @@ class ImportFace extends Container {
         this.noticeLine.hidden = true;
         section.appendChild(this.noticeLine);
 
+        // the photos it holds, which of them go on, their thumbnails
+        this.photos = new ImportPhotos(events);
+        this.dom.appendChild(this.photos.dom);
+
         // drops aimed at this node stay here rather than falling through to
         // the scene importer - folders, file lists and single files alike
         this.dom.addEventListener('dragover', (e) => {
@@ -103,7 +110,15 @@ class ImportFace extends Container {
 
         // the bridge reports its stages onto whichever node it works for
         events.on('dataset.statusChanged', (op: DatasetOp) => {
-            if (op === this.op) this.refresh();
+            if (op === this.op) {
+                this.refresh();
+                this.photos.refresh();
+            }
+        });
+
+        // a pose node naming a photo it could not place
+        events.on('import.highlight', (op: DatasetOp, name: string) => {
+            if (op === this.op) this.photos.highlight(name);
         });
     }
 
@@ -121,7 +136,7 @@ class ImportFace extends Container {
         const input = document.createElement('input');
         input.type = 'file';
         input.multiple = true;
-        input.accept = '.zip,.ply,.jpg,.jpeg,.png,.csv,.json,.txt,.bin,.mp4,.mov,.webm,.mkv,video/*';
+        input.accept = '.zip,.ply,.jpg,.jpeg,.png,.webp,.csv,.json,.txt,.bin,.mp4,.mov,.webm,.mkv,video/*';
         input.onchange = () => {
             const files = Array.from(input.files ?? []);
             if (files.length > 0) this.acceptFiles(files).catch(() => {});
@@ -283,9 +298,11 @@ class ImportFace extends Container {
         this.op.status = undefined;
         this.op.setSource(source, name);
         this.op.counts = undefined;
-        this.events.fire('dataset.sourceChanged', this.op);
-        this.events.fire('edit.changed');
+        // the subset it keeps applies to what came in; the nodes after it
+        // start again either way
+        this.events.fire('import.applySubset', this.op, true);
         this.refresh();
+        this.photos.refresh();
     }
 
     /** The dataset is out being posed; the node waits for its return. */
