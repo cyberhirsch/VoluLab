@@ -20,6 +20,13 @@ class SplatState {
     private dirtyLo = -1;
     private dirtyHi = -1;
 
+    /**
+     * Bits the GPU copy has on top of `data`, per splat, or null: a holdout
+     * (holdout.ts) is a bit only the shader reads. Kept out of `data`,
+     * which every edit compares whole against selected, hidden and deleted.
+     */
+    overlay: Uint8Array | null = null;
+
     // cached counts, refreshed by flush().
     numSelected = 0;
     numLocked = 0;
@@ -104,6 +111,11 @@ class SplatState {
         this.numDeleted = numDeleted;
     }
 
+    /** have the next flush upload everything, as after the overlay changes */
+    markAllDirty(): void {
+        this.markDirty(0, this.data.length);
+    }
+
     // upload dirty bytes to the GPU texture and refresh cached counts.
     // idempotent and cheap when nothing is dirty.
     flush(): void {
@@ -114,6 +126,10 @@ class SplatState {
         // as the prior `updateState` lock/set/unlock pair.
         const buffer = this.gpu.lock() as Uint8Array;
         buffer.set(this.data);
+        const { overlay } = this;
+        if (overlay) {
+            for (let i = 0; i < overlay.length; ++i) buffer[i] |= overlay[i];
+        }
         this.gpu.unlock();
         this.recount();
         this.dirtyLo = -1;

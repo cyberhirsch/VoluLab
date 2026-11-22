@@ -624,6 +624,102 @@ nodes that select and delete (crop among them) in `nodes`, as
 is still baked into the object's grades in a project rather than stored as a
 node, so its keys are not kept; that is how colour nodes were stored before.
 
+## Select nodes that select by a rule
+
+Select nodes that pick gaussians by a rule instead of a gesture, in both
+add menus of the graph. They are select nodes in every way the rest of the
+editor knows (`select-nodes.ts`): each is a StateOp that writes only the
+selected bit and states what the selection is afterwards, applied as a
+toggle of the difference like the select node. So delete, split, colour
+and the other nodes after one act on what it leaves selected, and undo,
+bypass and replay work as for a select node. Each has a mode for how what
+it catches combines with the selection coming in (set, add, remove, keep)
+and a name, and its graph wire offers a selection like a select node's.
+
+Every numeric setting is a plain number in `params`, read through
+`value(key, frame)`; the keyframe work hooks `SelectionNodeOp.keyed` to
+key them. A project keeps each node as its settings beside the set it
+applied to, like the other state nodes (`select-nodes-store.ts`, hooked
+into `doc-nodes.ts`).
+
+- **select by motion**: by speed (units per frame) or by distance travelled
+  over a range of frames, from the velocity the model plays with, the one
+  the debug view's speed channel shows. A gaussian not drawn in the range
+  is not caught. The node pane draws a histogram of the measure (log
+  scale); a drag across it sets the range. On a 3D object every speed is 0.
+- **select by colour**: by the distance of a gaussian's base colour (before
+  the view-dependent part and any colour node) to a picked colour, in RGB,
+  or by tolerances on hue, saturation and value apart. "Take colour from
+  selection" takes the mean colour of what the nodes above leave selected,
+  so a patch picked with a select node gives the key colour.
+- **select by region over time**: a box, sphere or cylinder in world space,
+  with a range of frames. Its place, turn and size are nine plain numbers;
+  the node asks for them at each frame of the model and tests each gaussian
+  of a 4D model against the region as it stands at the gaussian's own
+  moment, where the gaussian is then, so a keyed region follows a moving
+  subject. Unkeyed it stands still. The region is drawn in the viewport, at
+  the frame shown, while the node is open. Not built: the brush volume, and
+  attaching the region to a tracked point (that waits for track / attach).
+  The hooks are accessors over a module object rather than static fields:
+  a static never assigned inside the bundle is inlined by the minifier as
+  its initial value, so a hook set from outside was ignored.
+- **select by attribute**: by opacity, size (the longest axis, in world
+  units), elongation (longest over shortest axis: the needles), distance
+  from a point (where the camera stood when the node was made, or set again
+  from the view), or density (how many gaussians share each one's cell of a
+  grid; floaters are alone). The node pane draws the measure as a histogram
+  to drag the range on. Without a set cell size a cell holds about 8 on
+  average, worked out from the middle 96% of the centres per axis: from the
+  bound, a few far floaters made the alley's cell 1.55 units and up to
+  252000 gaussians a cell, against 0.24 units now.
+- **grow / shrink selection**: grows the selection coming in by the
+  gaussians within a distance of it, or shrinks it by those of it within
+  that distance of the rest, a number of times over. The smaller side is
+  walked and the larger put in a hashed grid of cells a distance wide, so a
+  step costs about the size of the smaller side; it runs on the main
+  thread. On a 4D model two gaussians are neighbours only when their
+  lifetimes meet, widened by a number of frames to reach across frames;
+  each is where it is at its temporal centre. The distance starts at twice
+  the object's typical spacing, taken from the middle 96% of its centres
+  (on the alley 0.24; from the bound it was 1.6, which grew a seed of 1842
+  gaussians to 692417).
+- **invert / combine selections**: union, intersection, difference (a
+  without b) and inversion (all but a) of what other select nodes of the
+  object selected - a select node's or one of these. Its inputs a and b take
+  a select node's wire in the graph, or are picked by name in the node pane
+  from the select nodes above it; an empty input is the selection coming
+  in. An input reads what its node left selected when it ran (`result`),
+  and counts as empty, with a note, while that node is undone, bypassed,
+  after this one or on another object. Changing an input's node re-runs the
+  combine, since the history follows a node's wired inputs. A project keeps
+  the wires by the inputs' places in the history, and now keeps each select
+  node's `result` beside its set (`doc-nodes.ts`): restored nodes apply
+  their stored set without running, so without it a combine run again after
+  loading read nothing.
+- **holdout** (`holdout.ts`): what the select nodes above leave selected -
+  or the whole object, with nothing selected - is drawn to depth and not to
+  colour, so it hides what is behind it, other objects and the rest of its
+  own, as a matte. The gaussians held out carry a bit (8) in the GPU copy
+  of their state only (`SplatState.overlay`, OR'd in on upload; the editor
+  compares `data` whole against selected, hidden and deleted, so the bit
+  stays out of it), and every pass of the splat shader skips them. The
+  object gets a second draw: a clone of its material with no blending,
+  depth writes and no colour writes, under `SPLAT_HOLDOUT_DEPTH`, drawing
+  only those gaussians where alpha is 0.3 or more. With no blending the
+  splat layer draws it in its opaque part, ahead of every splat, which then
+  fail the depth test behind it. Its parameters and instance count are
+  copied from the object's material every frame, so it moves and plays
+  with a 4D model; order does not matter for depth alone. The node is a
+  StateOp with a mask of no bits, so its set is kept and a project stores
+  and restores it like a state node. Measured on the alley (frame 40, the
+  nearest 30% held out): 16.2% of pixels lit against 25.8% with the same
+  gaussians deleted; two copies of the cloud, the nearer held out: 4.6%
+  lit against 5.6% for the farther alone. WebGPU and WebGL2 gave identical
+  pictures: both keep a depth buffer for the splat pass (`camera.ts`), so
+  the WebGL2 fallback is not needed; the node says so where a device has
+  none. A held-out object leaves the background showing, and an export
+  that writes alpha writes the hole as the clear alpha.
+
 ---
 
 ## Time nodes and a split node

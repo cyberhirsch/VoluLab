@@ -23,6 +23,8 @@ import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
 import { SceneLight } from './scene-light';
 import { PrimitiveKind, ScenePrimitive } from './scene-primitive';
+import { makeMaskingNode } from './select-nodes';
+import { registerSelectionNodes } from './select-nodes-editor';
 import { RangeQuery, SelectQuery, ShapeQuery } from './select-query';
 import { Splat } from './splat';
 import { DEBUG_CHANNELS, DebugChannel, defaultDebugChannel } from './splat-debug';
@@ -794,6 +796,16 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     events.on('graph.addSelectNode', (target?: Splat) => {
         addTarget(target).forEach(splat => appendAndOpen(new SelectOp(splat, [])));
     });
+
+    // the select nodes that select by a rule: motion, colour, region and the
+    // rest (select-nodes.ts)
+    events.on('graph.addSelectionNode', (kind: string, target?: Splat) => {
+        addTarget(target).forEach((splat) => {
+            const op = makeMaskingNode(kind, splat);
+            if (op) appendAndOpen(op);
+        });
+    });
+    registerSelectionNodes(events);
 
     /**
      * A colour node.

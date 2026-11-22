@@ -6,6 +6,7 @@ import { buildInspectNode, registerViewerBadge } from './inspect-panel';
 import { addKeyControls } from './keyframe-ui';
 import { i18n } from './localization';
 import { buildMotionNode, PanelKit } from './motion-node-panel';
+import { buildSelectionNodeFace } from './select-nodes-face';
 import { fieldDefault } from './value-fields';
 import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplitOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
@@ -212,6 +213,11 @@ class NodePanel extends Container {
         if (op instanceof SelectOp) {
             this.empty.hidden = true;
             this.buildSelect(op, index);
+            return;
+        }
+
+        if (buildSelectionNodeFace(this.body, this.events, op, index)) {
+            this.empty.hidden = true;
             return;
         }
 
