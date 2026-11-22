@@ -1,6 +1,6 @@
 import { Container } from '@playcanvas/pcui';
 
-import { AnimTrackEditOp, DatasetOp, PoseOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, PortSpec, PrimitivePoseOp, SelectOp, SelectStep, ShapeTransformOp, SourceKind, principalOp } from '../edit-ops';
+import { AnimTrackEditOp, DatasetOp, PoseOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, PortSpec, PrimitivePoseOp, SelectOp, SelectStep, ShapeTransformOp, SourceKind, isDatasetInput, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { LOOK_LABELS, LOOK_NODES } from '../look/nodes';
 import { SceneLight } from '../scene-light';
@@ -126,6 +126,7 @@ const OP_LABELS: Record<string, string> = {
     addVoxels: 'import voxels',
     dataset: 'import',
     pose: 'pose',
+    resize: 'resize',
     camera: 'camera',
     light: 'light',
     lightPose: 'aim light',
@@ -254,6 +255,8 @@ interface NodeModel {
     terminal?: boolean;
     /** named inputs besides the chain's, as the op declares them */
     ports?: PortSpec[];
+    /** what its output carries, named beside it: images, cameras */
+    outLabel?: string;
     /** what a wire dragged out of this node carries, most specific first */
     offers?: Offer[];
     /** what to key a stored position and a selection against */
@@ -742,6 +745,7 @@ class GraphPanel extends Container {
                     splat: sceneOutput,
                     bypassed: !!op.bypassed,
                     ports: portsOf(op),
+                    outLabel: (op as any).outputLabel,
                     key: op
                 });
                 // a node with named inputs is wired through those alone, and
@@ -803,6 +807,7 @@ class GraphPanel extends Container {
                 // frozen only when nothing in it can be re-run
                 frozen: steps.length && !select?.mesh ? steps.every(s => !isParametric(s.query)) : undefined,
                 ports: portsOf(op),
+                outLabel: (op as any).outputLabel,
                 key: op
             });
 
@@ -889,7 +894,9 @@ class GraphPanel extends Container {
         // what each node's wire carries, for the inputs it can be dropped on
         nodes.forEach((node) => {
             const offers: Offer[] = [];
-            if (node.key instanceof DatasetOp || node.key instanceof PoseOp) offers.push({ kind: 'dataset', source: node.key });
+            // a capture's wires: photos (an import or image node), cameras (a pose node)
+            if (isDatasetInput(node.key)) offers.push({ kind: 'images', source: node.key });
+            if (node.key instanceof PoseOp) offers.push({ kind: 'cameras', source: node.key });
             if (node.select) offers.push({ kind: 'selection', source: node.key });
             if (node.splat instanceof Splat) offers.push({ kind: 'object', source: node.splat });
             if (node.splat instanceof ScenePrimitive) offers.push({ kind: 'primitive', source: node.splat });
@@ -1011,9 +1018,18 @@ class GraphPanel extends Container {
             const outPort = document.createElement('div');
             outPort.className = 'gn-port gn-port-out';
             outPort.style.top = `${NODE_H / 2 - 3}px`;
-            outPort.title = 'drag out to attach a node';
+            outPort.title = node.outLabel ? `${node.outLabel}: drag out to attach a node` : 'drag out to attach a node';
             this.bindPortDrag(outPort, node);
             el.appendChild(outPort);
+        }
+        // and what it carries, named the way inputs are: on the title's
+        // first line, at the output's side, clear of the name under it
+        if (node.outLabel) {
+            const label = document.createElement('div');
+            label.className = 'gn-port-label gn-port-label-out';
+            label.textContent = node.outLabel;
+            label.style.top = '14px';
+            el.appendChild(label);
         }
 
         if (this.selection.has(node.key)) el.classList.add('gn-selected');
@@ -1207,26 +1223,33 @@ class GraphPanel extends Container {
                     return;
                 }
 
-                if (node.key instanceof DatasetOp || node.key instanceof PoseOp) {
+                if (isDatasetInput(node.key) || node.key instanceof PoseOp) {
                     // released over nothing: offer what a dataset can feed,
-                    // created at the drop point and wired up - a pose node
-                    // only from an import node
+                    // created at the drop point and wired up. Photos go on
+                    // to a resize, a crop, a pose or a train node; cameras
+                    // only to a train node
                     const dataset = node.key;
+                    const place = (op: object) => this.positions.set(op, { x: at.x, y: at.y - NODE_H / 2 });
+                    const images = isDatasetInput(dataset) ? dataset : null;
                     showContextMenu(doc, ev.clientX, ev.clientY, [
-                        ...(dataset instanceof DatasetOp ? [{
+                        ...(images ? [{
+                            label: 'resize',
+                            action: () => place(this.events.invoke('resize.addNode', images))
+                        }, {
+                            label: 'crop',
+                            action: () => place(this.events.invoke('crop.addImageNode', images))
+                        }, {
                             label: 'pose',
-                            action: () => {
-                                const op = this.events.invoke('pose.addNode', dataset);
-                                this.positions.set(op, { x: at.x, y: at.y - NODE_H / 2 });
-                            }
+                            action: () => place(this.events.invoke('pose.addNode', images))
                         }] : []),
                         {
                             label: 'train',
                             action: () => {
                                 const op = this.events.invoke('training.addNode');
-                                // its dataset input, the first row, lands under the pointer
-                                this.positions.set(op, { x: at.x, y: at.y - NODE_H - PORT_ROW / 2 });
-                                this.events.fire('graph.connect', op, 'dataset', node.key);
+                                const port = images ? 'images' : 'cameras';
+                                // the input it goes into lands under the pointer
+                                this.positions.set(op, { x: at.x, y: at.y - portY({ ports: op.ports } as NodeModel, port) });
+                                this.events.fire('graph.connect', op, port, node.key);
                             }
                         }
                     ]);
@@ -1537,6 +1560,22 @@ class GraphPanel extends Container {
                 // node arrives pending, and its face in the node pane runs it
                 label: 'add training node',
                 action: () => this.events.invoke('training.addNode')
+            },
+            {
+                // the capture's nodes, wired by hand: poses for photos,
+                // photos shrunk or cropped before they are posed
+                label: 'add pose node',
+                action: () => this.events.invoke('pose.addNode')
+            },
+            {
+                label: 'add resize node',
+                action: () => this.events.invoke('resize.addNode')
+            },
+            {
+                // a crop of the photos (2d mode); a crop of an object's
+                // gaussians is added from its wire
+                label: 'add crop node',
+                action: () => this.events.invoke('crop.addImageNode')
             },
             {
                 // the camera node shapes the picture rather than the objects,

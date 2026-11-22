@@ -207,7 +207,7 @@ class TrainingFace extends Container {
 
         // the dataset it is wired to becoming ready (or not) enables Start
         events.on('dataset.statusChanged', (op: unknown) => {
-            if (this.op && op === this.op.datasetOp) this.refresh();
+            if (this.op && (op === this.op.imagesOp || op === this.op.camerasOp)) this.refresh();
         });
 
         events.on('training.warning', (text: string) => {
@@ -291,13 +291,16 @@ class TrainingFace extends Container {
         if (!op) return;
 
         const input = op.datasetOp;
+        const images = op.imagesOp;
+        const cameras = op.camerasOp;
         this.sourceLabel.textContent = !input ? i18n.t('training.needs-import') :
             (input.awaitingPoses ? i18n.t('training.awaiting-poses') :
-                (!input.trainSource ?
-                    // photos or a video straight from an import node, or a
-                    // pose node still at work
-                    i18n.t(input instanceof PoseOp ? 'training.poses-pending' : 'training.needs-pose') :
-                    input.sourceName));
+                (op.dataset ? input.sourceName :
+                    // photos with no cameras wired, a pose node still at
+                    // work, or cameras with nothing to fit them to
+                    i18n.t(!cameras ? 'training.needs-pose' :
+                        (!cameras.source ? 'training.poses-pending' :
+                            (images ? 'training.cameras-unfit' : 'training.needs-pose')))));
 
         const state = this.events.invoke('training.state', op) as RunState;
         const paused = this.events.invoke('training.isPaused', op);

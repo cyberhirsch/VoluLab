@@ -182,6 +182,12 @@
     }
 }
 
+// the output's name, inside the node at its right edge
+.gn-port-label.gn-port-label-out {
+    left: auto;
+    text-align: right;
+}
+
 // the hairline between the title and the input rows under it
 .gn-port-rule {
     position: absolute;

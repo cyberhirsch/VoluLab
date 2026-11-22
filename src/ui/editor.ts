@@ -10,6 +10,7 @@ import { ColorPanel } from './color-panel';
 import { DebugFace } from './debug-face';
 import { ExportPopup } from './export-popup';
 import { GraphPanel } from './graph-panel';
+import { ImageFace } from './image-face';
 import { ImageSettingsDialog } from './image-settings-dialog';
 import { ImportFace } from './import-face';
 import { LayerList } from './layer-list';
@@ -149,6 +150,10 @@ class EditorUI {
         // the pose node: matcher, progress, and the cameras it found
         const poseFace = new PoseFace(events);
         nodePanel.mount('pose', poseFace.dom);
+        // the image nodes: a resize node's cap on the long edge, a 2d crop's
+        // margins, and what each did
+        nodePanel.mount('resize', new ImageFace(events, 'resize').dom);
+        nodePanel.mount('cropImage', new ImageFace(events, 'crop').dom);
         // the camera node's exposure, depth of field and lens
         const cameraFace = new CameraFace(events);
         nodePanel.mount('camera', cameraFace.dom);

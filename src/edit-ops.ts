@@ -46,7 +46,9 @@ interface EditOp {
  * What can be wired into a node's named input: an object's gaussians, the
  * gaussians a select node picked, a primitive, or a training dataset.
  */
-type SourceKind = 'object' | 'selection' | 'primitive' | 'dataset';
+// a capture's photos (or a posed dataset carrying its cameras), and the
+// cameras a pose node found for them
+type SourceKind = 'object' | 'selection' | 'primitive' | 'images' | 'cameras';
 
 /**
  * A named input on a node, besides the object's own chain: what it is
@@ -1352,6 +1354,69 @@ class AddSplatOp {
     }
 }
 
+/** A 2D crop: how much comes off each side, in percent of the image. */
+type ImageCropSettings = {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+    /** JPEG quality of the images it crops, 0..1 */
+    quality: number;
+};
+
+const defaultImageCropSettings = (): ImageCropSettings => ({ left: 0, top: 0, right: 0, bottom: 0, quality: 0.92 });
+
+/** What an image node did: how many images, and the sizes before and after. */
+type ImageSummary = {
+    images: number;
+    /** how many it changed; the rest went through untouched */
+    resized: number;
+    /** the most common size going in and coming out */
+    from: [number, number];
+    to: [number, number];
+    /** the input was not photos (a video, a posed dataset): handed on as it is */
+    passed?: 'video' | 'dataset';
+};
+
+/**
+ * What a node working on the photos of a capture holds: a resize node, or
+ * a crop node in 2d mode. Each takes the dataset an import node or another
+ * image node hands on, and hands on its own; src/training/image-nodes.ts
+ * does the work.
+ */
+interface ImageNode {
+    inputs?: DatasetHandle[];
+    output?: DatasetHandle;
+    /** the import or image node feeding it */
+    datasetOp?: DatasetInput;
+    /** the input's source, or the photos changed; null while it works */
+    source: unknown | null;
+    /** what `source` was made from, so an unchanged input is not done again */
+    madeFrom: { source: unknown, key: string } | null;
+    summary?: ImageSummary;
+    /** progress while it works, or what went wrong */
+    status?: string;
+    counts?: DatasetCounts;
+    readonly sourceName: string;
+}
+
+/** the graph's second line for an image node: what it did */
+const imageNodeLabel = (node: ImageNode) => {
+    if (node.status) return node.status;
+    if (!node.datasetOp) return 'no dataset';
+    const s = node.summary;
+    if (!s) return node.sourceName;
+    if (s.passed) return `${node.sourceName} · as it is`;
+    return s.resized ?
+        `${s.images} images · ${s.from[0]}×${s.from[1]} → ${s.to[0]}×${s.to[1]}` :
+        `${s.images} images · as they are`;
+};
+
+const trainableOf = (source: unknown) => {
+    const kind = (source as { kind?: string } | null)?.kind;
+    return kind === 'bytes' || kind === 'directory' || kind === 'url' ? source : undefined;
+};
+
 /**
  * Delete everything outside a volume - or inside it.
  *
@@ -1363,16 +1428,36 @@ class AddSplatOp {
  * A crop only ever adds to what is deleted. Splats an earlier node removed stay
  * removed, so widening a crop does not resurrect them - that is the earlier
  * node's business, and bypassing it is how you take it back.
+ *
+ * The same node crops photos too: in '2d' mode it sits on a dataset wire
+ * (after an import or a resize node, before a pose node) rather than on an
+ * object, owns no object, and cuts the same margins off every photo - see
+ * src/training/image-nodes.ts. Which mode a node is in follows from what it
+ * was made on; a crop on an object is 'volume', as every crop was before.
  */
-class CropOp extends StateOp {
+class CropOp extends StateOp implements ImageNode {
     name = 'crop';
 
+    mode: 'volume' | '2d';
     shape: 'box' | 'sphere';
     transform: Mat4;
     keepInside: boolean;
 
+    // 2d mode only; left undefined on a volume crop, so the graph and the
+    // history see a volume crop exactly as before
+    inputs?: DatasetHandle[];
+    output?: DatasetHandle;
+    datasetOp?: DatasetInput;
+    imageCrop?: ImageCropSettings;
+    source: unknown | null = null;
+    madeFrom: { source: unknown, key: string } | null = null;
+    summary?: ImageSummary;
+    status?: string;
+    counts?: DatasetCounts;
+
     constructor(splat: Splat, shape: 'box' | 'sphere', transform: Mat4, keepInside = true) {
         super(splat, null, State.deleted, BitOp.SET, State.deleted);
+        this.mode = 'volume';
         this.shape = shape;
         this.transform = transform;
         this.keepInside = keepInside;
@@ -1390,6 +1475,50 @@ class CropOp extends StateOp {
         };
     }
 
+    /** A crop of the photos on a dataset wire: no object, nothing deleted. */
+    static image(settings: ImageCropSettings = defaultImageCropSettings()) {
+        const op = new CropOp(null, 'box', new Mat4(), true);
+        op.mode = '2d';
+        op.imageCrop = settings;
+        op.inputs = [];
+        op.output = { name: 'cropped', dataset: true };
+        return op;
+    }
+
+    get sourceName(): string {
+        return this.datasetOp?.sourceName ?? 'no dataset';
+    }
+
+    get awaitingPoses(): boolean | undefined {
+        return this.datasetOp?.awaitingPoses;
+    }
+
+    /** a 2d crop's second line in the graph; a volume crop has none */
+    get sourceLabel(): string | undefined {
+        return this.mode === '2d' ? imageNodeLabel(this) : undefined;
+    }
+
+    get trainSource(): unknown {
+        return this.mode === '2d' ? trainableOf(this.source) : undefined;
+    }
+
+    get ports(): PortSpec[] | undefined {
+        return this.mode === '2d' ? [{ name: 'images', label: 'images', accepts: ['images'], source: this.datasetOp ?? null }] : undefined;
+    }
+
+    /** what its output carries, named on the node */
+    get outputLabel(): string | undefined {
+        return this.mode === '2d' ? 'images' : undefined;
+    }
+
+    async do() {
+        if (this.mode === 'volume') await super.do();
+    }
+
+    async undo() {
+        if (this.mode === 'volume') await super.undo();
+    }
+
     /** Change the volume and forget what the old one caught. */
     setVolume(shape: 'box' | 'sphere', transform: Mat4, keepInside: boolean) {
         this.shape = shape;
@@ -1401,6 +1530,9 @@ class CropOp extends StateOp {
     destroy() {
         super.destroy();
         this.transform = null;
+        this.source = null;
+        this.madeFrom = null;
+        this.datasetOp = undefined;
     }
 }
 
@@ -2091,6 +2223,10 @@ class DatasetOp {
         return kind === 'bytes' || kind === 'directory' || kind === 'url' ? this.source : undefined;
     }
 
+    get outputLabel() {
+        return 'images';
+    }
+
     setSource(source: unknown, name: string) {
         this.source = source;
         this.sourceName = name;
@@ -2133,6 +2269,89 @@ type PoseCamera = {
 
 type PoseMatcher = 'sequential' | 'exhaustive';
 
+type ResizeSettings = {
+    /** the longest an image's long edge may be, in pixels */
+    maxEdge: number;
+    /** JPEG quality of the images it shrinks, 0..1 */
+    quality: number;
+};
+
+const defaultResizeSettings = (): ResizeSettings => ({ maxEdge: 1600, quality: 0.92 });
+
+/**
+ * A resize node: shrinks the photos an import node holds before they are
+ * posed, so the pose node and the trainer see the same smaller images.
+ *
+ * Images whose long edge is within the cap go through untouched. A video
+ * and a dataset that already has poses go through untouched too: a posed
+ * dataset's intrinsics are in pixels of the images it has. The shrunk
+ * images are its own state (src/training/image-nodes.ts makes them),
+ * remade only when the input or the settings change; a project keeps them.
+ */
+class ResizeOp implements ImageNode {
+    name = 'resize';
+
+    inputs: DatasetHandle[] = [];
+    output: DatasetHandle;
+    datasetOp?: DatasetInput;
+    settings: ResizeSettings;
+    source: unknown | null = null;
+    madeFrom: { source: unknown, key: string } | null = null;
+    summary?: ImageSummary;
+    status?: string;
+    counts?: DatasetCounts;
+    bypassed?: boolean;
+
+    constructor(settings: ResizeSettings = defaultResizeSettings()) {
+        this.settings = settings;
+        this.output = { name: 'resized', dataset: true };
+    }
+
+    get sourceName(): string {
+        return this.datasetOp?.sourceName ?? 'no dataset';
+    }
+
+    get awaitingPoses(): boolean | undefined {
+        return this.datasetOp?.awaitingPoses;
+    }
+
+    get sourceLabel() {
+        return imageNodeLabel(this);
+    }
+
+    /** a posed dataset goes through: a train node can read it */
+    get trainSource(): unknown {
+        return trainableOf(this.source);
+    }
+
+    get ports(): PortSpec[] {
+        return [{ name: 'images', label: 'images', accepts: ['images'], source: this.datasetOp ?? null }];
+    }
+
+    get outputLabel() {
+        return 'images';
+    }
+
+    do() {}
+
+    undo() {}
+
+    destroy() {
+        this.source = null;
+        this.madeFrom = null;
+        this.datasetOp = undefined;
+    }
+}
+
+/** What hands a dataset on: an import node, or an image node after one. */
+type DatasetInput = DatasetOp | ResizeOp | CropOp;
+
+/** Is this a node working on a capture's photos: a resize, a 2d crop? */
+const isImageNode = (op: unknown): op is ResizeOp | CropOp => op instanceof ResizeOp || (op instanceof CropOp && op.mode === '2d');
+
+/** Is this something that hands a dataset on to an image node or a pose node? */
+const isDatasetInput = (op: unknown): op is DatasetInput => op instanceof DatasetOp || isImageNode(op);
+
 /**
  * A pose node: camera poses for the import node wired into it.
  *
@@ -2152,8 +2371,8 @@ class PoseOp {
     inputs: DatasetHandle[] = [];
     /** the posed dataset, as the train node sees it */
     output: DatasetHandle;
-    /** the import node feeding it */
-    datasetOp?: DatasetOp;
+    /** the import node feeding it, or an image node between */
+    datasetOp?: DatasetInput;
     matcher: PoseMatcher;
     /** the posed dataset for the trainer; null until there is one */
     source: unknown | null = null;
@@ -2195,7 +2414,11 @@ class PoseOp {
     }
 
     get ports(): PortSpec[] {
-        return [{ name: 'dataset', label: 'dataset', accepts: ['dataset'], source: this.datasetOp ?? null }];
+        return [{ name: 'images', label: 'images', accepts: ['images'], source: this.datasetOp ?? null }];
+    }
+
+    get outputLabel() {
+        return 'cameras';
     }
 
     setPosed(source: unknown, cameras: PoseCamera[], total: number) {
@@ -2615,8 +2838,15 @@ class TrainOp {
     /** null until the first snapshot of the first run */
     output: Splat | null;
     settings: TrainSettings;
-    /** the import or pose node feeding this one - the graph edge made concrete */
-    datasetOp?: DatasetOp | PoseOp;
+    /**
+     * Its two dataset inputs: the images it trains on (from an import or
+     * image node; a posed dataset there carries its own cameras), and the
+     * cameras a pose node found. The cameras may have been found on other
+     * copies of the photos - smaller, cropped - and are fitted to these
+     * when the run starts (src/training/train-inputs.ts).
+     */
+    imagesOp?: DatasetInput;
+    camerasOp?: PoseOp;
     /** an object whose live gaussians start the run, in place of the dataset's points */
     seed?: Splat;
     bypassed?: boolean;
@@ -2627,18 +2857,36 @@ class TrainOp {
         this.settings = settings;
     }
 
-    /** the trainer's source, read through the connected import node */
-    get dataset(): unknown {
-        return this.datasetOp?.trainSource ?? undefined;
+    /** the input naming what it trains on: the cameras' node, else the images' */
+    get datasetOp(): DatasetInput | PoseOp | undefined {
+        return this.camerasOp ?? this.imagesOp;
     }
 
     /**
-     * The dataset it trains on is wired in, not chained; so is an object
-     * to start from - a cleaned-up earlier result, say.
+     * What it can train on now, or undefined: a posed dataset on the
+     * images input, or the pose node's dataset. 'fit' when the images
+     * wired are not those the cameras were found on, and the two are put
+     * together as the run starts.
+     */
+    get dataset(): unknown {
+        const images = this.imagesOp;
+        const cameras = this.camerasOp;
+        if (images?.trainSource) return images.trainSource;
+        if (!cameras?.source) return undefined;
+        if (!images || images === cameras.datasetOp) return cameras.source;
+        const kind = (images.source as { kind?: string } | null)?.kind;
+        return kind === 'images' && cameras.sparse ? 'fit' : undefined;
+    }
+
+    /**
+     * The dataset it trains on is wired in, not chained - its images and
+     * their cameras; so is an object to start from - a cleaned-up earlier
+     * result, say.
      */
     get ports(): PortSpec[] {
         return [
-            { name: 'dataset', label: 'dataset', accepts: ['dataset'], source: this.datasetOp ?? null },
+            { name: 'images', label: 'images', accepts: ['images'], source: this.imagesOp ?? null },
+            { name: 'cameras', label: 'cameras', accepts: ['cameras'], source: this.camerasOp ?? null },
             { name: 'seed', label: 'seed', accepts: ['object'], source: this.seed ?? null }
         ];
     }
@@ -2658,7 +2906,8 @@ class TrainOp {
     destroy() {
         this.output?.destroy();
         this.output = null;
-        this.datasetOp = undefined;
+        this.imagesOp = undefined;
+        this.camerasOp = undefined;
         this.seed = undefined;
     }
 }
@@ -2747,6 +2996,16 @@ export {
     PoseOp,
     type PoseCamera,
     type PoseMatcher,
+    ResizeOp,
+    type ResizeSettings,
+    defaultResizeSettings,
+    type ImageCropSettings,
+    defaultImageCropSettings,
+    type ImageSummary,
+    type ImageNode,
+    type DatasetInput,
+    isImageNode,
+    isDatasetInput,
     type DatasetHandle,
     type DatasetCounts,
     describeCounts,

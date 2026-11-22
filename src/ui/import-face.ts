@@ -2,7 +2,7 @@ import { Container } from '@playcanvas/pcui';
 
 import { i18n } from './localization';
 import { resolveDropPayload } from '../drop-handler';
-import { DatasetOp, EditOp, PoseMatcher, PoseOp, describeCounts } from '../edit-ops';
+import { DatasetOp, EditOp, PoseMatcher, PoseOp, describeCounts, isImageNode, type DatasetInput } from '../edit-ops';
 import { Events } from '../events';
 import { isHeic, withHeicAsJpeg } from '../io/heic';
 import { BridgeImage } from '../training/bridge-client';
@@ -246,18 +246,36 @@ class ImportFace extends Container {
 
     /**
      * Photos or a video, held here as they are: the pose node this one
-     * feeds poses them, and one is made when there is none.
+     * feeds poses them, and one is made when there is none - with a
+     * resize node between when the photos are large.
      */
     private runPose(source: { kind: 'images', images: BridgeImage[] } | { kind: 'video', file: File }, matcher: PoseMatcher, label: string) {
         const op = this.op;
         if (!op) return;
         const { ops } = this.events.invoke('edit.history') as { ops: EditOp[] };
-        const fed = ops.filter(o => o instanceof PoseOp && o.datasetOp === op) as PoseOp[];
+        // fed directly, or through image nodes (resize, 2d crop)
+        const chain = new Set<DatasetInput>([op]);
+        for (let grew = true; grew;) {
+            grew = false;
+            ops.forEach((o) => {
+                if (isImageNode(o) && o.datasetOp && chain.has(o.datasetOp) && !chain.has(o)) {
+                    chain.add(o);
+                    grew = true;
+                }
+            });
+        }
+        const images = [...chain].filter(o => o !== op);
+        const fed = ops.filter(o => o instanceof PoseOp && o.datasetOp && chain.has(o.datasetOp)) as PoseOp[];
         fed.forEach((pose) => {
             pose.matcher = matcher;
         });
         this.setSource(source, label);
-        if (!fed.length) this.events.invoke('pose.addNode', op, matcher);
+        if (fed.length) return;
+        if (images.length) {
+            this.events.invoke('pose.addNode', images[images.length - 1], matcher);
+        } else {
+            this.events.invoke('pose.addNodeFor', op, matcher);
+        }
     }
 
     private setSource(source: unknown, name: string) {
