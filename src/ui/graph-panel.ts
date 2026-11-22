@@ -819,13 +819,6 @@ class GraphPanel extends Container {
                 // edges follow the chain, which is the history order, not
                 // wherever the node has since been dragged
                 if (col > 0) edges.push({ from: lane[col - 1], to: node });
-
-                // a node that has been moved keeps where it was put
-                const placed = this.positions.get(node.key);
-                if (placed) {
-                    node.x = placed.x;
-                    node.y = placed.y;
-                }
                 nodes.push(node);
             });
         });
@@ -853,6 +846,33 @@ class GraphPanel extends Container {
                 const from = lane?.length ? lane[lane.length - 1] : nodes.find(n => n.key === port.source);
                 if (from) edges.push({ from, to: node, port: port.name });
             });
+        });
+
+        // Columns: a node stands right of everything that feeds it, so every
+        // wire runs forward. A chain keeps its order; a node fed from another
+        // lane - a merge, a train node fed by an import, a select fed by a
+        // primitive - moves along to clear its sources, and the rest of its
+        // chain with it. Bounded, in case a wire ever closes a loop.
+        const column = new Map<NodeModel, number>();
+        lanes.forEach(lane => lane.forEach((node, col) => column.set(node, col)));
+        for (let pass = 0; pass < nodes.length; pass++) {
+            let moved = false;
+            edges.forEach(({ from, to }) => {
+                if (column.get(to) <= column.get(from)) {
+                    column.set(to, column.get(from) + 1);
+                    moved = true;
+                }
+            });
+            if (!moved) break;
+        }
+        nodes.forEach((node) => {
+            node.x = column.get(node) * (NODE_W + COL_GAP);
+            // a node that has been moved keeps where it was put
+            const placed = this.positions.get(node.key);
+            if (placed) {
+                node.x = placed.x;
+                node.y = placed.y;
+            }
         });
 
         // what each node's wire carries, for the inputs it can be dropped on
