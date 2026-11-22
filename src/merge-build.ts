@@ -441,7 +441,7 @@ const partSignature = (splat: Splat) => {
 const timeSignature = (splat: Splat) => JSON.stringify([
     splat.motionFrames,
     (splat as any).motionFps ?? null,
-    splat.timeMaps.map(m => ({ kind: m.constructor.name, ...m }))
+    splat.timeMaps.map(m => (m.key ? m.key() : { kind: m.constructor.name, ...m }))
 ]);
 
 /**

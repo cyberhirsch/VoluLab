@@ -37,6 +37,13 @@ interface TimeMap {
      * under it.
      */
     readonly holds?: boolean;
+
+    /**
+     * What decides its answers, as a string, for a map that holds more
+     * than plain settings (a node, a curve). Without it, its own fields are
+     * taken.
+     */
+    key?(): string;
 }
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));

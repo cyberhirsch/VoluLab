@@ -589,6 +589,10 @@ class WarpMap implements TimeMap {
         return JSON.stringify(trackOf(this.op, 'speed') ?? this.op.speed);
     }
 
+    key() {
+        return `warp:${this.signature()}`;
+    }
+
     private speedAt(f: number) {
         const track = trackOf(this.op, 'speed');
         return track ? evaluate(track, f) : this.op.speed;
