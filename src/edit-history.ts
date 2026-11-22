@@ -625,8 +625,13 @@ class EditHistory {
         // route through the queue so any in-flight add/undo/redo finishes before we wipe
         // history, preventing queued ops from running against a cleared state.
         return this.queue(() => {
+            // one op failing to let go must not keep the history from emptying
             this.history.forEach((editOp) => {
-                editOp.destroy?.();
+                try {
+                    editOp.destroy?.();
+                } catch (e) {
+                    console.error(e);
+                }
             });
             this.history = [];
             this.cursor = 0;

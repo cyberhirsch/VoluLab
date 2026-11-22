@@ -14,6 +14,7 @@ import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
 import { SceneLight } from './scene-light';
 import { PrimitivePose, ScenePrimitive } from './scene-primitive';
+import type { SelectionNodeOp } from './select-nodes';
 import { SelectQuery, ShapeQuery, resolveHits } from './select-query';
 import { SphereShape } from './sphere-shape';
 import { Splat, type SplatMotion } from './splat';
@@ -2299,7 +2300,7 @@ const defaultLightSettings = (): LightSettings => ({
  * again.
  */
 type LightSource = {
-    source: ScenePrimitive | Splat | SelectOp;
+    source: ScenePrimitive | Splat | SelectOp | SelectionNodeOp;
     seen: unknown[] | null;
 };
 

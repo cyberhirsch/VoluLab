@@ -23,7 +23,7 @@ import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
 import { SceneLight } from './scene-light';
 import { PrimitiveKind, ScenePrimitive } from './scene-primitive';
-import { makeMaskingNode } from './select-nodes';
+import { isSelectionSource, makeMaskingNode } from './select-nodes';
 import { registerSelectionNodes } from './select-nodes-editor';
 import { RangeQuery, SelectQuery, ShapeQuery } from './select-query';
 import { Splat } from './splat';
@@ -1606,7 +1606,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             if (!source.scene) return null;
             return [source.splatData.numSplats, source.numDeleted, source.numLocked, ...source.entity.getWorldTransform().data];
         }
-        if (source instanceof SelectOp) {
+        if (isSelectionSource(source)) {
             const { ops, cursor } = history();
             const index = ops.indexOf(source);
             if (index < 0 || index >= cursor || (source as EditOp).bypassed || !source.result || !source.splat?.scene) return null;
@@ -1728,7 +1728,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         }
         // a light's source: a primitive's surface, or gaussians
         if (op instanceof LightOp && port === 'source' &&
-            (source instanceof ScenePrimitive || source instanceof Splat || source instanceof SelectOp)) {
+            (source instanceof ScenePrimitive || source instanceof Splat || isSelectionSource(source))) {
             op.source = { source, seen: null };
             takeLightSource(op, true);
             events.fire('edit.changed');

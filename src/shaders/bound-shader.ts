@@ -36,7 +36,8 @@ const fragmentShader = /* glsl */ `
             }
 
             // read splat state
-            uint state = uint(texelFetch(splatState, splatUV, 0).r * 255.0);
+            // the low three bits: a holdout (8) still counts as what it is
+            uint state = uint(texelFetch(splatState, splatUV, 0).r * 255.0 + 0.5) & 7u;
 
             // skip deleted splats for both bounds
             if ((state & 4u) != 0u) {

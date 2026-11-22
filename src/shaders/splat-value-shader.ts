@@ -177,7 +177,8 @@ bool readSplat(int idx, out Splat s) {
     if (idx >= splat_params.y) return false;
     s.uv = ivec2(idx % splat_params.x, idx / splat_params.x);
 
-    s.state = int(texelFetch(splatState, s.uv, 0).r * 255.0 + 0.5);
+    // the low three bits: a holdout (8) is drawn differently, not locked or deleted
+    s.state = int(texelFetch(splatState, s.uv, 0).r * 255.0 + 0.5) & 7;
     s.selected = (s.state == 1);
     bool clean = (s.state == 0);
     if (!(s.selected || clean)) return false;

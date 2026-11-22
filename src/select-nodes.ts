@@ -1017,10 +1017,10 @@ class CombineSelectOp extends SelectionNodeOp {
     }
 
     /** wire the inputs again on load, from the nodes restored before it */
-    rewire(lookup: (at: unknown) => unknown, stored: Record<string, any>) {
+    rewire(lookup: (at: unknown, part?: unknown) => unknown, stored: Record<string, any>) {
         const take = (v: unknown) => (isSelectionSource(v) ? v : null);
-        this.a = take(lookup(stored.aAt));
-        this.b = take(lookup(stored.bAt));
+        this.a = take(lookup(stored.aAt, stored.aPart));
+        this.b = take(lookup(stored.bAt, stored.bPart));
     }
 
     destroy() {

@@ -1,4 +1,4 @@
-import { BLEND_NONE, MeshInstance, ShaderMaterial } from 'playcanvas';
+import { BLEND_NONE, Entity, MeshInstance, ShaderMaterial } from 'playcanvas';
 
 import { StateOp } from './edit-ops';
 import { IndexRanges } from './index-ranges';
@@ -60,15 +60,21 @@ const holdoutSupported = (splat: Splat) => {
 /** what a material's draw depends on besides its parameters */
 const materialKey = (m: ShaderMaterial) => `${m.definesKey ?? ''}|${(m as any).shaderChunksVersion ?? ''}`;
 
+const releaseDraw = (splat: Splat, draw: DepthDraw) => {
+    splat.scene?.splatLayer?.removeMeshInstances([draw.meshInstance]);
+    draw.meshInstance.destroy();
+    draw.material.destroy();
+};
+
 const removeDraw = (splat: Splat, h: Holdouts) => {
     if (!h.draw) return;
-    splat.scene?.splatLayer?.removeMeshInstances([h.draw.meshInstance]);
-    h.draw.meshInstance.destroy();
-    h.draw.material.destroy();
+    releaseDraw(splat, h.draw);
     h.draw = null;
 };
 
-const makeDraw = (splat: Splat, from: ShaderMaterial, source: MeshInstance): DepthDraw => {
+// a depth draw of `entity`'s drawing of the object's data: the object's
+// own, or an instance copy's
+const makeDraw = (splat: Splat, from: ShaderMaterial, source: MeshInstance, entity: Entity = splat.entity): DepthDraw => {
     const material = from.clone();
     material.name = 'splatHoldoutDepth';
     material.blendType = BLEND_NONE;
@@ -81,12 +87,34 @@ const makeDraw = (splat: Splat, from: ShaderMaterial, source: MeshInstance): Dep
     material.setDefine('SPLAT_HOLDOUT_DEPTH', '');
     material.update();
 
-    const meshInstance = new MeshInstance(source.mesh, material, splat.entity);
+    const meshInstance = new MeshInstance(source.mesh, material, entity);
     meshInstance.setInstancing(true, true);
     meshInstance.cull = false;
     meshInstance.castShadow = false;
+    // not a thing to click: the picker draws the object's own instance
+    meshInstance.pick = false;
     splat.scene.splatLayer.addMeshInstances([meshInstance]);
     return { from, fromKey: materialKey(from), material, meshInstance };
+};
+
+/** a depth draw brought up to date with the drawing it follows, made anew when that drawing's shader changed */
+const keepDraw = (splat: Splat, draw: DepthDraw | null, instance: any, entity: Entity): DepthDraw => {
+    const from = instance.material as ShaderMaterial;
+    const source = instance.meshInstance as MeshInstance;
+    if (draw && (draw.from !== from || draw.fromKey !== materialKey(from))) {
+        releaseDraw(splat, draw);
+        draw = null;
+    }
+    draw ??= makeDraw(splat, from, source, entity);
+
+    const { material, meshInstance } = draw;
+    const parameters = from.parameters as Record<string, { data: any }>;
+    for (const name in parameters) {
+        material.setParameter(name, parameters[name].data);
+    }
+    meshInstance.instancingCount = source.instancingCount;
+    meshInstance.visible = entity.enabled && source.visible !== false;
+    return draw;
 };
 
 /** bring one object's holdout up to date: its state bits and its depth draw */
@@ -109,18 +137,30 @@ const sync = (splat: Splat, h: Holdouts) => {
         return;
     }
 
-    const from = instance.material as ShaderMaterial;
-    const source = instance.meshInstance as MeshInstance;
-    if (h.draw && (h.draw.from !== from || h.draw.fromKey !== materialKey(from))) removeDraw(splat, h);
-    if (!h.draw) h.draw = makeDraw(splat, from, source);
+    h.draw = keepDraw(splat, h.draw, instance, splat.entity);
+};
 
-    const { material, meshInstance } = h.draw;
-    const parameters = from.parameters as Record<string, { data: any }>;
-    for (const name in parameters) {
-        material.setParameter(name, parameters[name].data);
+/**
+ * The depth draw of an instance copy (instance-ops.ts), which draws the
+ * object's data and state, so its held-out gaussians are skipped by its
+ * colour draw as the object's are: while the object holds out, the copy
+ * holds out the same gaussians where it stands. Called as the copy
+ * follows the object; returns the draw to keep, or null.
+ */
+const holdoutCopyDraw = (splat: Splat, draw: DepthDraw | null, entity: Entity): DepthDraw | null => {
+    const h = bySplat.get(splat);
+    const instance = entity?.gsplat?.instance as any;
+    // the object's own draw stands for the holdout being on and supported
+    if (!h?.draw || !instance || !splat.scene) {
+        if (draw) releaseDraw(splat, draw);
+        return null;
     }
-    meshInstance.instancingCount = source.instancingCount;
-    meshInstance.visible = splat.entity.enabled && source.visible !== false;
+    return keepDraw(splat, draw, instance, entity);
+};
+
+/** let go of a copy's depth draw */
+const releaseCopyDraw = (splat: Splat, draw: DepthDraw | null) => {
+    if (draw) releaseDraw(splat, draw);
 };
 
 const syncAll = () => {
@@ -252,4 +292,4 @@ class HoldoutOp extends StateOp {
     }
 }
 
-export { HoldoutOp, holdoutSupported, HOLDOUT_BIT };
+export { HoldoutOp, holdoutSupported, holdoutCopyDraw, releaseCopyDraw, HOLDOUT_BIT, type DepthDraw };
