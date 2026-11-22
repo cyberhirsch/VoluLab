@@ -786,6 +786,7 @@
     "import.count-videos": "videos",
     "import.count-poses": "pose files",
     "import.count-other": "other files",
+    "import.pick-again": "a picked folder is not stored in the project — pick it again",
     "import.colmap-howto": "This browser has no WebGPU, so camera poses cannot be estimated here. Recommended: turn WebGPU on (restart the browser; chrome://gpu shows its state) and import the photos again: poses and training then run right here. Training needs WebGPU too. Without WebGPU, COLMAP still works: its scripts and the frames are in the folder you picked. 1) Install COLMAP (colmap.github.io). 2) Run run-colmap.bat (Windows) or run-colmap.sh (Mac/Linux) in that folder. 3) Pick that folder again on this import node. Or run the local bridge (npm run bridge in the VoluLab folder) and poses are estimated automatically.",
     "bridge.stage-frames": "extracting frames…",
     "bridge.stage-upload": "sending images to the bridge",

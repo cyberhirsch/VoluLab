@@ -9,6 +9,40 @@ months finds out why before they change it.
 
 ---
 
+## Import, pose and train nodes are kept in a project
+
+A project used to drop every import and train node: reopened, a trained
+object was there but the capture that made it was gone, so nothing could
+be posed or trained again. Now `document.json` has `datasets`, `poses`
+and `trains` (`src/doc-datasets.ts`), each with its place in the history
+and the graph, and the wires between them.
+
+- An import node's files go into the project as they came: a zip as
+  `dataset_<i>.bin`, photos as `dataset_<i>/<k>`, a video as
+  `dataset_<i>.video`. A picked folder cannot be stored (the browser
+  gives a handle, not the files), so that node comes back saying to pick
+  the folder again.
+- A pose node keeps the COLMAP model it estimated (`pose_<j>_<k>.bin`, a
+  few hundred kilobytes) and its cameras, not the posed dataset: on load
+  the posed zip is packed again from the import node's photos and the
+  model, without posing again. A video's frames are not the import node's
+  files, so they are stored with the pose node (`pose_<j>/<k>`). Poses
+  read from a posed dataset are handed on from the import node again.
+- A train node keeps its settings, its seed and the object it trained,
+  which is stored with the other objects; it comes back wired, so it can
+  train again.
+
+Entries are written as streamed blobs, and on load a stored (uncompressed)
+entry is sliced out of the project file rather than read, so photos are
+not copied into memory twice.
+
+Measured: 20 Mira views (2048 px) posed, trained 55 steps, saved: 48.2 MB
+in 1.2 s, loaded in 0.6 s; the three nodes, both wires, 20 cameras and
+their frustums came back, and training started again from the reloaded
+pose node.
+
+---
+
 ## Pose node
 
 Camera poses are a node of their own now: import -> pose -> train. Before,

@@ -2,6 +2,7 @@ import { ZipFileSystem, ZipReadFileSystem } from '@playcanvas/splat-transform';
 import { Vec3 } from 'playcanvas';
 
 import { combineOutputs, placeholderSplat, restoreCombine, storeCombine } from './doc-combine';
+import { restoreDatasets, storeDatasets } from './doc-datasets';
 import { restoreInspectNode, storeInspectNodes } from './doc-inspect';
 import { storeLookNodes } from './doc-looks';
 import { restoreStateNode, storeStateNodes } from './doc-nodes';
@@ -457,6 +458,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             }
             // merge, switch and layer nodes (doc-combine.ts)
             restoreCombine(document, loaded, later, events);
+            // import, pose and train nodes, wired once all are in (doc-datasets.ts)
+            const wireDatasets = await restoreDatasets(document, file, zipFs, loaded, scene, later, events);
 
             // in, in order (the sort is stable, so nodes without a place
             // keep the order they were listed in), and where they were put
@@ -468,6 +471,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 }
             };
             pending.forEach(({ pos, add }) => place(add(), pos));
+            wireDatasets();
             loaded.forEach((splat, i) => place(splat, document.splats[i]?.pos));
             events.fire('edit.changed');
 
@@ -554,6 +558,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
             // merge, switch and layer nodes; a merged object's data is not written
             const combined = storeCombine(allOps, cursor, splats, placeOf);
+
+            // import, pose and train nodes, and the files they hold
+            const capture = storeDatasets(allOps, cursor, splats, placeOf);
 
             // what a 4D model has deleted or hidden, a byte per row, where
             // no nodes say it: its file holds every gaussian
@@ -683,6 +690,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
                 // merge, switch and layer nodes
                 ...combined.document,
+                // import, pose and train nodes
+                ...capture.document,
                 // the nodes that transform over time (motion-nodes.ts):
                 // track, stabilise, time warp, motion scale, motion blur
                 motionNodes: allOps.slice(0, cursor).flatMap((o) => {
@@ -852,6 +861,23 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 const writer = await zipFs.createWriter(`voxels_${i}.bin`);
                 await writer.write(new Uint8Array(cells.buffer, cells.byteOffset, cells.byteLength));
                 await writer.write(new Uint8Array(colors.buffer, colors.byteOffset, colors.byteLength));
+                await writer.close();
+            }
+
+            // what the import and pose nodes hold: photos, a video, a zip,
+            // the COLMAP model - piece by piece, as some are large
+            for (const { name, data } of capture.files) {
+                const writer = await zipFs.createWriter(name);
+                if (data instanceof Blob) {
+                    const reader = data.stream().getReader();
+                    for (;;) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        await writer.write(value);
+                    }
+                } else {
+                    await writer.write(data);
+                }
                 await writer.close();
             }
 

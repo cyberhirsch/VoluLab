@@ -786,6 +786,7 @@
     "import.count-videos": "動画",
     "import.count-poses": "ポーズファイル",
     "import.count-other": "その他のファイル",
+    "import.pick-again": "選んだフォルダーはプロジェクトに保存されません — もう一度選んでください",
     "import.colmap-howto": "このブラウザには WebGPU がないため、ここではカメラの姿勢を推定できません。推奨：WebGPU を有効にし（ブラウザを再起動。状態は chrome://gpu で確認できます）、写真をもう一度インポートしてください。姿勢推定と学習がここで実行されます。学習にも WebGPU が必要です。WebGPU がなくても COLMAP は使えます。スクリプトと画像は選んだフォルダにあります。1) COLMAP をインストール（colmap.github.io）。2) そのフォルダで run-colmap.bat（Windows）または run-colmap.sh（Mac/Linux）を実行。3) このインポートノードでそのフォルダをもう一度選択。またはローカル bridge（VoluLab フォルダで npm run bridge）を起動すると、姿勢は自動で推定されます。",
     "bridge.stage-frames": "フレームを抽出中…",
     "bridge.stage-upload": "ブリッジへ画像を送信中",

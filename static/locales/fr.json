@@ -786,6 +786,7 @@
     "import.count-videos": "vidéos",
     "import.count-poses": "fichiers de poses",
     "import.count-other": "autres fichiers",
+    "import.pick-again": "un dossier choisi n'est pas enregistré dans le projet — choisissez-le à nouveau",
     "import.colmap-howto": "Ce navigateur n'a pas WebGPU : les poses de caméra ne peuvent pas être estimées ici. Recommandé : activez WebGPU (redémarrez le navigateur ; chrome://gpu montre son état) et importez de nouveau les photos : poses et entraînement se font alors ici même. L'entraînement a lui aussi besoin de WebGPU. Sans WebGPU, COLMAP fonctionne toujours : ses scripts et les images sont dans le dossier choisi. 1) Installez COLMAP (colmap.github.io). 2) Lancez run-colmap.bat (Windows) ou run-colmap.sh (Mac/Linux) dans ce dossier. 3) Choisissez de nouveau ce dossier sur ce nœud d'import. Ou lancez le bridge local (npm run bridge dans le dossier VoluLab) et les poses sont estimées automatiquement.",
     "bridge.stage-frames": "extraction des images…",
     "bridge.stage-upload": "envoi des images au pont",
