@@ -1,6 +1,7 @@
 import { ZipFileSystem, ZipReadFileSystem } from '@playcanvas/splat-transform';
 import { Vec3 } from 'playcanvas';
 
+import { restoreInspectNode, storeInspectNodes } from './doc-inspect';
 import { restoreStateNode, storeStateNodes } from './doc-nodes';
 import { DebugViewOp, EditOp, LightOp, PrimitiveOp, RelightOp, TransformNodeOp } from './edit-ops';
 import { ElementType } from './element';
@@ -414,6 +415,14 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 }
             }
 
+            // render passes, viewer, cache and stats nodes (doc-inspect.ts)
+            if (Array.isArray(document.inspectNodes)) {
+                for (const stored of document.inspectNodes) {
+                    const splat = loaded[stored?.splat];
+                    if (splat) later(stored, () => restoreInspectNode(stored, splat, events));
+                }
+            }
+
             // in, in order (the sort is stable, so nodes without a place
             // keep the order they were listed in), and where they were put
             // in the graph
@@ -472,6 +481,10 @@ const registerDocEvents = (scene: Scene, events: Events) => {
         events.fire('startSpinner');
 
         try {
+            // a viewer showing an earlier point gives the chain back first:
+            // the project is the whole of it
+            await events.invoke('viewer.stop');
+
             const splats = events.invoke('scene.allSplats') as Splat[];
 
             const cameras = (events.invoke('camera.list') ?? []) as SceneCamera[];
@@ -676,6 +689,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     const i = o instanceof DebugViewOp && o.bypassed ? splats.indexOf(o.splat) : -1;
                     return i < 0 ? [] : [{ splat: i, channel: (o as DebugViewOp).view.channel, bypassed: true, ...placeOf(o) }];
                 })),
+
+                // render passes, viewer, cache and stats nodes, with their settings
+                inspectNodes: storeInspectNodes(allOps, cursor, splats, placeOf),
 
                 // the session around the scene, so a project reopens in the
                 // workspace it was authored in

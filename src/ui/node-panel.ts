@@ -1,10 +1,12 @@
 import { Container } from '@playcanvas/pcui';
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
+import { buildInspectNode, registerViewerBadge } from './inspect-panel';
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
 import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplitOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
+import { isInspectOp } from '../inspect-ops';
 import { SelectQuery, describeQuery, isParametric } from '../select-query';
 import { Splat } from '../splat';
 import type { LoopMode, OffsetOutside } from '../time-map';
@@ -89,6 +91,8 @@ class NodePanel extends Container {
         events.on('splat.visibility', () => this.rebuild());
         events.on('edit.changed', () => this.rebuild());
         events.on('tool.activated', () => this.rebuild());
+        events.on('viewer.changed', () => this.rebuild());
+        registerViewerBadge(events);
 
         queueMicrotask(() => this.rebuild());
     }
@@ -345,6 +349,12 @@ class NodePanel extends Container {
                 this.body.appendChild(panel);
                 return;
             }
+        }
+
+        if (isInspectOp(op)) {
+            this.empty.hidden = true;
+            buildInspectNode(this.body, op, index, this.events, () => this.rebuild());
+            return;
         }
 
         if (op instanceof OutputOp) {

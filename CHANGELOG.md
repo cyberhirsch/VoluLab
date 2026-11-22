@@ -9,6 +9,92 @@ months finds out why before they change it.
 
 ---
 
+## Stats node
+
+Measures the object when the chain passes through it, so it always says what
+its point holds (`StatsOp.do` calls the measure in `inspect-nodes.ts`): count,
+deleted, selected, hidden, the still and moving share of a 4D model (the
+hierarchy's still set, or no velocity and no fade), CPU memory of the data and
+its motion, and the bounds of the live centres in object space. "Count per
+frame" works out for a 4D model how many gaussians the shader draws at each
+model frame - in the active set, not faded below 1/255, the shader's own
+discard - and how many came and went since the frame before. A PLY sequence
+collects the count of each frame it shows. Nothing is stored but the node: the
+figures are measured again on load.
+
+---
+
+## Cache node
+
+Keeps what the state nodes above it on its object (select, cleanup, decimate,
+crop, ...) resolved, per frame of the object's data, and answers for them. It
+sits between each such node and its resolver (`wrap` in `inspect-nodes.ts`): a
+frame it has an answer for is answered from memory, or from a folder (File
+System Access API) when "memory and folder" is on, one file per frame.
+
+What empties it is one rule that needs to know nothing about node parameters:
+a node asking again on the frame it last asked on means its question changed -
+an edit or a bypass above - so the whole cache goes. A node asking on another
+frame is a frame change and is answered if it can be. The frame key is the
+data's asset name and count (`frameKey`): each PLY of a sequence is its own,
+a 3D object or GPU-played 4D model keeps one. "Fill every frame" steps a PLY
+sequence through its frames.
+
+Where it helps: a PLY sequence, whose edits are re-run on every frame
+(`reapplyAll`). Measured on a 5-frame sequence with a decimate above: showing
+the frames again ran the decimate 0 times. A 4D model's data is the same at
+every frame, so the nodes above resolve once anyway; there it holds one entry
+and saves nothing, and its note says so. The folder is not stored in a
+project: a reloaded cache keeps its frames in memory until one is picked.
+
+---
+
+## Viewer node
+
+A tap, like a Nuke viewer: "view here" shows the object as it stands at the
+node in the viewport without moving where the chain ends. It winds the
+history to itself, hides the other objects while it shows (optional) and puts a
+badge over the viewport; the badge, or "back to the end", winds back.
+Anything that moves the history while viewing - an undo, a new node, a changed
+setting - is the user working again, and the viewer lets go where the history
+now is instead of winding over it. Saving a project stops it first, so the
+project is the whole chain.
+
+---
+
+## Render passes node
+
+Renders the scene as it stands at the node, frame by frame, into one image
+sequence per pass for Nuke, Resolve or After Effects: beauty and alpha (PNG),
+depth and velocity (EXR), the selection matte (PNG), named
+`<name>_<pass>.<frame>.<ext>`. Like an output node it winds the history to
+itself and back. The files go into a folder picked with the File System Access
+API, or into one zip download without it. Code: `render-passes.ts`; the nodes
+of this group are in `inspect-ops.ts`, what they do in `inspect-nodes.ts`, their
+faces in `ui/inspect-panel.ts`, their project entries (`inspectNodes`) in
+`doc-inspect.ts`.
+
+- Beauty is what the video export renders, through the camera node's lens, on
+  a transparent background; alpha is its alpha channel.
+- Depth, velocity and matte come from the picker's blended pass, extended with
+  `pickMode` 2 and 3 in `splat-shader.ts`: rendered into an RGBA16F target of
+  their own with the picker's blend (colour adds weight * value, alpha keeps
+  the light left), then divided by the coverage - the way the picker's depth
+  already works. They see the gaussians sharp: no depth of field, no lens.
+- Depth: view depth in scene units, channel `Z`, 0 where nothing is drawn.
+  Half-float accumulation, about 11 bits of relative precision.
+- Velocity: the screen motion of each centre to the next timeline frame,
+  through the object's time nodes (`passMotionStep`, set per object), in
+  pixels, R = x right, G = y up. The objects' own motion only - the camera's is
+  not in it - and 0 for a 3D object or a PLY sequence.
+- The read-back of the data target resolves with a frame's submit, so one is
+  rendered for it; waiting for it without one hangs in the locked render mode.
+- `encodeExr` writes uncompressed scanline float32. Its rows start at any byte
+  offset after the header, so they are copied in as bytes (a Float32Array view
+  there throws).
+
+---
+
 ## Time nodes and a split node
 
 The graph can now edit time. Five nodes for a 4D model - trim, retime,

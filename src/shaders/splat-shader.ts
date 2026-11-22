@@ -185,7 +185,10 @@ varying mediump float defocus;                  // 0 sharp, ->1 fully out of foc
 
 #if PICK_PASS
     uniform uint pickOp;                        // 0: add, 1: remove, 2: set
-    uniform int pickMode;                       // 0: pick id, 1: depth estimation
+    uniform int pickMode;                       // 0: pick id, 1: depth estimation, 2: render pass data, 3: selection matte
+    #ifdef SPLAT_MOTION
+        uniform float passMotionStep;           // normalised model time one timeline frame on (render passes)
+    #endif
 #endif
 
 mediump vec4 discardVec = vec4(0.0, 0.0, 2.0, 1.0);
@@ -280,6 +283,24 @@ void main(void) {
             float normalizedDepth = (linearDepth - camera_params.z) / (camera_params.y - camera_params.z);
             vec4 clr = getColor();
             color = vec4(normalizedDepth, 0.0, 0.0, 1.0) * clr.a * motionAlpha;
+        } else if (pickMode == 2) {
+            // render passes: view depth in scene units, and how far the
+            // centre moves on screen by the next frame, in NDC (render-passes.ts)
+            vec2 passVelocity = vec2(0.0);
+            #ifdef SPLAT_MOTION
+                SplatCenter passNext;
+                passNext.modelCenterOriginal = modelCenter;
+                passNext.modelCenterModified = modelCenter;
+                if (initCenter(modelCenter + motion.xyz * passMotionStep, passNext)) {
+                    passVelocity = passNext.proj.xy / passNext.proj.w - center.proj.xy / center.proj.w;
+                }
+            #endif
+            vec4 clr = getColor();
+            color = vec4(-center.view.z, passVelocity, 1.0) * clr.a * motionAlpha;
+        } else if (pickMode == 3) {
+            // render passes: the selection matte
+            vec4 clr = getColor();
+            color = vec4((vertexState & 1u) != 0u ? 1.0 : 0.0, 0.0, 0.0, 1.0) * clr.a * motionAlpha;
         } else {
             // pick id
             uvec4 bits = (uvec4(splat.index) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u);
@@ -389,7 +410,7 @@ uniform bool outlineMode;
 uniform float ringSize;
 
 #if PICK_PASS
-    uniform int pickMode;           // 0: id, 1: depth estimation
+    uniform int pickMode;           // 0: id, 1: depth estimation, 2-3: render passes
 #endif
 
 const float EXP4 = exp(-4.0);
@@ -429,8 +450,8 @@ void main(void) {
     }
 
     #if PICK_PASS
-        if (pickMode == 1) {
-            // depth estimation
+        if (pickMode >= 1) {
+            // depth estimation, and the render passes' data
             mediump float alpha = normExp(A);
             if (alpha < 1.0 / 255.0) {
                 discard;
@@ -683,7 +704,10 @@ varying vDefocus: f32;              // 0 sharp, ->1 fully out of focus
 
 #ifdef PICK_PASS
     uniform pickOp: u32;            // 0: add, 1: remove, 2: set
-    uniform pickMode: i32;          // 0: pick id, 1: depth estimation
+    uniform pickMode: i32;          // 0: pick id, 1: depth estimation, 2: render pass data, 3: selection matte
+    #ifdef SPLAT_MOTION
+        uniform passMotionStep: f32;    // normalised model time one timeline frame on (render passes)
+    #endif
 #endif
 
 const discardVec: vec4f = vec4f(0.0, 0.0, 2.0, 1.0);
@@ -798,6 +822,23 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
             let normalizedDepth: f32 = (linearDepth - uniform.camera_params.z) / (uniform.camera_params.y - uniform.camera_params.z);
             let clr: vec4f = getColor();
             output.vColor = vec4f(normalizedDepth, 0.0, 0.0, 1.0) * clr.a * motionAlpha;
+        } else if (uniform.pickMode == 2) {
+            // render passes - see the GLSL twin
+            var passVelocity: vec2f = vec2f(0.0);
+            #ifdef SPLAT_MOTION
+                var passNext: SplatCenter;
+                passNext.modelCenterOriginal = modelCenter;
+                passNext.modelCenterModified = modelCenter;
+                if (initCenter(modelCenter + motion.xyz * uniform.passMotionStep, &passNext)) {
+                    passVelocity = passNext.proj.xy / passNext.proj.w - center.proj.xy / center.proj.w;
+                }
+            #endif
+            let clr: vec4f = getColor();
+            output.vColor = vec4f(-center.view.z, passVelocity, 1.0) * clr.a * motionAlpha;
+        } else if (uniform.pickMode == 3) {
+            // render passes: the selection matte
+            let clr: vec4f = getColor();
+            output.vColor = vec4f(select(0.0, 1.0, (vertexState & 1u) != 0u), 0.0, 0.0, 1.0) * clr.a * motionAlpha;
         } else {
             // pick id
             let bits: vec4<u32> = (vec4<u32>(splat.index) >> vec4<u32>(0u, 8u, 16u, 24u)) & vec4<u32>(255u);
@@ -890,7 +931,7 @@ uniform outlineMode: f32;
 uniform ringSize: f32;
 
 #ifdef PICK_PASS
-    uniform pickMode: i32;          // 0: id, 1: depth estimation
+    uniform pickMode: i32;          // 0: id, 1: depth estimation, 2-3: render passes
 #endif
 
 const EXP4: f32 = exp(-4.0);
@@ -924,8 +965,8 @@ fn fragmentMain(input: FragmentInput) -> FragmentOutput {
     }
 
     #ifdef PICK_PASS
-        if (uniform.pickMode == 1) {
-            // depth estimation
+        if (uniform.pickMode >= 1) {
+            // depth estimation, and the render passes' data
             let alpha: f32 = normExp(A);
             if (alpha < 1.0 / 255.0) {
                 discard;

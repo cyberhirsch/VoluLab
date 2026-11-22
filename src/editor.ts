@@ -10,6 +10,7 @@ import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
 import type { GridPlane } from './infinite-grid';
+import { registerInspectNodes } from './inspect-nodes';
 import { MappedReadFileSystem, loadGSplatData } from './io';
 import { registerLightViewEvents } from './light-view';
 import { registerPrimitiveViewEvents } from './primitive-view';
@@ -714,6 +715,9 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         events.fire('edit.add', op);
         return op;
     });
+
+    // render passes, viewer, cache and stats (inspect-nodes.ts)
+    registerInspectNodes(events, editHistory, scene, { appendAndOpen, addTarget });
 
     events.on('graph.addOutputNode', (target?: Splat) => {
         addTarget(target).forEach((splat) => {

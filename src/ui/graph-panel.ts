@@ -106,7 +106,11 @@ const OP_LABELS: Record<string, string> = {
     decimate: 'decimate',
     setShBands: 'sh bands',
     debugView: 'debug view',
-    output: 'output'
+    output: 'output',
+    renderPasses: 'render passes',
+    viewer: 'viewer',
+    cache: 'cache',
+    stats: 'stats'
 };
 
 // A bundled edit is named by the member that does the work, not by the fact
@@ -740,7 +744,8 @@ class GraphPanel extends Container {
                 applied: i < cursor,
                 splat,
                 select: !!select,
-                terminal: op.name === 'output',
+                // render passes, viewer and stats are taps: nothing is fed from them
+                terminal: ['output', 'renderPasses', 'viewer', 'stats'].includes(op.name),
                 bypassed: !!op.bypassed,
                 // frozen only when nothing in it can be re-run
                 frozen: steps.length && !select?.mesh ? steps.every(s => !isParametric(s.query)) : undefined,
@@ -1200,6 +1205,22 @@ class GraphPanel extends Container {
                         action: () => this.events.invoke('graph.voxelise', splat)
                     },
                     {
+                        label: 'render passes',
+                        action: () => this.events.fire('graph.addRenderPassesNode', splat)
+                    },
+                    {
+                        label: 'viewer',
+                        action: () => this.events.fire('graph.addViewerNode', splat)
+                    },
+                    {
+                        label: 'cache',
+                        action: () => this.events.fire('graph.addCacheNode', splat)
+                    },
+                    {
+                        label: 'stats',
+                        action: () => this.events.fire('graph.addStatsNode', splat)
+                    },
+                    {
                         label: 'output',
                         action: () => this.events.fire('graph.addOutputNode', splat)
                     }
@@ -1514,6 +1535,34 @@ class GraphPanel extends Container {
                 disabled: !splat,
                 hint: splat ? undefined : 'no object',
                 action: () => this.events.fire('graph.addDebugViewNode')
+            },
+            {
+                // beauty, alpha, depth, velocity and matte sequences for a compositor
+                label: 'add render passes node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addRenderPassesNode')
+            },
+            {
+                // the stream at this point in the viewport, without moving the end of the chain
+                label: 'add viewer node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addViewerNode')
+            },
+            {
+                // keeps what the nodes above it resolved, per frame
+                label: 'add cache node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addCacheNode')
+            },
+            {
+                // count, still and moving, memory, bounds, change per frame
+                label: 'add stats node',
+                disabled: !splat,
+                hint: splat ? undefined : 'no object',
+                action: () => this.events.fire('graph.addStatsNode')
             },
             {
                 label: 'add output node',
