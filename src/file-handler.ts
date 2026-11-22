@@ -4,6 +4,7 @@ import { CreateDropHandler } from './drop-handler';
 import { ElementType } from './element';
 import { Events } from './events';
 import { BrowserFileSystem, MappedReadFileSystem } from './io';
+import { heicToJpeg, isHeic } from './io/heic';
 import { readVox } from './io/read/vox';
 import { Scene } from './scene';
 import { Splat } from './splat';
@@ -115,7 +116,7 @@ const filePickerTypes: { [key: string]: FilePickerAcceptType } = {
         accept: {
             'application/zip': ['.zip'],
             'video/*': ['.mp4', '.mov', '.webm', '.mkv'],
-            'image/*': ['.jpg', '.jpeg', '.png'],
+            'image/*': ['.jpg', '.jpeg', '.png', '.heic', '.heif'],
             'text/csv': ['.csv']
         }
     },
@@ -152,6 +153,7 @@ const allImportTypes = {
         'application/zip': ['.zip'],
         'video/mp4': ['.mp4', '.mov', '.webm', '.mkv'],
         'image/jpeg': ['.jpg', '.jpeg', '.png'],
+        'image/heic': ['.heic', '.heif'],
         'text/csv': ['.csv'],
         'text/plain': ['.txt']
     }
@@ -516,6 +518,26 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
     const importFiles = async (files: ImportFile[], animationFrame = false) => {
         // Thumbs.db, desktop.ini and the like ride along in dropped folders
         files = files.filter(f => !isIgnoredFile(f.filename));
+
+        // HEIC / HEIF photos become JPEGs first, so they are photos like any other
+        if (files.some(f => isHeic(f.filename))) {
+            events.fire('startSpinner');
+            try {
+                files = await Promise.all(files.map(async (f) => {
+                    if (!isHeic(f.filename)) return f;
+                    const data = f.contents ?? (f.url ? await (await fetch(f.url)).blob() : null);
+                    if (!data) return f;
+                    const contents = await heicToJpeg(data, f.filename);
+                    return { filename: contents.name, contents };
+                }));
+            } catch (error) {
+                await showLoadError(error.message ?? error, files.find(f => isHeic(f.filename))?.filename ?? 'heic');
+                return [];
+            } finally {
+                events.fire('stopSpinner');
+            }
+        }
+
         const filenames = files.map(f => f.filename.toLowerCase());
 
         const result: Splat[] = [];
@@ -674,7 +696,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         fileSelector = document.createElement('input');
         fileSelector.setAttribute('id', 'file-selector');
         fileSelector.setAttribute('type', 'file');
-        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.vlp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz,.npz,.gsv,.zip,.csv,.mp4,.mov,.webm,.mkv,.jpg,.jpeg,.png,.las,.laz,.pcd,.xyz,.pts,.vox');
+        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.vlp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz,.npz,.gsv,.zip,.csv,.mp4,.mov,.webm,.mkv,.jpg,.jpeg,.png,.heic,.heif,.las,.laz,.pcd,.xyz,.pts,.vox');
         fileSelector.setAttribute('multiple', 'true');
 
         fileSelector.onchange = () => {
@@ -786,7 +808,9 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 return;
             }
 
-            if (names.length > 1 && isImageSet(names)) {
+            // HEIC photos cannot be read in place: they go the file route,
+            // where they become JPEGs
+            if (!names.some(isHeic) && names.length > 1 && isImageSet(names)) {
                 if (await posesReady()) {
                     const op = events.invoke('dataset.addNode', null, handle.name);
                     const images: BridgeImage[] = await Promise.all(entries.map(async e => ({

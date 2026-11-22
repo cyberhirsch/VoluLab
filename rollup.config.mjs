@@ -72,6 +72,10 @@ const application = {
                 { src: 'node_modules/colmap-wasm/wasm', dest: 'static/colmap-wasm' },
                 { src: 'node_modules/colmap-wasm/LICENSE', dest: 'static/colmap-wasm' },
                 { src: 'node_modules/colmap-wasm/THIRD_PARTY_NOTICES.md', dest: 'static/colmap-wasm' },
+                // libheif (LGPL-3.0) for HEIC photos: its own files, loaded on demand
+                { src: 'node_modules/libheif-js/libheif-wasm/libheif.js', dest: 'static/libheif' },
+                { src: 'node_modules/libheif-js/libheif-wasm/libheif.wasm', dest: 'static/libheif' },
+                { src: 'node_modules/libheif-js/libheif-wasm/LICENSE', dest: 'static/libheif' },
                 { src: 'static/env/VertebraeHDRI_v1_512.png', dest: 'static/env' }
             ]
         }),

@@ -62,6 +62,7 @@
     },
     "dependencies": {
         "colmap-wasm": "0.1.0",
-        "laz-perf": "^0.0.7"
+        "laz-perf": "^0.0.7",
+        "libheif-js": "1.23.5"
     }
 }

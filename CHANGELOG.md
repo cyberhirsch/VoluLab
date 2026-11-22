@@ -9,6 +9,25 @@ months finds out why before they change it.
 
 ---
 
+## HEIC and HEIF photos
+
+Photos from iPhones and many Android phones (`.heic`, `.heif`) import like
+JPEGs: opened, dropped, or in a picked folder. Browsers on Windows and Linux
+cannot decode them, so libheif (LGPL-3.0, `libheif-js` 1.23.5) does, in two
+workers, and each photo becomes a JPEG (quality 0.95) named `.jpg` before
+anything else sees it. libheif is copied to `static/libheif` as its own
+files and loaded only when a HEIC arrives, never bundled into the app, so
+the MIT app and the LGPL library stay separate and replaceable.
+
+Traps: the emscripten factory can finish before it returns, so the worker
+resolves on the settings object it passed in, not on the return value.
+Rotation and mirroring are applied by libheif; EXIF is not carried into the
+JPEG. A folder of HEIC photos is not posed in place (COLMAP cannot read
+them); it goes the file route instead. A COLMAP dataset whose `images.txt`
+names `.heic` files no longer matches after the rename.
+
+---
+
 ## Stats node
 
 Measures the object when the chain passes through it, so it always says what

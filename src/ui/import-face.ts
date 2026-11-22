@@ -4,6 +4,7 @@ import { i18n } from './localization';
 import { resolveDropPayload } from '../drop-handler';
 import { DatasetOp } from '../edit-ops';
 import { Events } from '../events';
+import { isHeic, withHeicAsJpeg } from '../io/heic';
 import { BridgeImage } from '../training/bridge-client';
 import { bridgePoseIntoOp, cancelPoseJob, posesReady } from '../training/bridge-ingest';
 import { isIgnoredFile, isImageSet, listDirectory, looksLikeDataset, packDataset } from '../training/dataset';
@@ -130,6 +131,13 @@ class ImportFace extends Container {
         const entries = await listDirectory(handle);
         const names = entries.map(e => e.path);
 
+        // HEIC photos cannot be read in place: they come in as JPEG files
+        if (!looksLikeDataset(names) && names.some(isHeic)) {
+            const files = await Promise.all(entries.map(e => e.handle.getFile()));
+            await this.acceptFiles(files, names);
+            return;
+        }
+
         if (looksLikeDataset(names)) {
             this.setSource({ kind: 'directory', handle }, handle.name);
             return;
@@ -162,7 +170,18 @@ class ImportFace extends Container {
     }
 
     /** File and file-list mode: route whatever was picked or dropped. */
-    private async acceptFiles(allFiles: File[], names?: string[]) {
+    private async acceptFiles(heicFiles: File[], heicNames?: string[]) {
+        // HEIC / HEIF photos become JPEGs first
+        let allFiles = heicFiles;
+        let names = heicNames;
+        if ((heicNames ?? heicFiles.map(f => f.name)).some(isHeic)) {
+            try {
+                ({ files: allFiles, names } = await withHeicAsJpeg(heicFiles, heicNames));
+            } catch (error) {
+                this.notice(String(error?.message ?? error));
+                return;
+            }
+        }
         // Thumbs.db, desktop.ini and the like ride along in dropped folders
         const allNames = names ?? allFiles.map(f => f.name);
         const keep = allNames.map(n => !isIgnoredFile(n));
