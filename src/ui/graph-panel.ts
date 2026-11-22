@@ -1,6 +1,6 @@
 import { Container } from '@playcanvas/pcui';
 
-import { AnimTrackEditOp, DatasetOp, PoseOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, PortSpec, PrimitivePoseOp, SelectOp, SelectStep, ShapeTransformOp, SourceKind, principalOp } from '../edit-ops';
+import { AnimTrackEditOp, DatasetOp, PoseOp, EditOp, LightPoseOp, MultiOp, PlacePivotOp, PortSpec, PrimitivePoseOp, ResizeOp, SelectOp, SelectStep, ShapeTransformOp, SourceKind, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { LOOK_LABELS, LOOK_NODES } from '../look/nodes';
 import { SceneLight } from '../scene-light';
@@ -126,6 +126,7 @@ const OP_LABELS: Record<string, string> = {
     addVoxels: 'import voxels',
     dataset: 'import',
     pose: 'pose',
+    resize: 'resize',
     camera: 'camera',
     light: 'light',
     lightPose: 'aim light',
@@ -889,7 +890,7 @@ class GraphPanel extends Container {
         // what each node's wire carries, for the inputs it can be dropped on
         nodes.forEach((node) => {
             const offers: Offer[] = [];
-            if (node.key instanceof DatasetOp || node.key instanceof PoseOp) offers.push({ kind: 'dataset', source: node.key });
+            if (node.key instanceof DatasetOp || node.key instanceof PoseOp || node.key instanceof ResizeOp) offers.push({ kind: 'dataset', source: node.key });
             if (node.select) offers.push({ kind: 'selection', source: node.key });
             if (node.splat instanceof Splat) offers.push({ kind: 'object', source: node.splat });
             if (node.splat instanceof ScenePrimitive) offers.push({ kind: 'primitive', source: node.splat });
@@ -1207,20 +1208,28 @@ class GraphPanel extends Container {
                     return;
                 }
 
-                if (node.key instanceof DatasetOp || node.key instanceof PoseOp) {
+                if (node.key instanceof DatasetOp || node.key instanceof PoseOp || node.key instanceof ResizeOp) {
                     // released over nothing: offer what a dataset can feed,
-                    // created at the drop point and wired up - a pose node
-                    // only from an import node
+                    // created at the drop point and wired up - a resize node
+                    // only from an import node, a pose node from either
                     const dataset = node.key;
                     showContextMenu(doc, ev.clientX, ev.clientY, [
                         ...(dataset instanceof DatasetOp ? [{
+                            label: 'resize',
+                            action: () => {
+                                const op = this.events.invoke('resize.addNode', dataset);
+                                this.positions.set(op, { x: at.x, y: at.y - NODE_H / 2 });
+                            }
+                        }] : []),
+                        ...(dataset instanceof DatasetOp || dataset instanceof ResizeOp ? [{
                             label: 'pose',
                             action: () => {
                                 const op = this.events.invoke('pose.addNode', dataset);
                                 this.positions.set(op, { x: at.x, y: at.y - NODE_H / 2 });
                             }
                         }] : []),
-                        {
+                        // resized photos still need poses before training
+                        ...(dataset instanceof ResizeOp ? [] : [{
                             label: 'train',
                             action: () => {
                                 const op = this.events.invoke('training.addNode');
@@ -1228,7 +1237,7 @@ class GraphPanel extends Container {
                                 this.positions.set(op, { x: at.x, y: at.y - NODE_H - PORT_ROW / 2 });
                                 this.events.fire('graph.connect', op, 'dataset', node.key);
                             }
-                        }
+                        }])
                     ]);
                     return;
                 }
@@ -1537,6 +1546,12 @@ class GraphPanel extends Container {
                 // node arrives pending, and its face in the node pane runs it
                 label: 'add training node',
                 action: () => this.events.invoke('training.addNode')
+            },
+            {
+                // shrinks an import node's photos before they are posed;
+                // its input is wired by hand
+                label: 'add resize node',
+                action: () => this.events.invoke('resize.addNode')
             },
             {
                 // the camera node shapes the picture rather than the objects,

@@ -2133,6 +2133,100 @@ type PoseCamera = {
 
 type PoseMatcher = 'sequential' | 'exhaustive';
 
+type ResizeSettings = {
+    /** the longest an image's long edge may be, in pixels */
+    maxEdge: number;
+    /** JPEG quality of the images it shrinks, 0..1 */
+    quality: number;
+};
+
+const defaultResizeSettings = (): ResizeSettings => ({ maxEdge: 1600, quality: 0.92 });
+
+/** What a resize node did: how many images, and the sizes before and after. */
+type ResizeSummary = {
+    images: number;
+    resized: number;
+    /** the most common size going in and coming out */
+    from: [number, number];
+    to: [number, number];
+    /** the input was not photos (a video, a posed dataset): handed on as it is */
+    passed?: 'video' | 'dataset';
+};
+
+/**
+ * A resize node: shrinks the photos an import node holds before they are
+ * posed, so the pose node and the trainer see the same smaller images.
+ *
+ * Images whose long edge is within the cap go through untouched. A video
+ * and a dataset that already has poses go through untouched too: a posed
+ * dataset's intrinsics are in pixels of the images it has. The shrunk
+ * images are its own state (src/training/resize-node.ts makes them),
+ * remade only when the input or the settings change; a project keeps them.
+ */
+class ResizeOp {
+    name = 'resize';
+
+    inputs: DatasetHandle[] = [];
+    output: DatasetHandle;
+    /** the import node feeding it */
+    datasetOp?: DatasetOp;
+    settings: ResizeSettings;
+    /** the input's source, or the photos shrunk; null while it works */
+    source: unknown | null = null;
+    /** what `source` was made from, so an unchanged input is not done again */
+    madeFrom: { source: unknown, maxEdge: number, quality: number } | null = null;
+    summary?: ResizeSummary;
+    /** progress while it works, or what went wrong */
+    status?: string;
+    counts?: DatasetCounts;
+    bypassed?: boolean;
+
+    constructor(settings: ResizeSettings = defaultResizeSettings()) {
+        this.settings = settings;
+        this.output = { name: 'resized', dataset: true };
+    }
+
+    get sourceName() {
+        return this.datasetOp?.sourceName ?? 'no dataset';
+    }
+
+    get awaitingPoses() {
+        return this.datasetOp?.awaitingPoses;
+    }
+
+    /** the graph's second line: what it did */
+    get sourceLabel() {
+        if (this.status) return this.status;
+        if (!this.datasetOp) return 'no dataset';
+        const s = this.summary;
+        if (!s) return this.sourceName;
+        if (s.passed) return `${this.sourceName} · as it is`;
+        return s.resized ?
+            `${s.images} images · ${s.from[0]}×${s.from[1]} → ${s.to[0]}×${s.to[1]}` :
+            `${s.images} images · as they are`;
+    }
+
+    /** a posed dataset goes through: a train node can read it */
+    get trainSource(): unknown {
+        const kind = (this.source as { kind?: string } | null)?.kind;
+        return kind === 'bytes' || kind === 'directory' || kind === 'url' ? this.source : undefined;
+    }
+
+    get ports(): PortSpec[] {
+        return [{ name: 'dataset', label: 'dataset', accepts: ['dataset'], source: this.datasetOp ?? null }];
+    }
+
+    do() {}
+
+    undo() {}
+
+    destroy() {
+        this.source = null;
+        this.madeFrom = null;
+        this.datasetOp = undefined;
+    }
+}
+
 /**
  * A pose node: camera poses for the import node wired into it.
  *
@@ -2152,8 +2246,8 @@ class PoseOp {
     inputs: DatasetHandle[] = [];
     /** the posed dataset, as the train node sees it */
     output: DatasetHandle;
-    /** the import node feeding it */
-    datasetOp?: DatasetOp;
+    /** the import node feeding it, or a resize node between */
+    datasetOp?: DatasetOp | ResizeOp;
     matcher: PoseMatcher;
     /** the posed dataset for the trainer; null until there is one */
     source: unknown | null = null;
@@ -2747,6 +2841,10 @@ export {
     PoseOp,
     type PoseCamera,
     type PoseMatcher,
+    ResizeOp,
+    type ResizeSettings,
+    type ResizeSummary,
+    defaultResizeSettings,
     type DatasetHandle,
     type DatasetCounts,
     describeCounts,

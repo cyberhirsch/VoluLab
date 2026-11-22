@@ -1,6 +1,6 @@
 import type { ZipReadFileSystem } from '@playcanvas/splat-transform';
 
-import { DatasetOp, EditOp, PoseOp, TrainOp, type PoseCamera } from './edit-ops';
+import { DatasetOp, EditOp, PoseOp, ResizeOp, TrainOp, defaultResizeSettings, type PoseCamera } from './edit-ops';
 import type { Events } from './events';
 import type { Scene } from './scene';
 import type { Splat } from './splat';
@@ -23,6 +23,11 @@ import { i18n } from './ui/localization';
  * posing again. The frames of a video are not the import node's files, so
  * those are stored with the pose node.
  *
+ * A resize node keeps its settings and the photos it shrank
+ * (`resize_<r>/<k>`); a photo it let through is the import node's, named
+ * by its place there. The pose node after it posed those very images, so
+ * they come back as they were rather than being shrunk again.
+ *
  * A train node keeps its settings and which object it trained, which is
  * stored with the other objects.
  */
@@ -35,6 +40,7 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
     const applied = ops.slice(0, cursor);
     const datasets = applied.filter(o => o instanceof DatasetOp) as DatasetOp[];
     const poses = applied.filter(o => o instanceof PoseOp) as PoseOp[];
+    const resizes = applied.filter(o => o instanceof ResizeOp) as ResizeOp[];
     const trains = applied.filter(o => o instanceof TrainOp) as TrainOp[];
     const files: ProjectFile[] = [];
     const flags = (op: EditOp) => (op.bypassed ? { bypassed: true } : {});
@@ -73,8 +79,31 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
         };
     });
 
-    const storedPoses = poses.map((op, j) => {
+    const storedResizes = resizes.map((op, r) => {
         const input = op.datasetOp ? datasets.indexOf(op.datasetOp) : -1;
+        const source = op.source as any;
+        const inputSource = op.datasetOp?.source as any;
+        const inputImages: { name: string, data: Blob }[] = inputSource?.kind === 'images' ? inputSource.images : [];
+        const images = op.madeFrom && source?.kind === 'images' ?
+            source.images.map((image: { name: string, data: Blob }, k: number) => {
+                if (inputImages[k]?.data === image.data) return { name: image.name, input: k };
+                const file = `resize_${r}/${k}`;
+                files.push({ name: file, data: image.data });
+                return { name: image.name, file };
+            }) : undefined;
+        return {
+            dataset: input,
+            settings: { ...op.settings },
+            ...(op.summary ? { summary: op.summary } : {}),
+            ...(images ? { images } : {}),
+            ...flags(op),
+            ...placeOf(op)
+        };
+    });
+
+    const storedPoses = poses.map((op, j) => {
+        const input = op.datasetOp instanceof ResizeOp ? { resize: resizes.indexOf(op.datasetOp) } :
+            { dataset: op.datasetOp ? datasets.indexOf(op.datasetOp) : -1 };
         const inputKind = (op.datasetOp?.source as any)?.kind;
         const sparse = op.sparse?.map((f, k) => {
             const file = `pose_${j}_${k}.bin`;
@@ -87,7 +116,7 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
             return image.name;
         }) : undefined;
         return {
-            dataset: input,
+            ...input,
             matcher: op.matcher,
             showCameras: op.showCameras,
             total: op.total,
@@ -118,8 +147,8 @@ const storeDatasets = (ops: EditOp[], cursor: number, splats: Splat[], placeOf: 
     });
 
     return {
-        document: storedDatasets.length || storedPoses.length || storedTrains.length ?
-            { datasets: storedDatasets, poses: storedPoses, trains: storedTrains } : {},
+        document: storedDatasets.length || storedResizes.length || storedPoses.length || storedTrains.length ?
+            { datasets: storedDatasets, resizes: storedResizes, poses: storedPoses, trains: storedTrains } : {},
         files
     };
 };
@@ -154,9 +183,10 @@ const entryBlob = async (file: Blob, zipFs: ZipReadFileSystem, name: string, typ
  */
 const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSystem, loaded: Splat[], scene: Scene, later: Later, events: Events) => {
     const storedDatasets: any[] = Array.isArray(document.datasets) ? document.datasets : [];
+    const storedResizes: any[] = Array.isArray(document.resizes) ? document.resizes : [];
     const storedPoses: any[] = Array.isArray(document.poses) ? document.poses : [];
     const storedTrains: any[] = Array.isArray(document.trains) ? document.trains : [];
-    if (!storedDatasets.length && !storedPoses.length && !storedTrains.length) return () => {};
+    if (!storedDatasets.length && !storedResizes.length && !storedPoses.length && !storedTrains.length) return () => {};
 
     const datasets: (DatasetOp | null)[] = [];
     for (let i = 0; i < storedDatasets.length; i++) {
@@ -187,6 +217,40 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
         // a folder: the browser gives no access to it again without a pick
         if (s?.kind === 'directory') op.status = i18n.t('import.pick-again');
         datasets.push(op);
+        later(stored, () => {
+            events.fire('edit.add', op);
+            return op;
+        });
+    }
+
+    const resizes: ResizeOp[] = [];
+    // the photos each shrank, by place; null for one let through
+    const resizeImages: ({ name: string, data: Blob | null, input?: number }[] | null)[] = [];
+    for (let r = 0; r < storedResizes.length; r++) {
+        const stored = storedResizes[r];
+        const defaults = defaultResizeSettings();
+        const op = new ResizeOp({
+            maxEdge: Number(stored?.settings?.maxEdge) || defaults.maxEdge,
+            quality: Number(stored?.settings?.quality) || defaults.quality
+        });
+        op.summary = stored?.summary;
+        op.bypassed = !!stored?.bypassed;
+        let images: { name: string, data: Blob | null, input?: number }[] | null = null;
+        try {
+            if (Array.isArray(stored?.images)) {
+                images = [];
+                for (const image of stored.images) {
+                    images.push(typeof image?.input === 'number' ?
+                        { name: image.name, data: null, input: image.input } :
+                        { name: image.name, data: await entryBlob(file, zipFs, image.file, 'image/jpeg') });
+                }
+            }
+        } catch (error) {
+            images = null;
+            console.warn(`project: resize node ${r} lost its files: ${error?.message ?? error}`);
+        }
+        resizes.push(op);
+        resizeImages.push(images);
         later(stored, () => {
             events.fire('edit.add', op);
             return op;
@@ -251,9 +315,32 @@ const restoreDatasets = async (document: any, file: Blob, zipFs: ZipReadFileSyst
 
     // wired once every node is in, whatever order they went in
     return () => {
+        // a resize node first: the pose node after it reads what it hands on
+        storedResizes.forEach((stored, r) => {
+            const op = resizes[r];
+            const input = datasets[stored?.dataset];
+            if (!input) return;
+            op.datasetOp = input;
+            op.inputs = [input.output];
+            const inputSource = input.source as any;
+            const stack = resizeImages[r];
+            const inputImages: { name: string, data: Blob }[] = inputSource?.kind === 'images' ? inputSource.images : [];
+            const images = stack?.map(image => (image.data ? image : inputImages[image.input]));
+            if (images && images.every(image => image?.data)) {
+                op.source = { kind: 'images', images: images.map(image => ({ name: image.name, data: image.data })) };
+                op.madeFrom = { source: inputSource, ...op.settings };
+            } else if (op.summary?.passed && inputSource) {
+                op.source = inputSource;
+                op.madeFrom = { source: inputSource, ...op.settings };
+            } else if (inputSource) {
+                // what it made is gone: made again, and posed again after it
+                op.summary = undefined;
+                events.fire('resize.run', op);
+            }
+        });
         storedPoses.forEach((stored, j) => {
             const op = poses[j];
-            const input = datasets[stored?.dataset];
+            const input = typeof stored?.resize === 'number' ? resizes[stored.resize] : datasets[stored?.dataset];
             if (!input) return;
             op.datasetOp = input;
             op.inputs = [input.output];

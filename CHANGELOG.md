@@ -9,6 +9,43 @@ months finds out why before they change it.
 
 ---
 
+## Resize node: photos shrunk before they are posed
+
+In-browser COLMAP registered 0 of 99 12 MP photos (647 s of features,
+4,851 pairs matched, nothing registered) where 20 smaller renders posed
+fine. A resize node now sits between the import node and the pose node
+(import → resize → pose → train), so posing and training see the same
+smaller images and the poses fit them (`src/training/resize-node.ts`,
+`ResizeOp` in `edit-ops.ts`, `src/ui/resize-face.ts`).
+
+- Settings: the max long edge (default 1600, presets 1024 / 1600 / 2048 /
+  3200 or any value) and JPEG quality (0.92). An image already within the
+  cap goes through untouched, the same blob.
+- `createImageBitmap` decodes with EXIF orientation applied, a second
+  `createImageBitmap(bitmap, { resizeWidth, resizeHeight, resizeQuality:
+  'high' })` shrinks it, and an `OffscreenCanvas` writes the JPEG. Two at
+  a time: a 12 MP photo decodes to about 48 MB.
+- The result is cached against the input source object and the settings;
+  it is remade only when one changes. While it works its output is null,
+  and it fires `dataset.sourceChanged` with itself, so the pose node
+  after it stops and starts again exactly as it does after an import
+  node. Before handing on it waits for the edit queue, so a pose node
+  added with it is in history to hear the news.
+- A video and a posed dataset (COLMAP, transforms.json, zip, ply) pass
+  through untouched and the face says so: the video's frames are
+  extracted by the pose node at full size, and a posed dataset's
+  intrinsics are in pixels of its own images.
+- Importing photos with any long edge over 2048 px (read from the JPEG or
+  PNG header, not decoded) puts a resize node in front of the pose node it
+  makes (`pose.addNodeFor`). It can also be added from the graph menu or
+  from a wire dragged out of an import node.
+- A project keeps it in `resizes`: settings, summary, and the shrunk
+  photos as `resize_<r>/<k>`; a photo let through is stored by its index
+  in the import node. A pose node after it stores `resize: r` instead of
+  `dataset: i`, and its model is packed again with the shrunk photos.
+
+---
+
 ## Import, pose and train nodes are kept in a project
 
 A project used to drop every import and train node: reopened, a trained

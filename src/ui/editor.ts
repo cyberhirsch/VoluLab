@@ -24,6 +24,7 @@ import { PrimitiveFace } from './primitive-face';
 import { Progress } from './progress';
 import { PublishSettingsDialog } from './publish-settings-dialog';
 import { RelightFace } from './relight-face';
+import { ResizeFace } from './resize-face';
 import { RightToolbar } from './right-toolbar';
 import { SettingsPanel } from './settings-panel';
 import { Spinner } from './spinner';
@@ -149,6 +150,9 @@ class EditorUI {
         // the pose node: matcher, progress, and the cameras it found
         const poseFace = new PoseFace(events);
         nodePanel.mount('pose', poseFace.dom);
+        // the resize node: the cap on the long edge, and what it did
+        const resizeFace = new ResizeFace(events);
+        nodePanel.mount('resize', resizeFace.dom);
         // the camera node's exposure, depth of field and lens
         const cameraFace = new CameraFace(events);
         nodePanel.mount('camera', cameraFace.dom);

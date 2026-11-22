@@ -584,7 +584,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     // named by path: same-named photos in subfolders stay apart
                     const images: BridgeImage[] = imageFiles.map(f => ({ name: f.filename, data: f.contents as Blob }));
                     const op = events.invoke('dataset.addNode', { kind: 'images', images }, 'photos', countFiles(imageFiles.map(f => f.filename)));
-                    events.invoke('pose.addNode', op, 'exhaustive');
+                    // large photos get a resize node in front of the pose node
+                    await events.invoke('pose.addNodeFor', op, 'exhaustive');
                     return result;
                 }
                 const wrote = await ingestImages(imageFiles.map(f => f.contents), events);
@@ -812,7 +813,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                         data: await e.handle.getFile() as Blob
                     })));
                     const op = events.invoke('dataset.addNode', { kind: 'images', images }, handle.name, countFiles(names));
-                    events.invoke('pose.addNode', op, 'exhaustive');
+                    // large photos get a resize node in front of the pose node
+                    await events.invoke('pose.addNodeFor', op, 'exhaustive');
                     return;
                 }
                 const wrote = await ingestImagesInPlace(handle, entries, events);

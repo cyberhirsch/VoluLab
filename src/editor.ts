@@ -6,7 +6,7 @@ import { CameraAnimTrack } from './camera-poses';
 import { registerCameraViewEvents } from './camera-view';
 import { registerCombineEvents } from './combine';
 import { EditHistory } from './edit-history';
-import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, TimeNodeSettings, timeNodeFrom, TrimOp, RetimeOp, LoopOp, FreezeOp, OffsetOp, CameraOp, CleanupOp, CropOp, DatasetCounts, DatasetOp, PoseOp, PoseMatcher, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, SplitOp, SplitBuilt, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
+import { EditOp, SelectMesh, SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, SelectMode, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, DeleteNodeOp, TransformNodeOp, TimeNodeSettings, timeNodeFrom, TrimOp, RetimeOp, LoopOp, FreezeOp, OffsetOp, CameraOp, CleanupOp, CropOp, DatasetCounts, DatasetOp, PoseOp, PoseMatcher, ResizeOp, ResizeSettings, DecimateOp, OutputOp, ResetOp, MultiOp, AddSplatOp, AddVoxelsOp, MergeOp, SplitOp, SplitBuilt, VoxeliseOp, TrainOp, TrainSettings, ScopedColorOp, SetLocalFrameOp, SetShBandsOp, DebugViewOp, SetSplatColorAdjustmentOp, defaultCameraSettings, LightOp, LightKind, defaultLightSettings, LightSource, RelightOp, PrimitiveOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { IndexRanges } from './index-ranges';
@@ -33,6 +33,7 @@ import { State } from './splat-state';
 import { emptyData, selectedRows, subsetData, subsetMotion } from './split';
 import { countSource } from './training/dataset-source';
 import { registerPoseNodes } from './training/pose-node';
+import { registerResizeNodes } from './training/resize-node';
 import { registerTraining } from './training/train-run';
 import { VoxelGrid, Voxels, voxelise } from './voxels';
 
@@ -1713,8 +1714,22 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
      * A pose node, wired to the import node given (if any) and started on
      * it: photos and video are posed, a posed dataset is read.
      */
-    events.function('pose.addNode', (dataset?: DatasetOp, matcher: PoseMatcher = 'exhaustive') => {
+    events.function('pose.addNode', (dataset?: DatasetOp | ResizeOp, matcher: PoseMatcher = 'exhaustive') => {
         const op = new PoseOp(matcher);
+        const index = history().cursor;
+        events.fire('edit.add', op);
+        if (dataset) events.fire('graph.connect', op, 'dataset', dataset);
+        openInGraph(index);
+        events.fire('workspace.reveal', 'node');
+        return op;
+    });
+
+    /**
+     * A resize node, wired to the import node given (if any): it shrinks
+     * the photos there for the pose node it feeds.
+     */
+    events.function('resize.addNode', (dataset?: DatasetOp, settings?: ResizeSettings) => {
+        const op = new ResizeOp(settings);
         const index = history().cursor;
         events.fire('edit.add', op);
         if (dataset) events.fire('graph.connect', op, 'dataset', dataset);
@@ -1741,11 +1756,18 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
      * of node is routed to what its input takes: a train node's dataset.
      */
     events.on('graph.connect', (op: EditOp, port: string, source: object) => {
-        // a pose node's input: an import node, posed again whenever wired
-        if (op instanceof PoseOp && port === 'dataset' && source instanceof DatasetOp) {
+        // a pose node's input: an import node or a resize node, posed
+        // again whenever wired
+        if (op instanceof PoseOp && port === 'dataset' && (source instanceof DatasetOp || source instanceof ResizeOp)) {
             op.datasetOp = source;
             op.inputs = [source.output];
             events.fire('pose.run', op);
+        }
+        // a resize node's input: an import node, shrunk again when it changes
+        if (op instanceof ResizeOp && port === 'dataset' && source instanceof DatasetOp) {
+            op.datasetOp = source;
+            op.inputs = [source.output];
+            events.fire('resize.run', op);
         }
         // a train node's dataset: an import node holding a posed dataset,
         // or a pose node
@@ -1774,6 +1796,11 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     events.on('graph.disconnect', (op: EditOp, port: string) => {
+        if (op instanceof ResizeOp && port === 'dataset' && op.datasetOp) {
+            op.datasetOp = undefined;
+            op.inputs = [];
+            events.fire('resize.run', op);
+        }
         if (op instanceof PoseOp && port === 'dataset' && op.datasetOp) {
             op.datasetOp = undefined;
             op.inputs = [];
@@ -1801,6 +1828,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     registerTraining(events, scene);
     registerPoseNodes(events, scene);
+    registerResizeNodes(events);
     registerCameraEffects(events, scene);
     registerCameraViewEvents(events, scene);
     registerLightViewEvents(events, scene);

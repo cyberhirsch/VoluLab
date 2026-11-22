@@ -8,7 +8,7 @@ import { i18n } from './localization';
 import { buildMotionNode, PanelKit } from './motion-node-panel';
 import { buildSelectionNodeFace } from './select-nodes-face';
 import { fieldDefault } from './value-fields';
-import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, PoseOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplitOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
+import { AddVoxelsOp, CameraOp, LightOp, PrimitiveOp, RelightOp, CleanupOp, CropOp, DatasetOp, PoseOp, ResizeOp, DebugViewOp, DecimateOp, DeleteNodeOp, EditOp, EntityTransformOp, TransformNodeOp, TimeOp, TrimOp, OffsetOp, FreezeOp, LoopOp, RetimeOp, OutputFileType, OutputOp, ScopedColorOp, SelectMode, SelectOp, SetShBandsOp, SplatRenameOp, SplitOp, SplatsTransformOp, StateOp, TrainOp, VoxeliseOp, principalOp } from '../edit-ops';
 import { Events } from '../events';
 import { isInspectOp } from '../inspect-ops';
 import { paramOf } from '../keyframes';
@@ -376,6 +376,16 @@ class NodePanel extends Container {
 
         if (op instanceof PoseOp) {
             const panel = this.mounts.get('pose');
+            if (panel) {
+                this.empty.hidden = true;
+                (panel as any).bindNode?.(op, index);
+                this.body.appendChild(panel);
+                return;
+            }
+        }
+
+        if (op instanceof ResizeOp) {
+            const panel = this.mounts.get('resize');
             if (panel) {
                 this.empty.hidden = true;
                 (panel as any).bindNode?.(op, index);
