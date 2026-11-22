@@ -85,6 +85,8 @@ const makeDraw = (splat: Splat, from: ShaderMaterial, source: MeshInstance): Dep
     meshInstance.setInstancing(true, true);
     meshInstance.cull = false;
     meshInstance.castShadow = false;
+    // not a thing to click: the picker draws the object's own instance
+    meshInstance.pick = false;
     splat.scene.splatLayer.addMeshInstances([meshInstance]);
     return { from, fromKey: materialKey(from), material, meshInstance };
 };
