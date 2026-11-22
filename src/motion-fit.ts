@@ -55,6 +55,8 @@ const positionsAt = (splat: Splat, rows: Uint32Array, t: number, pos: Float64Arr
     const motion = splat.motion;
     const vt = motion?.velocityTime;
     const fo = motion?.falloff;
+    // motion scale nodes: the travel as the shader draws it; the fade is not scaled
+    const scale = splat.motionScale;
     for (let k = 0; k < rows.length; ++k) {
         const i = rows[k];
         let px = x[i];
@@ -63,9 +65,10 @@ const positionsAt = (splat: Splat, rows: Uint32Array, t: number, pos: Float64Arr
         let w = 1;
         if (vt) {
             const dt = t - vt[i * 4 + 3];
-            px += vt[i * 4] * dt;
-            py += vt[i * 4 + 1] * dt;
-            pz += vt[i * 4 + 2] * dt;
+            const travel = dt * scale;
+            px += vt[i * 4] * travel;
+            py += vt[i * 4 + 1] * travel;
+            pz += vt[i * 4 + 2] * travel;
             w = Math.exp(-dt * dt * fo[i]);
         }
         pos[k * 3] = px;

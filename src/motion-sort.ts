@@ -171,6 +171,15 @@ const motionSortWorker = () => {
     const boxMin = [0, 0, 0];
     const boxMax = [0, 0, 0];
     let chunks = new Float32Array(0);
+    // how far the travel the box and the still rows were measured for is
+    // scaled: at least the motion scale asked for (k), in steps of two so a
+    // dragged scale does not measure again at every step. Less travel stays
+    // within the box, more would leave it and lose its depth order.
+    let reachK = 1;
+    const reachFor = (k: number) => {
+        const a = Math.abs(k);
+        return a > 1 && Number.isFinite(a) ? 2 ** Math.ceil(Math.log2(a) - 1e-9) : 1;
+    };
 
     // the key function of a view direction
     type Key = {
@@ -290,7 +299,8 @@ const motionSortWorker = () => {
                 const n = rows[i];
                 if (drawn(n, from, to) >= 0) {
                     for (let e = 0; e < 2; e++) {
-                        grow(centers[n * 3] + vt[n * 4] * ends[e], centers[n * 3 + 1] + vt[n * 4 + 1] * ends[e], centers[n * 3 + 2] + vt[n * 4 + 2] * ends[e]);
+                        const dt = ends[e] * reachK;
+                        grow(centers[n * 3] + vt[n * 4] * dt, centers[n * 3 + 1] + vt[n * 4 + 1] * dt, centers[n * 3 + 2] + vt[n * 4 + 2] * dt);
                     }
                 }
             }
@@ -314,7 +324,7 @@ const motionSortWorker = () => {
         let numMoving = 0;
         for (let i = 0; i < globals.length; i++) {
             const n = globals[i];
-            const drift = Math.hypot(vt[n * 4], vt[n * 4 + 1], vt[n * 4 + 2]) * drawn(n, 0, 1);
+            const drift = Math.hypot(vt[n * 4], vt[n * 4 + 1], vt[n * 4 + 2]) * drawn(n, 0, 1) * reachK;
             // a row never drawn has a negative drift, and may as well be still
             if (drift > oneKey) {
                 flags[i] = 1;
@@ -545,6 +555,12 @@ const motionSortWorker = () => {
         const start = performance.now();
         const { t } = request;
         const k = request.k ?? 1;
+        // travel further than measured for: the box and the still rows again,
+        // and with them the key function and the still order
+        if (reachFor(k) !== reachK && numRows > 0) {
+            reachK = reachFor(k);
+            measure();
+        }
 
         // A direction within the engine worker's tolerance of the one the
         // still rows were sorted for keeps their order - and the moving rows

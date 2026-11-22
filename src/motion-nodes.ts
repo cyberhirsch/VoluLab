@@ -214,7 +214,8 @@ class TrackBase {
     }
 
     protected fit() {
-        const print = `${selectionPrint(this.splat)}:${this.ref}:${this.splat.motionFrames}`;
+        // the motion scale too: the fit is of the travel as it is drawn
+        const print = `${selectionPrint(this.splat)}:${this.ref}:${this.splat.motionFrames}:${this.splat.motionScale}`;
         if (print !== this.print || !this.track) {
             this.track = MotionTrack.fit(this.splat, this.ref);
             this.print = print;
