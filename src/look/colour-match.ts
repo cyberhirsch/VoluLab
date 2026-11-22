@@ -122,7 +122,7 @@ class ColourMatchOp extends GradeRowsOp {
                     this.strength = v;
                 },
                 format: v => `${Math.round(v * 100)}%` },
-            this.scopeStat(),
+            ...this.scopeStat(),
             { kind: 'note', text: this.reference ? 'node.match.note' : 'node.match.none' }
         ];
     }

@@ -621,6 +621,7 @@
     "node.look.none": "없음",
     "node.look.still3d": "이 객체에는 움직임이 없습니다. 이 노드는 4D 모델에 작용하며 여기서는 아무것도 하지 않습니다.",
     "node.look.changed": "변경된 가우시안",
+    "node.look.palette-full": "변경 안 됨: 팔레트 가득 참",
     "node.look.removed": "제거됨",
     "node.look.still": "정지로 보는 상한",
     "node.stillMoving.keep": "객체에 남길 부분",

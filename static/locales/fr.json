@@ -621,6 +621,7 @@
     "node.look.none": "aucun",
     "node.look.still3d": "Cet objet n'a pas de mouvement : le nœud agit sur les modèles 4D et ne fait rien ici.",
     "node.look.changed": "gaussiennes modifiées",
+    "node.look.palette-full": "inchangées : palette pleine",
     "node.look.removed": "supprimées",
     "node.look.still": "immobile sous",
     "node.stillMoving.keep": "l'objet garde",

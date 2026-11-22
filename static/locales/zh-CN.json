@@ -621,6 +621,7 @@
     "node.look.none": "无",
     "node.look.still3d": "此对象没有运动：该节点作用于 4D 模型，在这里不起作用。",
     "node.look.changed": "已更改的高斯",
+    "node.look.palette-full": "未更改：调色板已满",
     "node.look.removed": "已删除",
     "node.look.still": "静止上限",
     "node.stillMoving.keep": "对象保留",

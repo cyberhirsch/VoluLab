@@ -191,7 +191,7 @@ class ExposureDriftOp extends GradeRowsOp {
                     this.balance = v === 'yes';
                 } },
             { kind: 'stat', label: 'node.exposure.range', value: range, raw: !!gains?.length },
-            this.scopeStat(),
+            ...this.scopeStat(),
             { kind: 'note', text: 'node.exposure.note' }
         ];
     }

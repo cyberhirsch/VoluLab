@@ -41,7 +41,7 @@ class OpacityOp extends GradeRowsOp {
                     this.value = v;
                 },
                 format: v => `${Math.round(v * 100)}%` },
-            this.scopeStat(),
+            ...this.scopeStat(),
             { kind: 'note', text: 'node.opacity.note' }
         ];
     }

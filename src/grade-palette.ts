@@ -105,11 +105,16 @@ export const composeGrades = (a: Grade, b: Grade): Grade => {
     };
 };
 
+/** the most slots a palette can have: the per-gaussian index is a Uint16 */
+const MAX_SLOTS = 65536;
+
 class GradePalette {
     getGrade: (index: number) => Grade;
     setGrade: (index: number, grade: Grade) => void;
     alloc: (num?: number) => number;
     free: (num?: number) => void;
+    /** how many more slots there can be: a gaussian's index into them is 16 bit */
+    room: () => number;
     texture: Texture;
 
     constructor(device: GraphicsDevice, initialSize = 1024) {
@@ -186,6 +191,8 @@ class GradePalette {
             nextIdx -= num;
         };
 
+        this.room = () => Math.max(0, MAX_SLOTS - nextIdx);
+
         Object.defineProperty(this, 'texture', {
             get() {
                 return texture;
@@ -197,4 +204,4 @@ class GradePalette {
     }
 }
 
-export { GradePalette };
+export { GradePalette, MAX_SLOTS };

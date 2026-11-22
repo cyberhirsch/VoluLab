@@ -621,6 +621,7 @@
     "node.look.none": "なし",
     "node.look.still3d": "このオブジェクトには動きがありません。このノードは 4D モデルに作用し、ここでは何もしません。",
     "node.look.changed": "変更したガウシアン",
+    "node.look.palette-full": "変更なし：パレットが満杯",
     "node.look.removed": "削除",
     "node.look.still": "静止とみなす上限",
     "node.stillMoving.keep": "オブジェクトに残す",

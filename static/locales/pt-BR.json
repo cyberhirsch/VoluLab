@@ -621,6 +621,7 @@
     "node.look.none": "nenhum",
     "node.look.still3d": "Este objeto não tem movimento: o nó atua em modelos 4D e não faz nada aqui.",
     "node.look.changed": "gaussianas alteradas",
+    "node.look.palette-full": "inalteradas: paleta cheia",
     "node.look.removed": "removidas",
     "node.look.still": "parado abaixo de",
     "node.stillMoving.keep": "o objeto mantém",

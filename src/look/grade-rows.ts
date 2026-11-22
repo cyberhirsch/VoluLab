@@ -10,12 +10,18 @@ import { Splat } from '../splat';
  * on, grade) pair becomes one new slot holding the two composed. Undo puts
  * the indices back and frees the slots, which were the newest - the history
  * undoes newest first.
+ *
+ * A palette holds at most MAX_SLOTS (the per-gaussian index is 16 bit), for
+ * all the nodes on the object together: rows that would need a slot past
+ * that keep the one they are on, and the node pane says how many.
  */
 abstract class GradeRowsOp implements FieldNode {
     name: string;
     splat: Splat;
     bypassed?: boolean;
     affected = -1;
+    /** rows left as they were because the palette was full, when it last applied */
+    unchanged = 0;
 
     private saved: Uint16Array | null = null;
     private slots = 0;
@@ -37,6 +43,7 @@ abstract class GradeRowsOp implements FieldNode {
         const plan = rows.length ? this.plan(splat, rows) : null;
         if (!plan) {
             this.affected = 0;
+            this.unchanged = 0;
             return;
         }
         const { bucket, grades } = plan;
@@ -45,7 +52,9 @@ abstract class GradeRowsOp implements FieldNode {
         this.saved = indices.slice();
         const G = grades.length;
         const slotOf = new Map<number, number>();
+        let room = palette.room();
         let changed = 0;
+        let unchanged = 0;
         for (let k = 0; k < rows.length; ++k) {
             const b = bucket[k];
             if (b < 0) continue;
@@ -54,7 +63,11 @@ abstract class GradeRowsOp implements FieldNode {
             const key = old * G + b;
             let slot = slotOf.get(key);
             if (slot === undefined) {
-                if (slotOf.size >= 60000) continue;
+                if (room <= 0) {
+                    unchanged++;
+                    continue;
+                }
+                room--;
                 slot = palette.alloc();
                 palette.setGrade(slot, composeGrades(palette.getGrade(old), grades[b]));
                 slotOf.set(key, slot);
@@ -65,6 +78,7 @@ abstract class GradeRowsOp implements FieldNode {
         splat.gradeTexture.unlock();
         this.slots = slotOf.size;
         this.affected = changed;
+        this.unchanged = unchanged;
         splat.scene.forceRender = true;
     }
 
@@ -85,8 +99,13 @@ abstract class GradeRowsOp implements FieldNode {
         this.saved = null;
     }
 
-    protected scopeStat(): FieldSpec {
-        return { kind: 'stat', label: 'node.look.changed', value: count(this.affected), raw: this.affected >= 0 };
+    /** how many rows it changed, and how many the full palette left as they were */
+    protected scopeStat(): FieldSpec[] {
+        const stats: FieldSpec[] = [{ kind: 'stat', label: 'node.look.changed', value: count(this.affected), raw: this.affected >= 0 }];
+        if (this.unchanged > 0) {
+            stats.push({ kind: 'stat', label: 'node.look.palette-full', value: count(this.unchanged), raw: true });
+        }
+        return stats;
     }
 }
 

@@ -621,6 +621,7 @@
     "node.look.none": "нет",
     "node.look.still3d": "У этого объекта нет движения: узел работает с 4D-моделями и здесь ничего не делает.",
     "node.look.changed": "изменено гауссиан",
+    "node.look.palette-full": "без изменений: палитра заполнена",
     "node.look.removed": "удалено",
     "node.look.still": "неподвижно ниже",
     "node.stillMoving.keep": "объект оставляет",

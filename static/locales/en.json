@@ -621,6 +621,7 @@
     "node.look.none": "none",
     "node.look.still3d": "This object has no motion: the node works on 4D models and does nothing here.",
     "node.look.changed": "gaussians changed",
+    "node.look.palette-full": "left as they were: palette full",
     "node.look.removed": "removed",
     "node.look.still": "still below",
     "node.stillMoving.keep": "object keeps",
