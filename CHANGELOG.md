@@ -9,6 +9,18 @@ months finds out why before they change it.
 
 ---
 
+## Nodes attach to a train node before it has trained
+
+A new train node used to have no output until its first snapshot, so there
+was no object lane to hang a crop, cleanup or any other node on: a wire
+dragged out of it offered nothing. It now gets an empty object (one
+invisible gaussian, named "trained") when it is added, and `TrainOp.pending`
+marks it as that placeholder. The first snapshot fills the same object -
+always the PLY way, so it takes the orientation the trained PLY loads with -
+and because the node already had an output, the run re-applies everything
+downstream when it finishes. A project keeps the flag, so a saved node that
+never trained is still pending when reopened.
+
 ## Import, pose and train nodes are kept in a project
 
 A project used to drop every import and train node: reopened, a trained

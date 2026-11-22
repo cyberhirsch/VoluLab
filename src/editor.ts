@@ -1324,13 +1324,16 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     /**
      * Add a pending train node: the node exists before any gaussians do.
      * It arrives unwired - the dataset comes from an import node the user
-     * connects by hand. The run controller (train-run.ts) fills in the
-     * output when a run produces one; here is only the record entering
-     * history.
+     * connects by hand. Its output is an empty object from the start, so
+     * nodes can be attached to it before training; the run controller
+     * (train-run.ts) fills that object at the first snapshot.
      */
     events.function('training.addNode', (config: Record<string, unknown> = {}) => {
         const settings: TrainSettings = { datasetName: 'no dataset', config, iterations: 0, finalSplats: 0 };
-        const op = new TrainOp(scene, null, settings);
+        // the orientation a trained PLY loads with; the first snapshot sets it again
+        const output = new Splat(scene.assetLoader.createGSplatAsset(emptyData(), 'trained'), new Quat().setFromEulerAngles(0, 0, 180));
+        const op = new TrainOp(scene, output, settings);
+        op.pending = true;
         const index = history().cursor;
         events.fire('edit.add', op);
         openInGraph(index);
