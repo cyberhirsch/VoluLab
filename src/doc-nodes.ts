@@ -71,6 +71,8 @@ type StoredNode = Record<string, any> & {
     splat: number;
     /** its place in the history, which is its place in the chain */
     at: number;
+    /** inside a MultiOp, its place among the MultiOp's ops */
+    part?: number;
     bypassed?: boolean;
     /** the gaussians it applied to: a slice of the object's nodes file */
     ranges?: Slice;
@@ -236,6 +238,7 @@ const storeStateNodes = (history: EditOp[], cursor: number, splat: Splat, index:
             if (!settings) return null;
 
             const node: StoredNode = { ...settings, type: settings.type, splat: index, at };
+            if (outer instanceof MultiOp) node.part = outer.ops.indexOf(op);
             // keyed parameters (keyframes.ts), whatever the node
             const keys = packKeys(op);
             if (keys) node.keys = keys;
@@ -321,7 +324,7 @@ const restoreStateNode = (stored: StoredNode, splat: Splat, primitives: ScenePri
             op = new Plain(splat);
         }
     }
-    noteRestored(splat, stored.at, op);
+    noteRestored(splat, stored.at, stored.part, op);
 
     if (stored.bypassed) (op as EditOp).bypassed = true;
     unpackKeys(op, stored.keys);
