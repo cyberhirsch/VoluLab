@@ -590,13 +590,14 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
     let extraRows = 0;
     piecesFor.forEach((pieces, i) => {
         if (pieces.length < 2) return;
+        // in frames, so runs as long come in the order they start in
         const covered = (p: Piece) => {
             let sum = 0;
             for (let w = 0; w < p.windows.length; w += 2) sum += p.windows[w + 1] - p.windows[w];
-            return sum;
+            return Math.round(sum * frames);
         };
         const rowsEach = parts[i].rows.length;
-        const ranked = pieces.slice().sort((a, b) => covered(b) - covered(a));
+        const ranked = pieces.slice().sort((a, b) => covered(b) - covered(a) || a.windows[0] - b.windows[0]);
         const kept = new Set<Piece>([ranked[0]]);
         for (let k = 1; k < ranked.length && kept.size < MAX_COPIES && extraRows + rowsEach <= MAX_EXTRA_ROWS; ++k) {
             kept.add(ranked[k]);
