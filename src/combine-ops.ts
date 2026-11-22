@@ -82,6 +82,14 @@ abstract class CombineOp {
     // what the last build carried over from the inputs besides their gaussians
     private carried: MergeBuilt['carried'] | null = null;
 
+    /**
+     * Set for a node from a project: its output is an empty stand-in, made
+     * the first time the node applies - in its place in the history, so
+     * the nodes after it apply to the made object, as they were saved on
+     * it. `after` puts back what the project kept of the object's rows.
+     */
+    pendingBuild: { after?: (output: Splat) => Promise<void> | void } | null = null;
+
     constructor(scene: Scene, inputs: Splat[], output: Splat, context: CombineContext) {
         this.scene = scene;
         this.inputs = inputs;
@@ -165,6 +173,14 @@ abstract class CombineOp {
             s.visible = false;
         });
         await this.scene.add(output);
+        if (this.pendingBuild) {
+            const { after } = this.pendingBuild;
+            this.pendingBuild = null;
+            await this.rebuild();
+            await after?.(output);
+            // nothing stood on it yet: nothing to apply again
+            this.scene.events.fire('splat.settled', output);
+        }
         this.carry();
         this.timeOutput();
     }

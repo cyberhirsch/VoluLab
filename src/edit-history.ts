@@ -133,6 +133,8 @@ class EditHistory {
         events.function('edit.reapplyAll', (targets?: object[]) => this.reapplyAll(targets));
         events.function('edit.markLoaded', () => this.markLoaded());
         events.on('splat.replaced', (splat: Splat) => this.replaced.add(splat));
+        // replaced before any node stood on it (a merge made as a project opens)
+        events.on('splat.settled', (splat: Splat) => this.replaced.delete(splat));
         events.function('edit.setBypassed', (index: number, bypassed: boolean) => this.setBypassed(index, bypassed));
         events.function('edit.canMove', (from: number, to: number) => this.canMove(from, to));
         events.function('edit.move', (from: number, to: number) => this.move(from, to));
