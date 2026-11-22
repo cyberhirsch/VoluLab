@@ -270,6 +270,7 @@ const renderPasses = async (scene: Scene, events: Events, settings: RenderPassSe
 
             // the frame, the camera at it, and every object's order for it
             events.fire('timeline.time', frame);
+            await events.invoke('keyframes.settled');
             scene.camera.onUpdate(0);
             await events.invoke('plysequence.setFrameAsync', frame);
             scene.camera.onUpdate(0);
@@ -332,6 +333,10 @@ const renderPasses = async (scene: Scene, events: Events, settings: RenderPassSe
         scene.camera.clearPass.setClearColor(nullClr);
         scene.lockedRenderMode = false;
         scene.forceRender = true;
+        // back to the frame the timeline stands on
+        const back = events.invoke('timeline.frame') ?? 0;
+        events.fire('timeline.time', back);
+        await Promise.resolve(events.invoke('plysequence.setFrameAsync', back)).catch((): null => null);
         events.fire('progressEnd');
     }
     return cancelled ? -1 : written;
