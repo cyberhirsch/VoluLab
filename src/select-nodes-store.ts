@@ -1,6 +1,6 @@
 import { EditOp, MultiOp, StateOp } from './edit-ops';
 import { HoldoutOp } from './holdout';
-import { SelectionNodeOp, selectionNodeFrom } from './select-nodes';
+import { ColourSelectOp, SelectionNodeOp, selectionNodeFrom } from './select-nodes';
 import { Splat } from './splat';
 
 /**
@@ -44,7 +44,11 @@ const packSelectionNode = (op: StateOp, history: EditOp[]): Record<string, any> 
     (op as any).ports?.forEach((port: { name: string, source: object | null }) => {
         if (port.source) settings[`${port.name}At`] = historyIndex(history, port.source as EditOp);
     });
-    return { type: STORED_TYPE, settings };
+    // what it found when it last ran, which its face shows: a restored
+    // node does not run again until something changes
+    const ran: Record<string, any> = { caught: op.caught, warning: op.warning };
+    if (op instanceof ColourSelectOp) ran.incomingMean = op.incomingMean;
+    return { type: STORED_TYPE, settings, ran };
 };
 
 /** A stored node as an op on `splat`; null for a stored node not of these. */
@@ -57,6 +61,13 @@ const restoreSelectionNode = (stored: Record<string, any>, splat: Splat): StateO
     if (stored.type !== STORED_TYPE) return null;
     const op = selectionNodeFrom(splat, stored.settings);
     if (!op) return null;
+    const ran = stored.ran ?? {};
+    if (typeof ran.caught === 'number') op.caught = ran.caught;
+    if (typeof ran.warning === 'string') op.warning = ran.warning;
+    if (op instanceof ColourSelectOp && Array.isArray(ran.incomingMean) && ran.incomingMean.length === 3 &&
+        ran.incomingMean.every((v: unknown) => typeof v === 'number')) {
+        op.incomingMean = ran.incomingMean as [number, number, number];
+    }
     (op as any).rewire?.((at: unknown) => restoredAt(splat, at), stored.settings);
     return op;
 };
