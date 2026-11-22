@@ -1,7 +1,7 @@
 import { ZipFileSystem, ZipReadFileSystem } from '@playcanvas/splat-transform';
 import { Vec3 } from 'playcanvas';
 
-import { combineOutputs, placeholderSplat, restoreCombine, storeCombine } from './doc-combine';
+import { combineOutputs, placeholderSplat, readMadeRows, restoreCombine, storeCombine, storeMadeRows, type MadeRows } from './doc-combine';
 import { restoreInspectNode, storeInspectNodes } from './doc-inspect';
 import { storeLookNodes } from './doc-looks';
 import { packMotion, storedMotion, unpackMotion } from './doc-motion';
@@ -227,15 +227,19 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             const loaded: Splat[] = [];
             // the objects merge and switch nodes make, which have no file
             const made = combineOutputs(document);
+            const madeRows = new Map<number, MadeRows>();
             for (let i = 0; i < document.splats.length; ++i) {
                 const filename = `splat_${i}.ply`;
                 const splatSettings = document.splats[i];
 
                 let splat: Splat;
                 if (made.has(i)) {
-                    // empty until its node makes it again
+                    // empty until its node makes it again, and what its
+                    // rows had that the node does not make
                     splat = placeholderSplat(scene, splatSettings.name);
                     await scene.add(splat);
+                    const rows = await readMadeRows(splatSettings.made, name => readEntry(zipFs, name));
+                    if (rows) madeRows.set(i, rows);
                 } else if (splatSettings.motion?.file) {
                     // a 4D model: it adds itself to the scene as the sequence
                     splat = await loadMotionSplat(zipFs, splatSettings.motion, splatSettings.name);
@@ -466,7 +470,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 }
             }
             // merge, switch and layer nodes (doc-combine.ts)
-            restoreCombine(document, loaded, later, events);
+            restoreCombine(document, loaded, later, events, madeRows);
             // time nodes and keyed colour nodes (doc-time.ts)
             restoreTimeNodes(document, loaded, later, events);
             restoreColourNodes(document, loaded, later, events);
@@ -575,6 +579,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
             // merge, switch and layer nodes; a merged object's data is not written
             const combined = storeCombine(allOps, cursor, splats, placeOf);
+            // and what edits left on its rows that no node makes again
+            const madeRows = splats.map((s, i) => (combined.outputs.has(i) ? storeMadeRows(s, i, !stateNodes[i]) : null));
 
             // a 4D object with no file of its own - a part split off a 4D
             // model - is stored as a PLY of its gaussians at their temporal
@@ -666,6 +672,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                         ...(at ? { pos: [at.x, at.y] } : {}),
                         // the file the sets of its nodes are in
                         ...(stateNodes[i]?.words ? { nodes: `nodes_${i}.bin` } : {}),
+                        ...(madeRows[i] ? { made: madeRows[i].meta } : {}),
                         ...(base ? {
                             position: pack3(base.position),
                             rotation: [base.rotation.x, base.rotation.y, base.rotation.z, base.rotation.w],
@@ -825,7 +832,14 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             for (let i = 0; i < splats.length; ++i) {
                 const source = motions[i];
                 // made again by its merge or switch node
-                if (combined.outputs.has(i)) continue;
+                if (combined.outputs.has(i)) {
+                    for (const { name, bytes } of madeRows[i]?.files ?? []) {
+                        const writer = await zipFs.createWriter(name);
+                        await writer.write(bytes);
+                        await writer.close();
+                    }
+                    continue;
+                }
                 if (!source) {
                     // with its nodes stored, every gaussian: the nodes delete
                     await writeSplatFile([splats[i]], { ...serializeSettings, keepDeleted: !!stateNodes[i] }, 'ply', `splat_${i}.ply`, {}, zipFs);

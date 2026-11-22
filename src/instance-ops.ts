@@ -39,6 +39,9 @@ type InstanceSettings = {
 
 const MAX_COPIES = 256;
 
+/** A grid's count along one axis: at least the object, at most the object and every copy. */
+const clampCount = (c: number) => Math.min(MAX_COPIES + 1, Math.max(1, Math.round(c) || 1));
+
 const defaultInstanceSettings = (): InstanceSettings => ({
     mode: 'grid',
     count: [3, 1, 1],
@@ -54,16 +57,18 @@ const placements = (s: InstanceSettings): Placement[] => {
     const out: Placement[] = [];
     if (s.mode === 'list') {
         s.list.split(/[;\n]+/).map(e => e.trim()).filter(Boolean).forEach((entry) => {
+            if (out.length >= MAX_COPIES) return;
             const v = entry.split(/[\s,]+/).map(parseFloat);
             if (v.length < 3 || !v.slice(0, 3).every(Number.isFinite)) return;
             out.push({ offset: new Vec3(v[0], v[1], v[2]), turn: Number.isFinite(v[3]) ? v[3] : 0, frames: Number.isFinite(v[4]) ? Math.round(v[4]) : 0 });
         });
     } else {
-        const [nx, ny, nz] = s.count.map(c => Math.max(1, Math.round(c) || 1));
+        const [nx, ny, nz] = s.count.map(clampCount);
         let k = 0;
-        for (let z = 0; z < nz; ++z) {
-            for (let y = 0; y < ny; ++y) {
-                for (let x = 0; x < nx; ++x, ++k) {
+        // no further than the most copies there can be
+        for (let z = 0; z < nz && out.length < MAX_COPIES; ++z) {
+            for (let y = 0; y < ny && out.length < MAX_COPIES; ++y) {
+                for (let x = 0; x < nx && out.length < MAX_COPIES; ++x, ++k) {
                     // the first is the object itself
                     if (k === 0) continue;
                     out.push({ offset: new Vec3(x * s.spacing[0], y * s.spacing[1], z * s.spacing[2]), turn: 0, frames: k * (Math.round(s.timeStep) || 0) });
@@ -266,4 +271,4 @@ class InstanceOp {
 /** A scene's instance nodes, applied. */
 const appliedInstances = (ops: unknown[], cursor: number) => ops.slice(0, cursor).filter(o => o instanceof InstanceOp && o.applied) as InstanceOp[];
 
-export { InstanceOp, defaultInstanceSettings, appliedInstances, placements, type InstanceSettings, type InstanceMode };
+export { InstanceOp, clampCount, defaultInstanceSettings, appliedInstances, placements, type InstanceSettings, type InstanceMode };

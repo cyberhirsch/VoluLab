@@ -42,6 +42,7 @@
 import { GSplatData, Quat, Vec3 } from 'playcanvas';
 
 import { dcDecode, dcEncode, gradeMatrix, invSigmoid, sigmoid } from './color-grade';
+import type { FogSettings } from './fog';
 import { toGrade } from './grade-palette';
 import { layoutSegment, type MotionLayout } from './motion-sort';
 import type { Splat, SplatMotion } from './splat';
@@ -80,7 +81,29 @@ type MergeBuilt = {
     rows: number[];
     /** per input, how many times it came in (one per distinct run of time) */
     copies: number[];
+    /** per input, whether it had more runs than it may come in for: some of its time shows the nearest kept one */
+    limited: boolean[];
+    /**
+     * What the inputs' nodes put on them that is not in their gaussians,
+     * for the merged object to carry: a fog (the first input's that has
+     * one), a motion blur shutter in the merged object's time (the
+     * longest), and the gaussians held out, as a holdout mask per row.
+     */
+    carried: { fog: FogSettings | null, shutter: number, holdout: Uint8Array | null };
 };
+
+/**
+ * How often an input may come in, and how many gaussians the copies past
+ * the first may come to over all inputs: a time warp with a keyed speed
+ * or a loop of many turns cuts an input's time into as many runs, each a
+ * copy of its gaussians. Past these, the runs that cover the most time
+ * are kept, and the others show the kept one nearest their time, or
+ * nothing where none is near.
+ */
+const MAX_COPIES = 16;
+const MAX_EXTRA_ROWS = 4_000_000;
+// how far, in the input's normalised time, a kept run may be from a left-out one it stands in for
+const MAX_TIME_GAP = 0.25;
 
 const shNames = new Array(45).fill('').map((_, i) => `f_rest_${i}`);
 const shBandCoeffs = [0, 3, 8, 15];
@@ -118,6 +141,22 @@ const inputTime = (splat: Splat, f: number, rate: number, timelineFrames: number
  * a still, at `offset`.
  */
 type Piece = { scale: number, offset: number, windows: number[] };
+
+/** (from, to) pairs in order, the touching ones joined. */
+const joinWindows = (windows: number[]) => {
+    const pairs: number[][] = [];
+    for (let i = 0; i < windows.length; i += 2) pairs.push([windows[i], windows[i + 1]]);
+    pairs.sort((a, b) => a[0] - b[0]);
+    const out: number[] = [];
+    pairs.forEach(([a, b]) => {
+        if (out.length && a <= out[out.length - 1] + 1e-12) {
+            out[out.length - 1] = Math.max(out[out.length - 1], b);
+        } else {
+            out.push(a, b);
+        }
+    });
+    return out;
+};
 
 const close = (a: number, b: number) => Math.abs(a - b) <= 1e-7 * Math.max(1, Math.abs(a), Math.abs(b));
 
@@ -180,26 +219,39 @@ const piecesOf = (times: (number | null)[], frames: number): Piece[] => {
         }
     });
 
-    // windows in order, the touching ones joined
     pieces.forEach((p) => {
-        const pairs: number[][] = [];
-        for (let i = 0; i < p.windows.length; i += 2) pairs.push([p.windows[i], p.windows[i + 1]]);
-        pairs.sort((a, b) => a[0] - b[0]);
-        const out: number[] = [];
-        pairs.forEach(([a, b]) => {
-            if (out.length && a <= out[out.length - 1] + 1e-12) {
-                out[out.length - 1] = Math.max(out[out.length - 1], b);
-            } else {
-                out.push(a, b);
-            }
-        });
-        p.windows = out;
+        p.windows = joinWindows(p.windows);
     });
     return pieces;
 };
 
 // a piece's windows cover the whole sequence: then it needs none
 const whole = (windows: number[]) => windows.length === 2 && windows[0] <= 1e-12 && windows[1] >= 1 - 1e-12;
+
+/**
+ * The windows, of the merged object's time u, of a level whose windows are
+ * `inner`, of an input's time scale * u + offset, within a piece's windows
+ * `outer`: the inner ones mapped to u, and cut to the outer ones. Null:
+ * always.
+ */
+const composeWindows = (outer: Float64Array | null, inner: Float64Array | null, scale: number, offset: number) => {
+    if (!inner) return outer;
+    const mapped: number[][] = [];
+    for (let i = 0; i < inner.length; i += 2) {
+        const a = (inner[i] - offset) / scale;
+        const b = (inner[i + 1] - offset) / scale;
+        mapped.push(a <= b ? [a, b] : [b, a]);
+    }
+    mapped.sort((p, q) => p[0] - q[0]);
+    const bounds = outer ? Array.from({ length: outer.length / 2 }, (_, i) => [outer[i * 2], outer[i * 2 + 1]]) : [[-Infinity, Infinity]];
+    const out: number[] = [];
+    bounds.forEach(([a0, b0]) => mapped.forEach(([a1, b1]) => {
+        const a = Math.max(a0, a1);
+        const b = Math.min(b0, b1);
+        if (a < b) out.push(a, b);
+    }));
+    return Float64Array.from(out);
+};
 
 /** The rows of an input's model active at its time t, from its layout; null: all. */
 const activeRows = (motion: SplatMotion, t: number) => {
@@ -239,8 +291,9 @@ const rgb = { r: 0, g: 0, b: 0 };
 const bakeColumns = (splat: Splat, rows: Uint32Array, bands: number, columns: Map<string, Float32Array>, transforms: SplatTransformCache) => {
     const count = rows.length;
     // the columns as they are: the SH bands an sh-bands node leaves, and
-    // zeros above them
-    const srcCoeffs = shBandCoeffs[splatSHBands(splat)];
+    // zeros above them. The data holds all its bands, so the stride is theirs
+    const srcCoeffs = shBandCoeffs[splatSHBands(splat, false)];
+    const keptCoeffs = shBandCoeffs[splatSHBands(splat)];
     const dstCoeffs = shBandCoeffs[bands];
     columns.forEach((to, name) => {
         const sh = shNames.indexOf(name);
@@ -248,7 +301,7 @@ const bakeColumns = (splat: Splat, rows: Uint32Array, bands: number, columns: Ma
         if (sh >= 0) {
             const channel = Math.floor(sh / dstCoeffs);
             const coeff = sh % dstCoeffs;
-            from = coeff < srcCoeffs ? splat.splatData.getProp(shNames[channel * srcCoeffs + coeff]) as Float32Array : null;
+            from = coeff < keptCoeffs ? splat.splatData.getProp(shNames[channel * srcCoeffs + coeff]) as Float32Array : null;
         } else {
             from = splat.splatData.getProp(name) as Float32Array;
         }
@@ -369,18 +422,20 @@ const bakePart = (splat: Splat, bands: number): Part => {
         bakeColumns(splat, rows, bands, columns, transforms);
     }
 
-    // a 4D model's velocities turn and scale with it, as its centres do
+    // a 4D model's velocities turn and scale with it, as its centres do,
+    // and with its motion scale nodes, which the merged object does not have
     let velocity: Float32Array | null = null;
     if (splat.motion) {
         const vt = splat.motion.velocityTime;
+        const speed = splat.motionScale;
         velocity = new Float32Array(count * 3);
         for (let k = 0; k < count; ++k) {
             const r = rows[k];
             vel.set(vt[r * 4], vt[r * 4 + 1], vt[r * 4 + 2]);
             transforms.getMat(r).transformVector(vel, vel);
-            velocity[k * 3] = vel.x;
-            velocity[k * 3 + 1] = vel.y;
-            velocity[k * 3 + 2] = vel.z;
+            velocity[k * 3] = vel.x * speed;
+            velocity[k * 3 + 1] = vel.y * speed;
+            velocity[k * 3 + 2] = vel.z * speed;
         }
     }
 
@@ -412,10 +467,21 @@ const textureHash = (texture: any) => {
     return h;
 };
 
+// an id per array: a node that edits motion (motion-edit.ts) gives the
+// model new arrays, so they tell an edited model from the one before
+const arrayIds = new WeakMap<object, number>();
+let nextArrayId = 1;
+const arrayId = (a: object | null | undefined) => {
+    if (!a) return 0;
+    let id = arrayIds.get(a);
+    if (!id) arrayIds.set(a, id = nextArrayId++);
+    return id;
+};
+
 /**
  * What an input's baked part depends on: its data and which of it is
  * deleted, where it stands, its transform and colour nodes, its debug
- * view and its bands.
+ * view, its bands, and its motion and motion scale.
  */
 const partSignature = (splat: Splat) => {
     const m = splat.entity.getWorldTransform().data;
@@ -432,10 +498,17 @@ const partSignature = (splat: Splat) => {
             splat.brightness, splat.blackPoint, splat.whitePoint, splat.transparency],
         splat.debugShown ? [splat.debugShown.channel, splat.debugShown.mode, Array.from(splat.debugShown.params ?? [])] : null,
         splat.shBandLimit,
-        // a 4D model's velocities: the same data, but motion set later
-        splat.motion ? splat.motion.velocityTime.length : 0
+        // a 4D model's motion: the same data, but motion set later or edited
+        splat.motion ? [arrayId(splat.motion.velocityTime), arrayId(splat.motion.falloff), splat.motionScale] : 0
     ]);
 };
+
+/** What the merged object carries of an input besides its gaussians (MergeBuilt.carried). */
+const carrySignature = (splat: Splat) => JSON.stringify([
+    splat.fog,
+    splat.motionShutter,
+    splat.state.overlay ? hashBytes(splat.state.overlay) : 0
+]);
 
 /** What decides an input's time: its time nodes, and how long its own sequence is. */
 const timeSignature = (splat: Splat) => JSON.stringify([
@@ -449,7 +522,7 @@ const timeSignature = (splat: Splat) => JSON.stringify([
  * only when this changes.
  */
 const mergeSignature = (inputs: Splat[], options: MergeBuildOptions, extra: unknown) => JSON.stringify([
-    inputs.map(s => partSignature(s) + timeSignature(s)),
+    inputs.map(s => partSignature(s) + timeSignature(s) + carrySignature(s)),
     options.sh,
     options.rate,
     // the timeline's length only matters to a switch, which spans it
@@ -512,6 +585,49 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
         return piecesOf(times, frames);
     });
 
+    // no more copies than memory allows: the runs that cover the most time
+    const limited = inputs.map(() => false);
+    let extraRows = 0;
+    piecesFor.forEach((pieces, i) => {
+        if (pieces.length < 2) return;
+        // in frames, so runs as long come in the order they start in
+        const covered = (p: Piece) => {
+            let sum = 0;
+            for (let w = 0; w < p.windows.length; w += 2) sum += p.windows[w + 1] - p.windows[w];
+            return Math.round(sum * frames);
+        };
+        const rowsEach = parts[i].rows.length;
+        const ranked = pieces.slice().sort((a, b) => covered(b) - covered(a) || a.windows[0] - b.windows[0]);
+        const kept = new Set<Piece>([ranked[0]]);
+        for (let k = 1; k < ranked.length && kept.size < MAX_COPIES && extraRows + rowsEach <= MAX_EXTRA_ROWS; ++k) {
+            kept.add(ranked[k]);
+            extraRows += rowsEach;
+        }
+        if (kept.size < pieces.length) {
+            // a run left out shows the kept one nearest its time instead,
+            // so the input steps rather than drops out - where one is near:
+            // the runs of a loop are whole turns apart, and a model shown
+            // that far from its time is nowhere it was
+            limited[i] = true;
+            const keep = pieces.filter(p => kept.has(p)).map(p => ({ ...p, windows: p.windows.slice() }));
+            pieces.filter(p => !kept.has(p)).forEach((p) => {
+                for (let w = 0; w < p.windows.length; w += 2) {
+                    const u = (p.windows[w] + p.windows[w + 1]) / 2;
+                    const t = p.scale * u + p.offset;
+                    let best = keep[0];
+                    keep.forEach((q) => {
+                        if (Math.abs(q.scale * u + q.offset - t) < Math.abs(best.scale * u + best.offset - t)) best = q;
+                    });
+                    if (Math.abs(best.scale * u + best.offset - t) <= MAX_TIME_GAP) best.windows.push(p.windows[w], p.windows[w + 1]);
+                }
+            });
+            keep.forEach((p) => {
+                p.windows = joinWindows(p.windows);
+            });
+            piecesFor[i] = keep;
+        }
+    });
+
     // per piece: the input's rows it takes. A still takes those active at
     // its time; one that moves takes them all and lets the levels decide
     type Taken = { input: number, piece: Piece, rows: Uint32Array /* indices into the part's rows */ };
@@ -562,6 +678,7 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
 
     const rowsPerInput = inputs.map(() => 0);
     const copies = inputs.map(() => 0);
+    let holdout: Uint8Array | null = null;
 
     let base = 0;
     taken.forEach(({ input, piece, rows }) => {
@@ -578,6 +695,12 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
             const to = columns.get(name);
             for (let k = 0; k < rows.length; ++k) to[base + k] = from[rows[k]];
         });
+        // held out there, held out here
+        const overlay = splat.state.overlay;
+        if (overlay) {
+            holdout ??= new Uint8Array(Math.max(1, total));
+            for (let k = 0; k < rows.length; ++k) holdout[base + k] = overlay[part.rows[rows[k]]];
+        }
         if (mult !== 1) {
             const o = columns.get('opacity');
             for (let k = 0; k < rows.length; ++k) {
@@ -659,12 +782,17 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
                 }
                 return Uint32Array.from(out);
             };
+            // an input made of others (a merge, a switch) has its own scale,
+            // offset and windows per level, of the input's time: composed
+            // with the piece's, so its cuts stay where they were
             const first = levels.length;
-            layout.levels.forEach((segLen) => {
+            layout.levels.forEach((segLen, l) => {
+                const s = layout.scale?.[l] ?? 1;
+                const o = layout.offset?.[l] ?? 0;
                 levels.push(segLen);
-                scale.push(piece.scale);
-                offset.push(piece.offset);
-                windows.push(pieceWindows);
+                scale.push(s * piece.scale);
+                offset.push(s * piece.offset + o);
+                windows.push(composeWindows(pieceWindows, layout.windows?.[l] ?? null, piece.scale, piece.offset));
             });
             let windowLevel = -1;
             layout.blocks.forEach((block) => {
@@ -770,7 +898,18 @@ const buildMerge = (inputs: Splat[], options: MergeBuildOptions, cache: PartCach
         };
     }
 
-    return { data, motion, frames: moving ? frames : 0, bands, rows: rowsPerInput, copies };
+    // the fog and the shutter. A shutter is open for a span of the input's
+    // time; v * scale per unit of merged time, so open shutter / scale
+    let fog: FogSettings | null = null;
+    let shutter = 0;
+    inputs.forEach((s, i) => {
+        if (!included[i]) return;
+        fog ??= s.fog ? { ...s.fog, colour: [...s.fog.colour] as [number, number, number] } : null;
+        const run = piecesFor[i].find(p => p.scale !== 0);
+        if (s.motion && run && s.motionShutter > 0) shutter = Math.max(shutter, s.motionShutter / Math.abs(run.scale));
+    });
+
+    return { data, motion, frames: moving ? frames : 0, bands, rows: rowsPerInput, copies, limited, carried: { fog, shutter, holdout } };
 };
 
 /** The rotation the merged object is placed with: that of a loaded PLY, since its data is in a file's space. */

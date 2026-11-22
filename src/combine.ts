@@ -14,6 +14,8 @@
  */
 
 import { CombineOp, LayerOp, MergeOp, SwitchOp, defaultLayerSettings, type CombineContext, type LayerSettings, type MergeSettings, type SwitchSettings } from './combine-ops';
+import { placeholderSplat } from './doc-combine';
+import { produces } from './edit-history';
 import type { EditOp } from './edit-ops';
 import { ElementType } from './element';
 import { Events } from './events';
@@ -211,7 +213,9 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
         const { ops, cursor } = history();
         const index = ops.findIndex((o, i) => i < cursor && o instanceof MergeOp && o.output === b);
         const untouched = index >= 0 && !ops.slice(index + 1, cursor).some(o => (o as any).splat === b || ((o as any).inputs ?? []).includes(b));
-        if (untouched && !(ops[index] as MergeOp).inputs.includes(a)) {
+        // (not when a is made after that merge: it would not be there for it)
+        const madeLater = index >= 0 && ops.slice(index + 1).some(o => produces(o).includes(a));
+        if (untouched && !madeLater && !(ops[index] as MergeOp).inputs.includes(a)) {
             return events.invoke('graph.mergeInput', index, a);
         }
         return makeCombine('merge', [a, b]);
@@ -219,8 +223,19 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
 
     // an object as one more input of a merge or switch node
     events.function('graph.mergeInput', (index: number, splat: Splat) => {
-        const op = history().ops[index];
+        const { ops } = history();
+        const op = ops[index];
         if (!(op instanceof CombineOp) || !splat || op.inputs.includes(splat) || splat === op.output) return null;
+        // an object made after the node (by another merge, a split...) is
+        // not there when the node applies: the node would make nothing
+        if (ops.slice(index + 1).some(o => produces(o).includes(splat))) {
+            events.invoke('showPopup', {
+                type: 'info',
+                header: op.name === 'switch' ? 'Switch' : 'Merge',
+                message: `'${splat.name}' is made after this node, so it cannot be one of its inputs. Merge it with the node's object instead.`
+            });
+            return null;
+        }
         return events.invoke('edit.refresh', index, () => {
             op.inputs.push(splat);
             if (op instanceof MergeOp) op.settings.names.push('');
@@ -232,15 +247,14 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
         const op = history().ops[index];
         if (!(op instanceof CombineOp) || op.inputs.length <= (op instanceof MergeOp ? 2 : 1)) return null;
         return events.invoke('edit.refresh', index, () => {
-            const [gone] = op.inputs.splice(input, 1);
+            op.inputs.splice(input, 1);
             if (op instanceof MergeOp) op.settings.names.splice(input, 1);
             if (op instanceof SwitchOp) {
                 op.settings.index = Math.min(op.settings.index, op.inputs.length - 1);
                 op.settings.cuts = op.settings.cuts.filter(c => c.input !== input).map(c => ({ ...c, input: c.input > input ? c.input - 1 : c.input }));
             }
-            // it was hidden by the merge; undo of the merge brings it back,
-            // and so does leaving it
-            if (gone) gone.visible = true;
+            // it was hidden by the merge: the refresh undid the merge first,
+            // which gave it back its own visibility, and it keeps that
         });
     });
 
@@ -270,7 +284,10 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
 
     // A merge or switch node from a project, with the object it makes there
     // already (empty: it is made again once the history has settled).
-    events.function('combine.restoreNode', (kind: 'merge' | 'switch', inputs: Splat[], output: Splat, settings?: Partial<MergeSettings & SwitchSettings>, bypassed = false) => {
+    events.function('combine.restoreNode', (kind: 'merge' | 'switch', inputs: Splat[], output: Splat | null, settings?: Partial<MergeSettings & SwitchSettings>, bypassed = false, name = '') => {
+        // one switched off was stored without its object: an empty one,
+        // which it fills when it is switched on
+        if (!output && bypassed) output = placeholderSplat(scene, name || kind);
         if (!output || !inputs.length) return null;
         const op: CombineOp = kind === 'switch' ?
             new SwitchOp(scene, inputs, output, context, settings) :
@@ -281,7 +298,7 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
             s.visible = true;
         });
         // a node switched off has no object in the scene
-        if (bypassed) scene.remove(output);
+        if (bypassed && output.scene) scene.remove(output);
         events.fire('edit.add', op);
         return op;
     });

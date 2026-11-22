@@ -6,7 +6,7 @@
 
 import type { EditOp } from './edit-ops';
 import { Events } from './events';
-import { InstanceOp, appliedInstances, defaultInstanceSettings, type InstanceSettings } from './instance-ops';
+import { InstanceOp, appliedInstances, clampCount, defaultInstanceSettings, type InstanceSettings } from './instance-ops';
 import { Splat } from './splat';
 
 const registerInstanceEvents = (events: Events) => {
@@ -38,7 +38,7 @@ const registerInstanceEvents = (events: Events) => {
         const vec3 = (v: unknown, fallback: [number, number, number]) => (Array.isArray(v) && v.length === 3 && v.every(Number.isFinite) ? v as [number, number, number] : fallback);
         const op = new InstanceOp(splat, {
             mode: stored?.mode === 'list' ? 'list' : 'grid',
-            count: vec3(stored?.count, base.count),
+            count: vec3(stored?.count, base.count).map(clampCount) as [number, number, number],
             spacing: vec3(stored?.spacing, base.spacing),
             timeStep: Number.isFinite(stored?.timeStep) ? stored.timeStep : 0,
             list: typeof stored?.list === 'string' ? stored.list : ''

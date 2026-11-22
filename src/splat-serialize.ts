@@ -390,8 +390,9 @@ class SingleSplat {
 
                     // an sh-bands node caps what is shown, so it caps what is
                     // written; the bands above it are written as zeros
-                    const srcSHBands = splatSHBands(splat, !serializeSettings.keepSHBands);
-                    const srcSHCoeffs = shBandCoeffs[srcSHBands];
+                    // (the data holds all its bands: the stride is theirs)
+                    const srcSHCoeffs = shBandCoeffs[splatSHBands(splat, false)];
+                    const keptSHCoeffs = shBandCoeffs[splatSHBands(splat, !serializeSettings.keepSHBands)];
 
                     // cache the props objects
                     const srcProps: { [name: string]: Float32Array } = {};
@@ -401,7 +402,7 @@ class SingleSplat {
                         if (shIndex >= 0) {
                             const a = Math.floor(shIndex / dstSHCoeffs);
                             const b = shIndex % dstSHCoeffs;
-                            srcProps[name] = (b < srcSHCoeffs) ? splat.splatData.getProp(shNames[a * srcSHCoeffs + b]) as Float32Array : null;
+                            srcProps[name] = (b < keptSHCoeffs) ? splat.splatData.getProp(shNames[a * srcSHCoeffs + b]) as Float32Array : null;
                         } else {
                             srcProps[name] = splat.splatData.getProp(name) as Float32Array;
                         }
