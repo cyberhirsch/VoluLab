@@ -247,15 +247,14 @@ const registerCombineEvents = (events: Events, scene: Scene) => {
         const op = history().ops[index];
         if (!(op instanceof CombineOp) || op.inputs.length <= (op instanceof MergeOp ? 2 : 1)) return null;
         return events.invoke('edit.refresh', index, () => {
-            const [gone] = op.inputs.splice(input, 1);
+            op.inputs.splice(input, 1);
             if (op instanceof MergeOp) op.settings.names.splice(input, 1);
             if (op instanceof SwitchOp) {
                 op.settings.index = Math.min(op.settings.index, op.inputs.length - 1);
                 op.settings.cuts = op.settings.cuts.filter(c => c.input !== input).map(c => ({ ...c, input: c.input > input ? c.input - 1 : c.input }));
             }
-            // it was hidden by the merge; undo of the merge brings it back,
-            // and so does leaving it
-            if (gone) gone.visible = true;
+            // it was hidden by the merge: the refresh undid the merge first,
+            // which gave it back its own visibility, and it keeps that
         });
     });
 
