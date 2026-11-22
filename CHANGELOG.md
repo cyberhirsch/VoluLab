@@ -81,6 +81,29 @@ into `doc-nodes.ts`).
   node's `result` beside its set (`doc-nodes.ts`): restored nodes apply
   their stored set without running, so without it a combine run again after
   loading read nothing.
+- **holdout** (`holdout.ts`): what the select nodes above leave selected -
+  or the whole object, with nothing selected - is drawn to depth and not to
+  colour, so it hides what is behind it, other objects and the rest of its
+  own, as a matte. The gaussians held out carry a bit (8) in the GPU copy
+  of their state only (`SplatState.overlay`, OR'd in on upload; the editor
+  compares `data` whole against selected, hidden and deleted, so the bit
+  stays out of it), and every pass of the splat shader skips them. The
+  object gets a second draw: a clone of its material with no blending,
+  depth writes and no colour writes, under `SPLAT_HOLDOUT_DEPTH`, drawing
+  only those gaussians where alpha is 0.3 or more. With no blending the
+  splat layer draws it in its opaque part, ahead of every splat, which then
+  fail the depth test behind it. Its parameters and instance count are
+  copied from the object's material every frame, so it moves and plays
+  with a 4D model; order does not matter for depth alone. The node is a
+  StateOp with a mask of no bits, so its set is kept and a project stores
+  and restores it like a state node. Measured on the alley (frame 40, the
+  nearest 30% held out): 16.2% of pixels lit against 25.8% with the same
+  gaussians deleted; two copies of the cloud, the nearer held out: 4.6%
+  lit against 5.6% for the farther alone. WebGPU and WebGL2 gave identical
+  pictures: both keep a depth buffer for the splat pass (`camera.ts`), so
+  the WebGL2 fallback is not needed; the node says so where a device has
+  none. A held-out object leaves the background showing, and an export
+  that writes alpha writes the hole as the clear alpha.
 
 ---
 

@@ -198,6 +198,10 @@
     "node.selcombine.incoming": "selection coming in",
     "node.selcombine.unusable": "An input reads nothing: its node is undone, bypassed, after this one or on another object.",
     "node.selcombine.note": "Combines what other select nodes of this object selected. Pick them by name here, or drag a select node’s wire onto input a or b. An input left empty is the selection coming in.",
+    "node.selholdout.held": "held out",
+    "node.selholdout.all": "Nothing is selected above this node, so the whole object is held out.",
+    "node.selholdout.note": "The gaussians the select nodes above have selected are drawn to depth and not to colour: they hide what is behind them, other objects included, as a matte. Bypass it to see them again.",
+    "node.selholdout.unsupported": "Holdout needs a depth buffer in the splat pass, which this device does not give. The node does nothing here.",
 
     "popup.ok": "OK",
     "popup.cancel": "Cancel",

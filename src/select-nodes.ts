@@ -1,6 +1,7 @@
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { EditOp, PortSpec, SelectMode, SelectOp, StateOp } from './edit-ops';
+import { HoldoutOp } from './holdout';
 import { IndexRanges } from './index-ranges';
 import { Splat } from './splat';
 import { State } from './splat-state';
@@ -1058,6 +1059,11 @@ const makeSelectionNode = (kind: string, splat: Splat): SelectionNodeOp | null =
     }
 };
 
+/** a holdout node, which these menus offer too, or one of the rule nodes */
+const makeMaskingNode = (kind: string, splat: Splat): StateOp | null => {
+    return kind === 'holdout' ? new HoldoutOp(splat) : makeSelectionNode(kind, splat);
+};
+
 /** A node from what `settings` gave, ready to add; null for one not known. */
 const selectionNodeFrom = (splat: Splat, stored: Record<string, any>): SelectionNodeOp | null => {
     const op = makeSelectionNode(stored?.kind, splat);
@@ -1090,6 +1096,7 @@ export {
     SELECTION_NODE_NAMES,
     isSelectionSource,
     makeSelectionNode,
+    makeMaskingNode,
     selectionNodeFrom,
     worldCenters,
     modelFrames,

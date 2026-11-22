@@ -19,7 +19,7 @@ import { Scene } from './scene';
 import { SceneCamera } from './scene-camera';
 import { SceneLight } from './scene-light';
 import { PrimitiveKind, ScenePrimitive } from './scene-primitive';
-import { makeSelectionNode } from './select-nodes';
+import { makeMaskingNode } from './select-nodes';
 import { registerSelectionNodes } from './select-nodes-editor';
 import { RangeQuery, SelectQuery, ShapeQuery } from './select-query';
 import { Splat } from './splat';
@@ -778,7 +778,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // rest (select-nodes.ts)
     events.on('graph.addSelectionNode', (kind: string, target?: Splat) => {
         addTarget(target).forEach((splat) => {
-            const op = makeSelectionNode(kind, splat);
+            const op = makeMaskingNode(kind, splat);
             if (op) appendAndOpen(op);
         });
     });

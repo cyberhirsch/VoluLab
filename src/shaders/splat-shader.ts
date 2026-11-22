@@ -200,6 +200,8 @@ void main(void) {
 
     // get per-gaussian edit state, discard if deleted
     uint vertexState = uint(texelFetch(splatState, splat.uv, 0).r * 255.0 + 0.5) & 7u;
+    // a holdout (holdout.ts): drawn to depth only, by a pass of its own
+    uint holdoutState = uint(texelFetch(splatState, splat.uv, 0).r * 255.0 + 0.5) & 8u;
 
     #if PICK_PASS
         if (pickOp == 0u) {
@@ -227,6 +229,18 @@ void main(void) {
             gl_Position = discardVec;
             return;
         }
+        // the holdout pass draws the holdouts alone, every other pass all but them
+        #ifdef SPLAT_HOLDOUT_DEPTH
+            if (holdoutState == 0u) {
+                gl_Position = discardVec;
+                return;
+            }
+        #else
+            if (holdoutState != 0u) {
+                gl_Position = discardVec;
+                return;
+            }
+        #endif
     #endif
 
     // get center
@@ -445,6 +459,16 @@ void main(void) {
     #else
         mediump float norm = dofFalloff(A, defocus);
         mediump float alpha = norm * color.a;
+
+        #ifdef SPLAT_HOLDOUT_DEPTH
+            // depth only, where the gaussian is solid enough to hide what is behind
+            if (alpha < 0.3) {
+                discard;
+            }
+            pcFragColor0 = vec4(0.0);
+            pcFragColor1 = vec4(0.0);
+            return;
+        #endif
 
         if (texCoord_flags.w == 0.0 && ringSize > 0.0) {
             // rings mode
@@ -721,6 +745,8 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
 
     // get per-gaussian edit state, discard if deleted
     let vertexState: u32 = u32(textureLoad(splatState, splat.uv, 0).r * 255.0 + 0.5) & 7u;
+    // a holdout (holdout.ts): drawn to depth only, by a pass of its own
+    let holdoutState: u32 = u32(textureLoad(splatState, splat.uv, 0).r * 255.0 + 0.5) & 8u;
 
     #ifdef PICK_PASS
         if (uniform.pickOp == 0u) {
@@ -748,6 +774,18 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
             output.position = discardVec;
             return output;
         }
+        // the holdout pass draws the holdouts alone, every other pass all but them
+        #ifdef SPLAT_HOLDOUT_DEPTH
+            if (holdoutState == 0u) {
+                output.position = discardVec;
+                return output;
+            }
+        #else
+            if (holdoutState != 0u) {
+                output.position = discardVec;
+                return output;
+            }
+        #endif
     #endif
 
     var modelCenter: vec3f = getCenter();
@@ -938,6 +976,16 @@ fn fragmentMain(input: FragmentInput) -> FragmentOutput {
     #else
         let norm: f32 = dofFalloff(A, vDefocus);
         var alpha: f32 = norm * vColor.a;
+
+        #ifdef SPLAT_HOLDOUT_DEPTH
+            // depth only, where the gaussian is solid enough to hide what is behind
+            if (alpha < 0.3) {
+                discard;
+            }
+            output.color = vec4f(0.0);
+            output.color1 = vec4f(0.0);
+            return output;
+        #endif
 
         if (vTexCoordFlags.w == 0.0 && uniform.ringSize > 0.0) {
             // rings mode

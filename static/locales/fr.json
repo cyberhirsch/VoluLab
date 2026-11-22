@@ -198,6 +198,10 @@
     "node.selcombine.incoming": "sélection entrante",
     "node.selcombine.unusable": "Une entrée ne lit rien : son nœud est annulé, contourné, après celui-ci ou sur un autre objet.",
     "node.selcombine.note": "Combine ce que d’autres nœuds de sélection de cet objet ont sélectionné. Choisissez-les par nom ici, ou faites glisser le fil d’un nœud de sélection sur l’entrée a ou b. Une entrée vide est la sélection entrante.",
+    "node.selholdout.held": "masqués",
+    "node.selholdout.all": "Rien n’est sélectionné au-dessus de ce nœud, l’objet entier est donc masqué.",
+    "node.selholdout.note": "Les gaussiennes sélectionnées par les nœuds au-dessus sont dessinées en profondeur et non en couleur : elles cachent ce qui est derrière, autres objets compris, comme un cache. Contournez le nœud pour les revoir.",
+    "node.selholdout.unsupported": "Le masquage a besoin d’un tampon de profondeur dans la passe des splats, que cet appareil ne fournit pas. Le nœud ne fait rien ici.",
 
     "popup.ok": "OK",
     "popup.cancel": "Annuler",

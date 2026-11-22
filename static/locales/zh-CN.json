@@ -198,6 +198,10 @@
     "node.selcombine.incoming": "传入的选择",
     "node.selcombine.unusable": "某个输入读不到内容：其节点已撤销、被绕过、位于此节点之后或属于其他对象。",
     "node.selcombine.note": "组合此对象其他选择节点选中的内容。在此按名称选择，或将选择节点的连线拖到输入 a 或 b。空输入即传入的选择。",
+    "node.selholdout.held": "遮挡",
+    "node.selholdout.all": "此节点之上没有选中任何内容，因此整个对象都被遮挡。",
+    "node.selholdout.note": "上游选择节点选中的高斯只写入深度而不写入颜色：作为遮罩，它们会遮住身后的内容，包括其他对象。绕过此节点即可再次看到它们。",
+    "node.selholdout.unsupported": "遮挡需要 splat 渲染通道中的深度缓冲区，而此设备不提供。此节点在这里不起作用。",
 
     "popup.ok": "确定",
     "popup.cancel": "取消",

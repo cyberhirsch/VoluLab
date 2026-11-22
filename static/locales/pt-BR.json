@@ -198,6 +198,10 @@
     "node.selcombine.incoming": "seleção recebida",
     "node.selcombine.unusable": "Uma entrada não lê nada: seu nó está desfeito, ignorado, depois deste ou em outro objeto.",
     "node.selcombine.note": "Combina o que outros nós de seleção deste objeto selecionaram. Escolha-os pelo nome aqui, ou arraste o fio de um nó de seleção para a entrada a ou b. Uma entrada vazia é a seleção recebida.",
+    "node.selholdout.held": "recortados",
+    "node.selholdout.all": "Nada está selecionado acima deste nó, então o objeto inteiro é recortado.",
+    "node.selholdout.note": "As gaussianas que os nós acima selecionaram são desenhadas na profundidade e não na cor: escondem o que está atrás delas, outros objetos incluídos, como uma máscara. Ignore o nó para vê-las de novo.",
+    "node.selholdout.unsupported": "O recorte precisa de um buffer de profundidade na passagem de splats, que este dispositivo não oferece. O nó não faz nada aqui.",
 
     "popup.ok": "OK",
     "popup.cancel": "Cancelar",

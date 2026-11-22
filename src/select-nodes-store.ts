@@ -1,4 +1,5 @@
 import { EditOp, MultiOp, StateOp } from './edit-ops';
+import { HoldoutOp } from './holdout';
 import { SelectionNodeOp, selectionNodeFrom } from './select-nodes';
 import { Splat } from './splat';
 
@@ -35,6 +36,8 @@ const historyIndex = (history: EditOp[], op: EditOp) => {
 
 /** A node's settings for a project, or null for an op that is not one. */
 const packSelectionNode = (op: StateOp, history: EditOp[]): Record<string, any> | null => {
+    // a holdout's set is all it has, and is stored as every node's is
+    if (op instanceof HoldoutOp) return { type: 'holdoutNode', selectedIn: op.selectedIn };
     if (!(op instanceof SelectionNodeOp)) return null;
     const settings = op.settings;
     // a wired node is kept by where it stands in the history
@@ -45,7 +48,12 @@ const packSelectionNode = (op: StateOp, history: EditOp[]): Record<string, any> 
 };
 
 /** A stored node as an op on `splat`; null for a stored node not of these. */
-const restoreSelectionNode = (stored: Record<string, any>, splat: Splat): SelectionNodeOp | null => {
+const restoreSelectionNode = (stored: Record<string, any>, splat: Splat): StateOp | null => {
+    if (stored.type === 'holdoutNode') {
+        const holdout = new HoldoutOp(splat);
+        holdout.selectedIn = stored.selectedIn ?? -1;
+        return holdout;
+    }
     if (stored.type !== STORED_TYPE) return null;
     const op = selectionNodeFrom(splat, stored.settings);
     if (!op) return null;

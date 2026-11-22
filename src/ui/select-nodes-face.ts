@@ -4,6 +4,7 @@ import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
 import { EditOp, MultiOp, SelectMode, SelectOp } from '../edit-ops';
 import { Events } from '../events';
+import { HoldoutOp } from '../holdout';
 import { Attribute, AttributeSelectOp, ColourSelectOp, CombineOperation, CombineSelectOp, isSelectionSource, ColourSpace, GrowDirection, GrowSelectOp, MotionMetric, MotionSelectOp, RegionSelectOp, RegionShape, modelFrames, SELECTION_NODE_KINDS, SELECTION_NODE_NAMES, SelectionNodeOp } from '../select-nodes';
 import { Splat } from '../splat';
 
@@ -22,20 +23,23 @@ const SELECTION_NODE_LABELS: Record<string, string> = {
     [SELECTION_NODE_NAMES.region]: 'select by region',
     [SELECTION_NODE_NAMES.attribute]: 'select by attribute',
     [SELECTION_NODE_NAMES.grow]: 'grow / shrink',
-    [SELECTION_NODE_NAMES.combine]: 'combine selections'
+    [SELECTION_NODE_NAMES.combine]: 'combine selections',
+    holdoutNode: 'holdout'
 };
 
-const builtKinds = () => SELECTION_NODE_KINDS;
+// the rule nodes, and the holdout after them
+const menuKinds = () => [...SELECTION_NODE_KINDS, 'holdout'];
+const kindLabel = (kind: string) => (kind === 'holdout' ? 'holdout' : SELECTION_NODE_LABELS[SELECTION_NODE_NAMES[kind as keyof typeof SELECTION_NODE_NAMES]]);
 
 /** Entries for the menu a wire dragged out of an object's node opens. */
-const selectionNodeItems = (events: Events, splat: Splat) => builtKinds().map(kind => ({
-    label: SELECTION_NODE_LABELS[SELECTION_NODE_NAMES[kind]],
+const selectionNodeItems = (events: Events, splat: Splat) => menuKinds().map(kind => ({
+    label: kindLabel(kind),
     action: () => events.fire('graph.addSelectionNode', kind, splat)
 }));
 
 /** Entries for the graph's "add" menu, which adds to the selected object. */
-const selectionNodeAddItems = (events: Events, splat: Splat | null) => builtKinds().map(kind => ({
-    label: `add ${SELECTION_NODE_LABELS[SELECTION_NODE_NAMES[kind]]} node`,
+const selectionNodeAddItems = (events: Events, splat: Splat | null) => menuKinds().map(kind => ({
+    label: `add ${kindLabel(kind)} node`,
     disabled: !splat,
     hint: splat ? undefined : 'no object',
     action: () => events.fire('graph.addSelectionNode', kind)
@@ -519,11 +523,26 @@ const buildCombine = (face: Face, op: CombineSelectOp) => {
     face.note(t('node.selcombine.note'));
 };
 
+const buildHoldout = (face: Face, op: HoldoutOp) => {
+    if (!op.supported) {
+        face.note(t('node.selholdout.unsupported'));
+        return;
+    }
+    const n = op.affected;
+    face.stat(t('node.selholdout.held'), n < 0 ? t('node.selnode.not-applied') : n.toLocaleString());
+    if (n >= 0 && op.selectedIn === 0) face.note(t('node.selholdout.all'));
+    face.note(t('node.selholdout.note'));
+};
+
 /**
  * Fill the node pane for one of these nodes. False for an op that is not
  * one, so the pane carries on with its own kinds.
  */
 const buildSelectionNodeFace = (body: HTMLElement, events: Events, op: unknown, index: number): boolean => {
+    if (op instanceof HoldoutOp) {
+        buildHoldout(new Face(body, events, index), op);
+        return true;
+    }
     if (!(op instanceof SelectionNodeOp)) return false;
     const face = new Face(body, events, index);
     common(face, op);

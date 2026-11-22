@@ -198,6 +198,10 @@
     "node.selcombine.incoming": "eingehende Auswahl",
     "node.selcombine.unusable": "Ein Eingang liest nichts: Sein Node ist rückgängig gemacht, umgangen, steht nach diesem oder gehört zu einem anderen Objekt.",
     "node.selcombine.note": "Verknüpft, was andere Select-Nodes dieses Objekts ausgewählt haben. Hier nach Namen wählen oder den Draht eines Select-Nodes auf Eingang a oder b ziehen. Ein leerer Eingang ist die eingehende Auswahl.",
+    "node.selholdout.held": "ausgespart",
+    "node.selholdout.all": "Über diesem Node ist nichts ausgewählt, also wird das ganze Objekt ausgespart.",
+    "node.selholdout.note": "Die Gaussians, die die Select-Nodes darüber ausgewählt haben, werden in die Tiefe und nicht in die Farbe gezeichnet: Sie verdecken, was dahinter liegt, auch andere Objekte, als Matte. Bypass zeigt sie wieder.",
+    "node.selholdout.unsupported": "Holdout braucht einen Tiefenpuffer im Splat-Pass, den dieses Gerät nicht bietet. Der Node tut hier nichts.",
 
     "popup.ok": "OK",
     "popup.cancel": "Abbrechen",
