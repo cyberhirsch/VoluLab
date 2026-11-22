@@ -648,6 +648,10 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
 
     const stillOf = new WeakMap<object, Uint8Array>();
 
+    // per stats node, bumped by each measure and each per-frame run: a run
+    // that ends after a newer one, or after a re-measure, must not overwrite it
+    const perFrameRuns = new WeakMap<StatsOp, number>();
+
     /** Per row: 1 for a gaussian of a 4D model that neither moves nor fades. */
     const stillRows = (splat: Splat) => {
         const { motion } = splat;
@@ -724,6 +728,7 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
             op.seen.set(key, live);
         }
         op.perFrame = null;
+        perFrameRuns.set(op, (perFrameRuns.get(op) ?? 0) + 1);
     };
 
     const makeStats = (splat: Splat) => {
@@ -753,6 +758,9 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
     events.function('stats.perFrame', async (op: StatsOp): Promise<FrameChange[] | null> => {
         const { splat } = op;
         if (!splat?.motion || !(splat.motionFrames > 0)) return null;
+        const run = (perFrameRuns.get(op) ?? 0) + 1;
+        perFrameRuns.set(op, run);
+        const motion = splat.motion;
         const { velocityTime, falloff, activeAt } = splat.motion;
         const frames = splat.motionFrames;
         const state = splat.splatData.getProp('state') as Uint8Array;
@@ -789,6 +797,8 @@ const registerInspectNodes = (events: Events, editHistory: EditHistory, scene: S
                 });
             }
         }
+        // asked again since, or the object's motion was replaced: this run is stale
+        if (perFrameRuns.get(op) !== run || op.splat !== splat || splat.motion !== motion) return null;
         op.perFrame = out;
         events.fire('edit.changed');
         return out;
