@@ -249,20 +249,31 @@ const addKeyControls = (events: Events, op: object, id: string, row: HTMLElement
     const spec = paramOf(op, id);
     if (!spec) return false;
     const keyed = op as Keyed;
-    const frame = frameNow(events);
     const track = trackOf(keyed, id);
-    const here = keyAt(track, frame);
 
+    // the frame and its key as they are now: the pane is not rebuilt when
+    // only the frame moves
     const key = document.createElement('button');
     key.type = 'button';
-    key.className = `kf-key${track ? ' kf-keyed' : ''}${here ? ' kf-here' : ''}`;
-    key.textContent = here ? '◆' : '◇';
-    key.title = i18n.t(here ? 'keyframes.remove' : 'keyframes.add');
+    const show = () => {
+        const t = trackOf(keyed, id);
+        const here = keyAt(t, frameNow(events));
+        key.className = `kf-key${t ? ' kf-keyed' : ''}${here ? ' kf-here' : ''}`;
+        key.textContent = here ? '◆' : '◇';
+        key.title = i18n.t(here ? 'keyframes.remove' : 'keyframes.add');
+    };
+    show();
+    const handle = events.on('timeline.frame', () => {
+        // the pane is built in one go, so a key not in the page was rebuilt away
+        if (key.isConnected) show();
+        else handle.off();
+    });
     key.addEventListener('click', (e) => {
+        const frame = frameNow(events);
         if (e.altKey) {
             // every key off; the node keeps the value it has now
             delete keyed.keys?.[id];
-        } else if (here) {
+        } else if (keyAt(trackOf(keyed, id), frame)) {
             removeKey(keyed, id, frame);
         } else {
             setKey(keyed, id, frame, spec.get(op));

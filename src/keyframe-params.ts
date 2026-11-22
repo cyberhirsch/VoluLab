@@ -4,7 +4,9 @@ import { gradeMatrix, GradeParams } from './color-grade';
 import { CropOp, EditOp, EntityTransformOp, ScopedColorOp, SetSplatColorAdjustmentOp, TransformNodeOp, principalOp } from './edit-ops';
 import { composeGrades, toGrade } from './grade-palette';
 import { keyableLive } from './keyframe-driver';
-import { keyable, ParamSpec } from './keyframes';
+import { evaluate, keyable, ParamSpec, trackOf } from './keyframes';
+import { GradeRowsOp } from './look/grade-rows';
+import { AttributeSelectOp, ColourSelectOp, GrowSelectOp, MotionSelectOp, RegionSelectOp, SelectionNodeOp } from './select-nodes';
 
 /**
  * The keyable parameters of the nodes that were there before keys: transform,
@@ -130,11 +132,16 @@ const registerKeyframeParams = () => {
     ]);
 
     // A scoped colour node holds palette slots, each its source slot's grade
-    // composed with its own. With no colour node after it on the object, no slot
-    // was composed from these, and they can be written again in place.
+    // composed with its own. With no colour node after it on the object - a
+    // scoped one, or a look node grading rows (opacity, colour match,
+    // exposure) - no slot was composed from these, and they can be written
+    // again in place.
     keyableLive(ScopedColorOp, (op, later) => {
         const map = (op as any).paletteMap as Map<number, number> | null;
-        if (!map || later.some(o => principalOp(o) instanceof ScopedColorOp && (principalOp(o) as ScopedColorOp).splat === op.splat)) {
+        if (!map || later.some((o) => {
+            const p = principalOp(o);
+            return (p instanceof ScopedColorOp || p instanceof GradeRowsOp) && p.splat === op.splat;
+        })) {
             return false;
         }
         const palette = op.splat.gradePalette;
@@ -168,6 +175,37 @@ const registerKeyframeParams = () => {
         });
         return true;
     });
+
+    // ---- the rule select nodes (select-nodes.ts): their numbers, in `params`
+
+    const selectSpecs = (ids: string[], integer: string[] = []) => ids.map((id): ParamSpec<SelectionNodeOp> => ({
+        id,
+        integer: integer.includes(id) || undefined,
+        get: op => op.params[id],
+        set: (op, v) => {
+            op.params[id] = v;
+            op.invalidate();
+        }
+    }));
+    keyable(MotionSelectOp, selectSpecs(['min', 'max']));
+    keyable(ColourSelectOp, selectSpecs(['r', 'g', 'b', 'tolerance', 'hue', 'saturation', 'brightness']));
+    keyable(AttributeSelectOp, selectSpecs(['min', 'max']));
+    keyable(GrowSelectOp, selectSpecs(['radius', 'steps', 'frames'], ['steps']));
+    keyable(RegionSelectOp, selectSpecs(['px', 'py', 'pz', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz']));
+
+    // Each is driven by the timeline like any keyed node and selects again
+    // as it moves - but a region on a 4D model asks for its place at each
+    // frame of the model by itself (its gaussians, each at its own time,
+    // against the region at that time): it reads the keys, not the value
+    // the timeline put in. The keys' frames are the model's there.
+    SelectionNodeOp.keyed = (op, key, frame) => {
+        if (!(op instanceof RegionSelectOp) || !op.splat?.motion) return undefined;
+        const track = trackOf(op, key);
+        return track ? evaluate(track, frame) : undefined;
+    };
+    // so for it the timeline moving changes nothing (RegionSelectOp.animate
+    // replays it when its keys change)
+    keyableLive(RegionSelectOp, op => !!op.splat?.motion);
 };
 
 export { registerKeyframeParams };

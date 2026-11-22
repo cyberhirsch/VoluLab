@@ -499,6 +499,8 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                 const prepareFrame = async (frameTime: number, skipSort = false): Promise<Splat | null> => {
                     // Fire timeline.time for camera animation interpolation
                     events.fire('timeline.time', frameTime);
+                    // keyed and tracked nodes replay for the new time
+                    await events.invoke('keyframes.settled');
 
                     // manually update the camera so position and rotation are correct
                     scene.camera.onUpdate(0);
@@ -820,6 +822,12 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                 scene.camera.clearPass.setClearColor(nullClr);
                 scene.lockedRenderMode = false;
                 scene.forceRender = true;       // camera likely moved, finish with normal render
+
+                // back to the frame the timeline stands on, keys and all: the
+                // export left everything at its last time, between frames
+                const back = events.invoke('timeline.frame') ?? 0;
+                events.fire('timeline.time', back);
+                await Promise.resolve(events.invoke('plysequence.setFrameAsync', back)).catch((): null => null);
 
                 events.fire('progressEnd');
             }

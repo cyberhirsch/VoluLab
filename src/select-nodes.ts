@@ -513,7 +513,24 @@ class RegionSelectOp extends SelectionNodeOp {
         return [from, to];
     }
 
+    // the keys the region last ran with, on a 4D model
+    private ranKeys = '';
+
+    /**
+     * On a 4D model the keyed region is read per frame of the model when it
+     * runs (see `hits`), so the timeline moving changes nothing; its keys
+     * changing does, and has the node run again (keyframe-driver.ts).
+     */
+    animate(_frame: number, _later: EditOp[]) {
+        // (the driver asks applied nodes only)
+        if (!this.splat?.motion) return false;
+        if (JSON.stringify((this as { keys?: unknown }).keys ?? null) === this.ranKeys) return false;
+        this.invalidate();
+        return true;
+    }
+
     protected hits(splat: Splat) {
+        this.ranKeys = JSON.stringify((this as { keys?: unknown }).keys ?? null);
         const n = splat.splatData.numSplats;
         const out = new Uint8Array(n);
         const centers = worldCenters(splat);

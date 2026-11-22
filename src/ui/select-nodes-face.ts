@@ -1,5 +1,6 @@
 import { Color, Mat4, Vec3 } from 'playcanvas';
 
+import { addKeyControls } from './keyframe-ui';
 import { i18n } from './localization';
 import { fieldDefault } from './value-fields';
 import { EditOp, MultiOp, SelectMode, SelectOp } from '../edit-ops';
@@ -101,9 +102,13 @@ class Face {
         row.appendChild(choices);
     }
 
-    /** number fields in a row, one per entry: [value, neutral] */
-    numbers(label: string, values: number[], neutral: number, step: number, apply: (v: number[]) => void) {
+    /**
+     * number fields in a row, one per entry: [value, neutral]. `keyed`: the
+     * op's parameter behind each field, for a key button each (keyframes.ts)
+     */
+    numbers(label: string, values: number[], neutral: number, step: number, apply: (v: number[]) => void, keyed?: { op: EditOp, ids: string[] }) {
         const row = this.row(label);
+        if (keyed) this.keyButtons(row, keyed.op, keyed.ids, label);
         const fields = values.map((v) => {
             const input = document.createElement('input');
             input.type = 'number';
@@ -122,8 +127,24 @@ class Face {
         return fields;
     }
 
-    number(label: string, value: number, neutral: number, step: number, apply: (v: number) => void) {
-        return this.numbers(label, [value], neutral, step, v => apply(v[0]))[0];
+    number(label: string, value: number, neutral: number, step: number, apply: (v: number) => void, keyed?: { op: EditOp, id: string }) {
+        return this.numbers(label, [value], neutral, step, v => apply(v[0]), keyed && { op: keyed.op, ids: [keyed.id] })[0];
+    }
+
+    // after the fields (queued: they go in first), on the row for one, in a
+    // row under it for several, as the node pane does
+    private keyButtons(row: HTMLElement, op: EditOp, ids: string[], label: string) {
+        queueMicrotask(() => {
+            if (ids.length === 1) {
+                addKeyControls(this.events, op, ids[0], row, this.body, label);
+                return;
+            }
+            const keys = document.createElement('div');
+            keys.className = 'kf-keys';
+            row.after(keys);
+            ids.forEach(id => addKeyControls(this.events, op, id, keys, this.body, `${label} ${id}`));
+            if (!keys.childElementCount) keys.remove();
+        });
     }
 
     text(label: string, value: string, apply: (v: string) => void) {
@@ -292,7 +313,7 @@ const buildMotion = (face: Face, op: MotionSelectOp) => {
     face.numbers(t('node.selmotion.range'), [op.params.min, op.params.max], 0, 0.001, (v) => {
         op.setParam('min', Math.min(v[0], v[1]));
         op.setParam('max', Math.max(v[0], v[1]));
-    });
+    }, { op, ids: ['min', 'max'] });
     if (splat.motion) {
         face.histogram(op.values(splat), op.params.min, op.params.max, true, (a, b) => {
             op.setParam('min', a);
@@ -339,11 +360,11 @@ const buildColour = (face: Face, op: ColourSelectOp) => {
     ], op.space, s => op.setSpace(s));
 
     if (op.space === 'rgb') {
-        face.number(t('node.selcolour.tolerance'), op.params.tolerance, 0.2, 0.01, v => op.setParam('tolerance', Math.max(0, v)));
+        face.number(t('node.selcolour.tolerance'), op.params.tolerance, 0.2, 0.01, v => op.setParam('tolerance', Math.max(0, v)), { op, id: 'tolerance' });
     } else {
-        face.number(t('node.selcolour.hue'), op.params.hue, 20, 1, v => op.setParam('hue', Math.max(0, v)));
-        face.number(t('node.selcolour.saturation'), op.params.saturation, 0.3, 0.01, v => op.setParam('saturation', Math.max(0, v)));
-        face.number(t('node.selcolour.brightness'), op.params.brightness, 0.3, 0.01, v => op.setParam('brightness', Math.max(0, v)));
+        face.number(t('node.selcolour.hue'), op.params.hue, 20, 1, v => op.setParam('hue', Math.max(0, v)), { op, id: 'hue' });
+        face.number(t('node.selcolour.saturation'), op.params.saturation, 0.3, 0.01, v => op.setParam('saturation', Math.max(0, v)), { op, id: 'saturation' });
+        face.number(t('node.selcolour.brightness'), op.params.brightness, 0.3, 0.01, v => op.setParam('brightness', Math.max(0, v)), { op, id: 'brightness' });
     }
     outcome(face, op);
     face.note(t('node.selcolour.note'));
@@ -422,7 +443,7 @@ const buildRegion = (face: Face, op: RegionSelectOp) => {
     ], op.shape, s => op.setShape(s));
     const p = op.params;
     const triple = (label: string, keys: string[], neutral: number, step: number) => {
-        face.numbers(label, keys.map(k => p[k]), neutral, step, v => keys.forEach((k, i) => op.setParam(k, v[i])));
+        face.numbers(label, keys.map(k => p[k]), neutral, step, v => keys.forEach((k, i) => op.setParam(k, v[i])), { op, ids: keys });
     };
     triple(t('node.selregion.position'), ['px', 'py', 'pz'], 0, 0.05);
     triple(t('node.selregion.rotation'), ['rx', 'ry', 'rz'], 0, 1);
@@ -445,7 +466,7 @@ const buildAttribute = (face: Face, op: AttributeSelectOp) => {
     face.numbers(t('node.selmotion.range'), [op.params.min, op.params.max], 0, 0.01, (v) => {
         op.setParam('min', Math.min(v[0], v[1]));
         op.setParam('max', Math.max(v[0], v[1]));
-    });
+    }, { op, ids: ['min', 'max'] });
     face.histogram(op.values(op.splat), op.params.min, op.params.max, op.logScale, (a, b) => {
         op.setParam('min', a);
         op.setParam('max', b);
@@ -470,10 +491,10 @@ const buildGrow = (face: Face, op: GrowSelectOp) => {
         ['grow', t('node.selgrow.grow')],
         ['shrink', t('node.selgrow.shrink')]
     ], op.direction, d => op.setDirection(d));
-    face.number(t('node.selgrow.radius'), op.params.radius, 0.05, 0.001, v => op.setParam('radius', Math.max(0, v)));
-    face.number(t('node.selgrow.steps'), op.params.steps, 1, 1, v => op.setParam('steps', Math.max(1, Math.round(v))));
+    face.number(t('node.selgrow.radius'), op.params.radius, 0.05, 0.001, v => op.setParam('radius', Math.max(0, v)), { op, id: 'radius' });
+    face.number(t('node.selgrow.steps'), op.params.steps, 1, 1, v => op.setParam('steps', Math.max(1, Math.round(v))), { op, id: 'steps' });
     if (op.splat.motion) {
-        face.number(t('node.selgrow.frames'), op.params.frames, 0, 1, v => op.setParam('frames', Math.max(0, Math.round(v))));
+        face.number(t('node.selgrow.frames'), op.params.frames, 0, 1, v => op.setParam('frames', Math.max(0, Math.round(v))), { op, id: 'frames' });
     }
     outcome(face, op);
     face.note(t(op.splat.motion ? 'node.selgrow.note-4d' : 'node.selgrow.note'));

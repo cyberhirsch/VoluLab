@@ -1,3 +1,4 @@
+import { CombineOp } from './combine-ops';
 import { EditOp, principalOp } from './edit-ops';
 import { Events } from './events';
 import { Keyed, ParamSpec, paramsOf, setKey, trackOf, valueAt } from './keyframes';
@@ -52,14 +53,19 @@ const liveOf = (op: object): LiveUpdate<any> | null => {
     return null;
 };
 
-const same = (a: number, b: number) => a === b || Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+// Equal as far as a parameter can tell: some read back through float32
+// storage (a crop's volume is a Mat4), so a value set is not the value read
+const same = (a: number, b: number) => a === b || Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a), Math.abs(b));
 
 const registerKeyframeDriver = (events: Events) => {
-    // per op: the frame it was last driven at and the values it was given
-    const driven = new WeakMap<object, { frame: number, values: Map<string, number> }>();
+    // per op: the frame it was last driven at, the values it was given
+    // (want) and what it read back once they were set (got). An edit is a
+    // read that differs from `got`, never from `want`: a value need not come
+    // back exactly as it was set
+    const driven = new WeakMap<object, { frame: number, want: Map<string, number>, got: Map<string, number> }>();
 
     let frame = 0;
-    let running = false;
+    let running: Promise<void> | null = null;
     let again = false;
 
     const history = () => (events.invoke('edit.history') as { ops: EditOp[], cursor: number }) ?? { ops: [], cursor: 0 };
@@ -76,74 +82,103 @@ const registerKeyframeDriver = (events: Events) => {
             if (!was || was.frame !== at) continue;
             keyedSpecs(op).forEach((spec) => {
                 const now = spec.get(op);
-                const before = was.values.get(spec.id);
+                const before = was.got.get(spec.id);
                 if (before !== undefined && Number.isFinite(now) && !same(now, before)) {
                     setKey(op, spec.id, at, now);
-                    was.values.set(spec.id, now);
+                    was.want.set(spec.id, now);
+                    was.got.set(spec.id, now);
                 }
             });
         }
     };
 
-    const drive = async () => {
+    const passes = async () => {
+        do {
+            again = false;
+            catchEdits();
+            const at = frame;
+            const { ops, cursor } = history();
+            const replays: { op: EditOp, apply: () => void }[] = [];
+            // the objects changed in place, which no edit tells anyone about
+            const touched = new Set<unknown>();
+            const touch = (o: any) => {
+                touched.add(o.splat);
+                if (o.target) touched.add(o.target);
+            };
+
+            for (let i = 0; i < cursor; ++i) {
+                const outer = ops[i];
+                if (outer.bypassed) continue;
+                const op = principalOp(outer);
+                const later = ops.slice(i + 1, cursor).filter(o => !o.bypassed);
+
+                const specs = keyedSpecs(op);
+                if (specs.length) {
+                    const was = driven.get(op);
+                    const want = new Map<string, number>();
+                    let changed = false;
+                    specs.forEach((spec) => {
+                        const v = valueAt(op as Keyed, spec, at);
+                        want.set(spec.id, v);
+                        // given this value already, and it reads as it did then
+                        const kept = was && was.want.has(spec.id) && same(v, was.want.get(spec.id)) &&
+                            was.got.has(spec.id) && same(spec.get(op), was.got.get(spec.id));
+                        if (!kept && !same(v, spec.get(op))) changed = true;
+                    });
+                    const got = new Map<string, number>();
+                    if (!changed) specs.forEach(spec => got.set(spec.id, spec.get(op)));
+                    driven.set(op, { frame: at, want, got });
+                    if (changed) {
+                        const apply = () => specs.forEach((spec) => {
+                            spec.set(op, want.get(spec.id));
+                            got.set(spec.id, spec.get(op));
+                        });
+                        const update = liveOf(op);
+                        // set first, then shown in place - or handed to
+                        // the replay, which reverses the node first
+                        let done = false;
+                        if (update) {
+                            apply();
+                            done = update(op, later);
+                            if (done) touch(op);
+                        }
+                        if (!done) replays.push({ op: outer, apply });
+                    }
+                }
+
+                if (isFrameDriven(op)) {
+                    if (op.animate(at, later)) replays.push({ op: outer, apply: () => {} });
+                    else touch(op);
+                }
+            }
+
+            // A merge or switch fed by one of them is built again when it
+            // finds its input changed, which it looks for after an edit; a
+            // replay is one, a change in place is not
+            if (touched.size && ops.slice(0, cursor).some(o => o instanceof CombineOp && !o.bypassed && o.inputs.some(s => touched.has(s)))) {
+                events.invoke('combine.check');
+            }
+
+            // in chain order; each finds its index again, since a replay
+            // can be queued behind other edits
+            for (const { op, apply } of replays) {
+                const index = history().ops.indexOf(op);
+                if (index >= 0) await events.invoke('edit.refresh', index, apply);
+            }
+        } while (again);
+    };
+
+    // Resolves once the frame is shown through every key, the replays it
+    // asked for included; a call while a pass runs joins that pass
+    const drive = (): Promise<void> => {
         if (running) {
             again = true;
-            return;
+            return running;
         }
-        running = true;
-        try {
-            do {
-                again = false;
-                catchEdits();
-                const at = frame;
-                const { ops, cursor } = history();
-                const replays: { op: EditOp, apply: () => void }[] = [];
-
-                for (let i = 0; i < cursor; ++i) {
-                    const outer = ops[i];
-                    if (outer.bypassed) continue;
-                    const op = principalOp(outer);
-                    const later = ops.slice(i + 1, cursor).filter(o => !o.bypassed);
-
-                    const specs = keyedSpecs(op);
-                    if (specs.length) {
-                        const values = new Map<string, number>();
-                        let changed = false;
-                        specs.forEach((spec) => {
-                            const v = valueAt(op as Keyed, spec, at);
-                            values.set(spec.id, v);
-                            if (!same(v, spec.get(op))) changed = true;
-                        });
-                        driven.set(op, { frame: at, values });
-                        if (changed) {
-                            const apply = () => specs.forEach(spec => spec.set(op, values.get(spec.id)));
-                            const update = liveOf(op);
-                            // set first, then shown in place - or handed to
-                            // the replay, which reverses the node first
-                            let done = false;
-                            if (update) {
-                                apply();
-                                done = update(op, later);
-                            }
-                            if (!done) replays.push({ op: outer, apply });
-                        }
-                    }
-
-                    if (isFrameDriven(op) && op.animate(at, later)) {
-                        replays.push({ op: outer, apply: () => {} });
-                    }
-                }
-
-                // in chain order; each finds its index again, since a replay
-                // can be queued behind other edits
-                for (const { op, apply } of replays) {
-                    const index = history().ops.indexOf(op);
-                    if (index >= 0) await events.invoke('edit.refresh', index, apply);
-                }
-            } while (again);
-        } finally {
-            running = false;
-        }
+        running = passes().finally(() => {
+            running = null;
+        });
+        return running;
     };
 
     const toFrame = (f: number) => {
@@ -153,8 +188,13 @@ const registerKeyframeDriver = (events: Events) => {
     };
 
     events.on('timeline.frame', (f: number) => toFrame(f));
-    // the video export steps the time between frames
+    // playback and the video export step the time between frames
     events.on('timeline.time', (t: number) => toFrame(t));
+    // once playback stops, the frame shown is the whole one the timeline
+    // stands on: a key typed then goes there, not between frames
+    events.on('timeline.playing', (playing: boolean) => {
+        if (!playing) toFrame(events.invoke('timeline.frame') ?? frame);
+    });
 
     // after any edit: keys may have been added, a node keyed, a value typed.
     // While the driver runs its own replays end in this too; the pass it
@@ -164,6 +204,8 @@ const registerKeyframeDriver = (events: Events) => {
     // the frame keys are put at, and the driver's way in for the UI
     events.function('keyframes.frame', () => frame);
     events.function('keyframes.drive', () => drive());
+    // the video export: resolves once the time it set is shown through the keys
+    events.function('keyframes.settled', () => running ?? Promise.resolve());
 };
 
 export { registerKeyframeDriver, keyableLive, type FrameDriven, type LiveUpdate };

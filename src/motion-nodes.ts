@@ -73,6 +73,13 @@ const modelTimeAt = (splat: Splat, frame: number) => {
     return at === null ? null : at / frames;
 };
 
+/**
+ * The whole frame the model shows at a timeline time: playback and the video
+ * export step the time between frames, the model steps a frame at a time
+ * (editor.ts, sequence.ts), and what follows it has to stand on that frame.
+ */
+const shownFrame = (time: number) => Math.floor(time + 1e-4);
+
 /** A fingerprint of which rows are selected: a fit is kept while it does not change. */
 const selectionPrint = (splat: Splat) => {
     const state = splat.splatData.getProp('state') as Uint8Array;
@@ -207,7 +214,8 @@ class TrackBase {
     }
 
     protected fit() {
-        const print = `${selectionPrint(this.splat)}:${this.ref}:${this.splat.motionFrames}`;
+        // the motion scale too: the fit is of the travel as it is drawn
+        const print = `${selectionPrint(this.splat)}:${this.ref}:${this.splat.motionFrames}:${this.splat.motionScale}`;
         if (print !== this.print || !this.track) {
             this.track = MotionTrack.fit(this.splat, this.ref);
             this.print = print;
@@ -217,7 +225,7 @@ class TrackBase {
 
     /** The world-space motion of the track at a timeline frame: where the reference pose goes. */
     protected worldMotion(frame: number, base: Transform): Mat4 | null {
-        const t = modelTimeAt(this.splat, frame);
+        const t = modelTimeAt(this.splat, shownFrame(frame));
         if (t === null || !this.track) return null;
         const W = placementMatrix(base);
         const inv = W.clone().invert();
@@ -332,7 +340,7 @@ class StabiliseOp extends TrackBase implements FrameDriven {
 
     private place(frame: number) {
         if (!this.base || !this.splat.scene) return;
-        const t = modelTimeAt(this.splat, frame);
+        const t = modelTimeAt(this.splat, shownFrame(frame));
         let m: Mat4 | null = t === null || !this.track ? null : this.track.at(t);
         if (m && this.strength !== 1) {
             const s = Math.max(0, Math.min(1, this.strength));
@@ -573,6 +581,10 @@ class GroundPlaneOp extends TransformNodeOp {
  * node's keyed speed curve (a constant without keys). Between frames the
  * model is shown between frames: a 4D model is continuous in time, so a
  * slow ramp is a slow motion, not a held frame.
+ *
+ * A speed below zero at the start plays the sequence backwards: it starts
+ * at the last frame and the integral takes it down. A speed of zero
+ * throughout holds the first frame for as long as the sequence was.
  */
 class WarpMap implements TimeMap {
     private op: TimeWarpOp;
@@ -622,6 +634,11 @@ class WarpMap implements TimeMap {
         return this.table[i] + (this.table[i + 1] - this.table[i]) * u;
     }
 
+    /** where the sequence starts: its end when it starts out backwards */
+    private start(frames: number) {
+        return this.speedAt(0) < 0 ? frames - 1 : 0;
+    }
+
     /** The changed curve, if it changed. */
     get signatureNow() {
         return this.signature();
@@ -630,18 +647,21 @@ class WarpMap implements TimeMap {
     span(frames: number) {
         // as long as it takes the curve to get through the sequence, within
         // reason: a curve that stalls is cut off at ten times the length
+        if (!trackOf(this.op, 'speed') && this.op.speed === 0) return frames;
         const cap = Math.max(2, frames * 10);
         this.build(cap);
         const last = frames - 1;
+        const start = this.start(frames);
         for (let f = 1; f <= cap; ++f) {
-            if (this.integral(f) >= last - 1e-9) return f + 1;
+            const p = start + this.integral(f);
+            if (start === 0 ? p >= last - 1e-9 : p <= 1e-9) return f + 1;
         }
         return cap;
     }
 
     at(f: number, frames: number) {
         this.build(Math.max(2, frames * 10));
-        return Math.max(0, Math.min(frames - 1, this.integral(f)));
+        return Math.max(0, Math.min(frames - 1, this.start(frames) + this.integral(f)));
     }
 }
 
