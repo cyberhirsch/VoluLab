@@ -211,11 +211,15 @@ vec4 applyGrade(vec4 color) {
 }
 
 varying mediump vec4 texCoord_flags;            // xy: texCoord, z: selected, w: locked
-varying mediump vec4 color;
+#if PICK_PASS
+    varying highp vec4 color;                   // the render passes carry depth and velocity in it
+#else
+    varying mediump vec4 color;
+#endif
 varying mediump float defocus;                  // 0 sharp, ->1 fully out of focus
 
 #if PICK_PASS
-    uniform uint pickOp;                        // 0: add, 1: remove, 2: set
+    uniform uint pickOp;                        // 0: add, 1: remove, 2: set, 3: render passes (what the frame draws)
     uniform int pickMode;                       // 0: pick id, 1: depth estimation, 2: render pass data, 3: selection matte
     #ifdef SPLAT_MOTION
         uniform float passMotionStep;           // normalised model time one timeline frame on (render passes)
@@ -250,9 +254,16 @@ void main(void) {
                 gl_Position = discardVec;
                 return;
             }
-        } else {
+        } else if (pickOp == 2u) {
             // set: skip deleted and locked splats
             if ((vertexState & 6u) != 0u) {
+                gl_Position = discardVec;
+                return;
+            }
+        } else {
+            // render passes: what the frame draws - all but deleted splats
+            // and holdouts; locked ones at the locked colour's alpha
+            if ((vertexState & 4u) != 0u || holdoutState != 0u) {
                 gl_Position = discardVec;
                 return;
             }
@@ -337,16 +348,19 @@ void main(void) {
                 SplatCenter passNext;
                 passNext.modelCenterOriginal = modelCenter;
                 passNext.modelCenterModified = modelCenter;
-                if (initCenter(modelCenter + motion.xyz * passMotionStep, passNext)) {
+                if (initCenter(modelCenter + motion.xyz * (passMotionStep * motionScale), passNext)) {
                     passVelocity = passNext.proj.xy / passNext.proj.w - center.proj.xy / center.proj.w;
                 }
             #endif
             vec4 clr = getColor();
-            color = vec4(-center.view.z, passVelocity, 1.0) * clr.a * motionAlpha;
+            float passLocked = (vertexState & 2u) != 0u ? lockedClr.a : 1.0;
+            color = vec4(-center.view.z, passVelocity, 1.0) * clamp(clr.a * motionAlpha, 0.0, 1.0) * passLocked;
         } else if (pickMode == 3) {
             // render passes: the selection matte
             vec4 clr = getColor();
-            color = vec4((vertexState & 1u) != 0u ? 1.0 : 0.0, 0.0, 0.0, 1.0) * clr.a * motionAlpha;
+            float passLocked = (vertexState & 2u) != 0u ? lockedClr.a : 1.0;
+            // a locked gaussian is never selected: it only covers what is behind
+            color = vec4((vertexState & 3u) == 1u ? 1.0 : 0.0, 0.0, 0.0, 1.0) * clamp(clr.a * motionAlpha, 0.0, 1.0) * passLocked;
         } else {
             // pick id
             uvec4 bits = (uvec4(splat.index) >> uvec4(0u, 8u, 16u, 24u)) & uvec4(255u);
@@ -458,7 +472,11 @@ void main(void) {
 
 const fragmentShader = /* glsl*/`
 varying mediump vec4 texCoord_flags;
-varying mediump vec4 color;
+#if PICK_PASS
+    varying highp vec4 color;                   // the render passes carry depth and velocity in it
+#else
+    varying mediump vec4 color;
+#endif
 varying mediump float defocus;
 
 uniform bool outlineMode;
@@ -507,7 +525,7 @@ void main(void) {
     #if PICK_PASS
         if (pickMode >= 1) {
             // depth estimation, and the render passes' data
-            mediump float alpha = normExp(A);
+            highp float alpha = normExp(A);
             if (alpha < 1.0 / 255.0) {
                 discard;
             }
@@ -794,7 +812,7 @@ varying vColor: vec4f;
 varying vDefocus: f32;              // 0 sharp, ->1 fully out of focus
 
 #ifdef PICK_PASS
-    uniform pickOp: u32;            // 0: add, 1: remove, 2: set
+    uniform pickOp: u32;            // 0: add, 1: remove, 2: set, 3: render passes (what the frame draws)
     uniform pickMode: i32;          // 0: pick id, 1: depth estimation, 2: render pass data, 3: selection matte
     #ifdef SPLAT_MOTION
         uniform passMotionStep: f32;    // normalised model time one timeline frame on (render passes)
@@ -852,9 +870,15 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
                 output.position = discardVec;
                 return output;
             }
-        } else {
+        } else if (uniform.pickOp == 2u) {
             // set: skip deleted and locked splats
             if ((vertexState & 6u) != 0u) {
+                output.position = discardVec;
+                return output;
+            }
+        } else {
+            // render passes: all but deleted splats and holdouts (see the GLSL twin)
+            if ((vertexState & 4u) != 0u || holdoutState != 0u) {
                 output.position = discardVec;
                 return output;
             }
@@ -935,16 +959,18 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
                 var passNext: SplatCenter;
                 passNext.modelCenterOriginal = modelCenter;
                 passNext.modelCenterModified = modelCenter;
-                if (initCenter(modelCenter + motion.xyz * uniform.passMotionStep, &passNext)) {
+                if (initCenter(modelCenter + motion.xyz * (uniform.passMotionStep * uniform.motionScale), &passNext)) {
                     passVelocity = passNext.proj.xy / passNext.proj.w - center.proj.xy / center.proj.w;
                 }
             #endif
             let clr: vec4f = getColor();
-            output.vColor = vec4f(-center.view.z, passVelocity, 1.0) * clr.a * motionAlpha;
+            let passLocked: f32 = select(1.0, uniform.lockedClr.a, (vertexState & 2u) != 0u);
+            output.vColor = vec4f(-center.view.z, passVelocity, 1.0) * clamp(clr.a * motionAlpha, 0.0, 1.0) * passLocked;
         } else if (uniform.pickMode == 3) {
             // render passes: the selection matte
             let clr: vec4f = getColor();
-            output.vColor = vec4f(select(0.0, 1.0, (vertexState & 1u) != 0u), 0.0, 0.0, 1.0) * clr.a * motionAlpha;
+            let passLocked: f32 = select(1.0, uniform.lockedClr.a, (vertexState & 2u) != 0u);
+            output.vColor = vec4f(select(0.0, 1.0, (vertexState & 3u) == 1u), 0.0, 0.0, 1.0) * clamp(clr.a * motionAlpha, 0.0, 1.0) * passLocked;
         } else {
             // pick id
             let bits: vec4<u32> = (vec4<u32>(splat.index) >> vec4<u32>(0u, 8u, 16u, 24u)) & vec4<u32>(255u);

@@ -37,10 +37,14 @@ import { resolveTime } from './time-map';
  *   is in front of them (PNG, grey)
  *
  * Depth, velocity and matte come from the picker's blended pass
- * (pickMode 2 and 3 in shaders/splat-shader.ts), which renders into the
- * camera's half-float colour target: colour = sum of weight * value,
- * alpha = what light is left. They see the gaussians sharp, without depth
- * of field or the lens, as data passes are.
+ * (pickOp 3, pickMode 2 and 3 in shaders/splat-shader.ts), which renders
+ * into a half-float target of its own: colour = sum of weight * value,
+ * alpha = what light is left. It draws what the frame draws - locked
+ * gaussians at the locked colour's alpha, no deleted ones or holdouts -
+ * and goes through the camera node's distortion (k1, k2) as the beauty
+ * does, so the passes line up pixel for pixel. They see the gaussians
+ * sharp, without depth of field or motion blur, and without the lens's
+ * colour fringes and vignette, as data passes are.
  */
 
 type PassSink = {
@@ -170,16 +174,71 @@ const greyPng = (values: (i: number) => number, width: number, height: number) =
     return encodePng(rgba, width, height);
 };
 
-/** How far one timeline frame moves a 4D object's model, in its normalised time. */
+/**
+ * How far one timeline frame moves a 4D object's model, in its normalised
+ * time. Of the step to the next frame and the one from the frame before,
+ * the shorter: where a time map loops, the next frame jumps back to the
+ * start, which is a cut, not motion.
+ */
 const motionStep = (splat: Splat, frame: number) => {
     const frames = splat.motionFrames;
     if (!(frames > 0)) return 0;
     const at = resolveTime(splat.timeMaps, frames, frame);
+    if (at === null) return 0;
     const next = resolveTime(splat.timeMaps, frames, frame + 1);
-    if (at !== null && next !== null) return (next - at) / frames;
     const prev = resolveTime(splat.timeMaps, frames, frame - 1);
-    if (at !== null && prev !== null) return (at - prev) / frames;
-    return 0;
+    const ahead = next !== null ? next - at : null;
+    const behind = prev !== null ? at - prev : null;
+    if (ahead === null) return behind === null ? 0 : behind / frames;
+    if (behind === null) return ahead / frames;
+    return (Math.abs(ahead) <= Math.abs(behind) ? ahead : behind) / frames;
+};
+
+/**
+ * The camera node's radial distortion (shaders/lens-shader.ts, distort and
+ * sampleAt), on a data pass read back as floats, rows top down: each pixel
+ * takes the bilinear sample the lens takes for it, outside the frame what
+ * the pass was cleared to. The data is weighted sums and coverage, so
+ * filtering it is what filtering the premultiplied beauty is.
+ */
+const distortData = (src: Float32Array, width: number, height: number, k1: number, k2: number, fill: number[]) => {
+    if (!k1 && !k2) return src;
+    const out = new Float32Array(src.length);
+    const aspect = width / height;
+    for (let y = 0; y < height; y++) {
+        // the lens works bottom up (gl_FragCoord); the distortion is even
+        // in y, so the row mirrored is the same row here
+        const py = ((y + 0.5) / height - 0.5) * 2;
+        for (let x = 0; x < width; x++) {
+            const px = ((x + 0.5) / width - 0.5) * 2 * aspect;
+            const r2 = px * px + py * py;
+            const f = 1 + k1 * r2 + k2 * r2 * r2;
+            const u = (px * f / aspect) * 0.5 + 0.5;
+            const v = (py * f) * 0.5 + 0.5;
+            const o = (y * width + x) * 4;
+            if (u < 0 || u > 1 || v < 0 || v > 1) {
+                out[o] = fill[0];
+                out[o + 1] = fill[1];
+                out[o + 2] = fill[2];
+                out[o + 3] = fill[3];
+                continue;
+            }
+            // texel space, clamped at the edges as the frame is
+            const tx = Math.max(0, Math.min(width - 1, u * width - 0.5));
+            const ty = Math.max(0, Math.min(height - 1, v * height - 0.5));
+            const x0 = Math.floor(tx), y0 = Math.floor(ty);
+            const x1 = Math.min(width - 1, x0 + 1), y1 = Math.min(height - 1, y0 + 1);
+            const fx = tx - x0, fy = ty - y0;
+            const a = (y0 * width + x0) * 4, b = (y0 * width + x1) * 4;
+            const c = (y1 * width + x0) * 4, d = (y1 * width + x1) * 4;
+            for (let k = 0; k < 4; k++) {
+                const top = src[a + k] + (src[b + k] - src[a + k]) * fx;
+                const bottom = src[c + k] + (src[d + k] - src[c + k]) * fx;
+                out[o + k] = top + (bottom - top) * fy;
+            }
+        }
+    }
+    return out;
 };
 
 const pad = (n: number) => `${n}`.padStart(4, '0');
@@ -237,7 +296,8 @@ const renderPasses = async (scene: Scene, events: Events, settings: RenderPassSe
         visible().forEach((s) => {
             if (s.motion) s.entity.gsplat.instance.material.setParameter('passMotionStep', motionStep(s, frame));
         });
-        device.scope.resolve('pickOp').setValue(2);
+        // what the frame draws, locked gaussians included (splat-shader.ts)
+        device.scope.resolve('pickOp').setValue(3);
         device.scope.resolve('pickMode').setValue(mode);
         const target = dataTarget;
         picker.blendState = passBlend;
@@ -250,8 +310,12 @@ const renderPasses = async (scene: Scene, events: Events, settings: RenderPassSe
         const read = target.colorBuffer.read(0, 0, width, height, { renderTarget: target, immediate: device.isWebGPU });
         scene.lockedRender = true;
         await postRender();
-        const pixels = await read as Uint16Array;
-        return flipRows(pixels.slice(), width, height, flip);
+        const pixels = flipRows((await read as Uint16Array).slice(), width, height, flip);
+        const values = new Float32Array(pixels.length);
+        for (let i = 0; i < pixels.length; i++) values[i] = half2Float(pixels[i]);
+        // the camera node's distortion, as the beauty has it (camera-effects.ts)
+        const lens = events.invoke('camera.effects');
+        return distortData(values, width, height, lens?.k1 ?? 0, lens?.k2 ?? 0, [0, 0, 0, 1]);
     };
 
     let written = 0;
@@ -299,11 +363,11 @@ const renderPasses = async (scene: Scene, events: Events, settings: RenderPassSe
                 const vx = new Float32Array(count);
                 const vy = new Float32Array(count);
                 for (let i = 0; i < count; i++) {
-                    const cover = 1 - half2Float(px[i * 4 + 3]);
+                    const cover = 1 - px[i * 4 + 3];
                     if (cover < 1e-4) continue;
-                    z[i] = half2Float(px[i * 4]) / cover;
-                    vx[i] = half2Float(px[i * 4 + 1]) / cover * width * 0.5;
-                    vy[i] = half2Float(px[i * 4 + 2]) / cover * height * 0.5;
+                    z[i] = px[i * 4] / cover;
+                    vx[i] = px[i * 4 + 1] / cover * width * 0.5;
+                    vy[i] = px[i * 4 + 2] / cover * height * 0.5;
                 }
                 if (wanted('depth')) await sink.write(name('depth', 'exr'), encodeExr(width, height, { Z: z }));
                 if (wanted('velocity')) await sink.write(name('velocity', 'exr'), encodeExr(width, height, { R: vx, G: vy }));
@@ -311,7 +375,7 @@ const renderPasses = async (scene: Scene, events: Events, settings: RenderPassSe
 
             if (wanted('matte')) {
                 const px = await blended(3, frame);
-                await sink.write(name('matte', 'png'), await greyPng(i => half2Float(px[i * 4]), width, height));
+                await sink.write(name('matte', 'png'), await greyPng(i => px[i * 4], width, height));
             }
 
             written++;
@@ -337,4 +401,4 @@ const renderPasses = async (scene: Scene, events: Events, settings: RenderPassSe
     return cancelled ? -1 : written;
 };
 
-export { type PassSink, renderPasses, encodeExr, half2Float };
+export { type PassSink, renderPasses, encodeExr, half2Float, motionStep, distortData };
