@@ -1,7 +1,7 @@
 import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { gradeMatrix, GradeParams } from './color-grade';
-import { CropOp, EditOp, EntityTransformOp, ScopedColorOp, SetSplatColorAdjustmentOp, TransformNodeOp, principalOp } from './edit-ops';
+import { CropOp, EditOp, ScopedColorOp, SetSplatColorAdjustmentOp, TransformNodeOp, placedBy, principalOp } from './edit-ops';
 import { composeGrades, toGrade } from './grade-palette';
 import { keyableLive } from './keyframe-driver';
 import { evaluate, keyable, ParamSpec, trackOf } from './keyframes';
@@ -16,10 +16,8 @@ import { AttributeSelectOp, ColourSelectOp, GrowSelectOp, MotionSelectOp, Region
 
 const AXES = ['x', 'y', 'z'] as const;
 
-const placesObject = (op: EditOp, splat: unknown) => {
-    const p = principalOp(op);
-    return (p instanceof EntityTransformOp || p instanceof TransformNodeOp) && p.splat === splat;
-};
+// an object, or a light, a primitive, a camera, a pose node's cameras
+const placesObject = (op: EditOp, subject: unknown) => placedBy(op) === subject;
 
 const cropTRS = (op: CropOp) => {
     const t = new Vec3();
@@ -87,7 +85,7 @@ const registerKeyframeParams = () => {
 
     // nothing after it places the object: moving the object is all there is to do
     keyableLive(TransformNodeOp, (op, later) => {
-        if (!op.applied || later.some(o => placesObject(o, op.splat))) return false;
+        if (!op.applied || later.some(o => placesObject(o, op.subject))) return false;
         op.preview();
         return true;
     });

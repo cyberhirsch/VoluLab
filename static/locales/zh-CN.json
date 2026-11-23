@@ -393,6 +393,8 @@
     "camera.focus-on-selection": "对焦到选中项",
     "node.transform.reset": "重置",
     "node.transform.note": "在上游节点的结果之上，围绕场景原点移动、旋转和缩放对象。",
+    "node.transform.cameras-note": "围绕场景原点移动、旋转和缩放姿态节点的相机及其点；训练节点用移动后的相机训练。相机只取一个缩放（三轴的平均值），不能镜像。",
+    "node.transform.aim-note": "在上方节点的基础上，围绕场景原点移动、旋转和缩放位置与瞄准点。之后的 Gizmo 拖动仍会直接设定其位置。",
     "node.delete.what": "删除",
     "node.delete.selected": "已选中",
     "node.delete.unselected": "未选中",

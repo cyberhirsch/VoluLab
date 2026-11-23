@@ -8,6 +8,7 @@ import { storeLookNodes } from './doc-looks';
 import { packMotion, storedMotion, unpackMotion } from './doc-motion';
 import { restoreStateNode, storeStateNodes } from './doc-nodes';
 import { restoreColourNodes, restoreTimeNodes, storeColourNodes, storeTimeNodes } from './doc-time';
+import { posesOf, restoreSubjectTransforms, storeSubjectTransforms } from './doc-transforms';
 import { DebugViewOp, EditOp, LightOp, PrimitiveOp, RelightOp, TransformNodeOp } from './edit-ops';
 import { ElementType } from './element';
 import { Events } from './events';
@@ -277,10 +278,12 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
             // camera objects come back as camera nodes, so they land in the
             // graph and in history the same way a fresh one does
+            const cameraOps: { output?: SceneCamera }[] = [];
             if (Array.isArray(document.cameras)) {
                 for (const stored of document.cameras) {
                     const op = events.invoke('camera.addNode');
                     op?.output?.docDeserialize(stored);
+                    cameraOps.push(op);
                 }
                 events.fire('edit.changed');
                 events.fire('camera.effects.refresh');
@@ -476,7 +479,14 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             restoreTimeNodes(document, loaded, later, events);
             restoreColourNodes(document, loaded, later, events);
             // import, pose and train nodes, wired once all are in (doc-datasets.ts)
-            const wireDatasets = await restoreDatasets(document, file, zipFs, loaded, scene, later, events);
+            const { wire: wireDatasets, poses } = await restoreDatasets(document, file, zipFs, loaded, scene, later, events);
+            // transform nodes on lights, primitives, cameras and pose nodes' cameras (doc-transforms.ts)
+            restoreSubjectTransforms(document, {
+                light: lightOps.map(op => op?.output),
+                primitive: primitiveOps.map(op => op?.output),
+                camera: cameraOps.map(op => op?.output),
+                pose: poses
+            }, later, events);
 
             // in, in order (the sort is stable, so nodes without a place
             // keep the order they were listed in), and where they were put
@@ -659,6 +669,15 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 return base ? { base, nodes } : null;
             });
 
+            // the transform nodes on lights, primitives, cameras and pose
+            // nodes' cameras, and where those are stored without them
+            const subjectTransforms = storeSubjectTransforms(allOps, cursor, {
+                light: lights,
+                primitive: primitives,
+                camera: cameras,
+                pose: posesOf(allOps, cursor)
+            }, placeOf);
+
             const document = {
                 // .vlp starts its own numbering; an .ssproj is version 0 of a
                 // different format and is detected by what it lacks
@@ -700,8 +719,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     };
                 }),
 
-                // each object's transform nodes, in the order of its chain
-                transforms: placements.flatMap((placed, i) => (placed?.nodes ?? []).map(node => ({
+                // each object's transform nodes, in the order of its chain,
+                // then those on lights, primitives, cameras and pose nodes
+                transforms: [...placements.flatMap((placed, i) => (placed?.nodes ?? []).map(node => ({
                     splat: i,
                     position: pack3(node.newt.position),
                     rotation: pack3(node.euler),
@@ -714,7 +734,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     ...((node as any).docSettings ?? {}),
                     ...((node as any).reference instanceof Splat ? { reference: splats.indexOf((node as any).reference) } : {}),
                     ...placeOf(node)
-                }))),
+                }))), ...subjectTransforms.transforms],
 
                 // each object's select, hide and delete nodes
                 nodes: stateNodes.flatMap(stored => (stored?.nodes ?? []).map((node) => {
@@ -744,14 +764,15 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     }];
                 }),
 
-                // the camera objects: pose, lens, lock and their animation
-                cameras: cameras.map(c => c.docSerialize()),
+                // the camera objects: pose, lens, lock and their animation,
+                // each where it stands without its transform nodes
+                cameras: cameras.map(c => ({ ...c.docSerialize(), ...subjectTransforms.base(c) })),
 
                 // the lights
-                lights: lights.map(l => l.docSerialize()),
+                lights: lights.map(l => ({ ...l.docSerialize(), ...subjectTransforms.base(l) })),
 
                 // the boxes, spheres and cylinders
-                primitives: primitives.map(p => p.docSerialize()),
+                primitives: primitives.map(p => ({ ...p.docSerialize(), ...subjectTransforms.base(p) })),
 
                 // voxel objects; each grid's cells and colours are in voxels_<i>.bin
                 voxels: voxels.map(v => ({

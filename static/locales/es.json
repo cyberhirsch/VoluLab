@@ -393,6 +393,8 @@
     "camera.focus-on-selection": "Enfocar en la selección",
     "node.transform.reset": "restablecer",
     "node.transform.note": "Mueve, gira y escala el objeto respecto al origen de la escena, sobre los nodos anteriores.",
+    "node.transform.cameras-note": "Mueve, gira y escala las cámaras del nodo de pose y sus puntos alrededor del origen de la escena; el nodo de entrenamiento entrena con ellas donde quedan. Una cámara admite una sola escala, la media de las tres, y ningún reflejo.",
+    "node.transform.aim-note": "Mueve, gira y escala la posición y el punto de mira alrededor del origen de la escena, sobre los nodos anteriores. Un arrastre del gizmo posterior sigue fijándolo directamente.",
     "node.delete.what": "eliminar",
     "node.delete.selected": "seleccionadas",
     "node.delete.unselected": "no seleccionadas",

@@ -393,6 +393,8 @@
     "camera.focus-on-selection": "Focar na seleção",
     "node.transform.reset": "redefinir",
     "node.transform.note": "Move, gira e escala o objeto em torno da origem da cena, sobre os nós anteriores.",
+    "node.transform.cameras-note": "Move, gira e escala as câmeras do nó de pose e seus pontos em torno da origem da cena; o nó de treino treina com elas onde ficarem. Uma câmera aceita uma única escala, a média das três, e nenhum espelhamento.",
+    "node.transform.aim-note": "Move, gira e escala a posição e o ponto de mira em torno da origem da cena, sobre os nós acima. Um arraste do gizmo depois ainda o posiciona diretamente.",
     "node.delete.what": "excluir",
     "node.delete.selected": "selecionadas",
     "node.delete.unselected": "não selecionadas",

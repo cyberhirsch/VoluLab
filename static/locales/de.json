@@ -393,6 +393,8 @@
     "camera.focus-on-selection": "Auf Auswahl fokussieren",
     "node.transform.reset": "zurücksetzen",
     "node.transform.note": "Verschiebt, dreht und skaliert das Objekt um den Szenenursprung, zusätzlich zu den Nodes darüber.",
+    "node.transform.cameras-note": "Verschiebt, dreht und skaliert die Kameras des Pose-Nodes und ihre Punkte um den Szenenursprung; der Train-Node trainiert mit ihnen dort, wo sie landen. Eine Kamera nimmt eine Skalierung an, den Mittelwert der drei, und keine Spiegelung.",
+    "node.transform.aim-note": "Verschiebt, dreht und skaliert Position und Zielpunkt um den Szenenursprung, zusätzlich zu den Nodes darüber. Ein Gizmo-Zug danach setzt die Lage weiterhin direkt.",
     "node.delete.what": "löschen",
     "node.delete.selected": "ausgewählte",
     "node.delete.unselected": "nicht ausgewählte",
